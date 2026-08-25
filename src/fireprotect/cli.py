@@ -4,6 +4,8 @@ import argparse
 import json
 from pathlib import Path
 
+from .project_io import read_project_element_json
+from .rx3.project_adapter import create_rx38_from_project_element
 from .rx3.parser import Rx38Construction, construction_records, read_rx38
 from .rx3.profiles import ProfileRepository, list_tables
 from .validation import validate_rx38_record
@@ -59,6 +61,20 @@ def cmd_lookup_profile(args: argparse.Namespace) -> None:
     print(json.dumps(payload, ensure_ascii=False, indent=2, default=str))
 
 
+def cmd_rx38_create(args: argparse.Namespace) -> None:
+    element = read_project_element_json(args.input)
+    report = create_rx38_from_project_element(
+        element,
+        args.template,
+        args.output,
+        template_mark=args.template_mark,
+    )
+    payload = json.dumps(report.as_dict(), ensure_ascii=False, indent=2)
+    if args.report is not None:
+        args.report.write_text(payload + "\n", encoding="utf-8")
+    print(payload)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(prog="fireprotect")
     subparsers = parser.add_subparsers(required=True)
@@ -80,6 +96,17 @@ def main() -> None:
     command.add_argument("query")
     command.add_argument("--standard")
     command.set_defaults(func=cmd_lookup_profile)
+
+    command = subparsers.add_parser(
+        "rx38-create",
+        help="Create RX38 from ProjectElement JSON using a compatible safe template",
+    )
+    command.add_argument("input", type=Path)
+    command.add_argument("template", type=Path)
+    command.add_argument("output", type=Path)
+    command.add_argument("--template-mark")
+    command.add_argument("--report", type=Path)
+    command.set_defaults(func=cmd_rx38_create)
 
     args = parser.parse_args()
     args.func(args)

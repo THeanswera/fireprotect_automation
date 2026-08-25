@@ -40,7 +40,7 @@ def _c(
 FIELD_SPECS: dict[int, FieldSpec] = {
     0: _c(0, "record_type", "Record discriminator", "literal[Tconstr]", None, "service", "yes", "All RX38 files"),
     1: _c(1, "mark", "Construction mark/name", "string", None, "input", "yes", "RX38 files + RX3 report"),
-    3: _c(3, "mark_copy", "Second stored copy of construction mark", "string", None, "service", "yes", "All RX38 files", "probable", "Always equals field 1 in the available corpus; internal use is not documented."),
+    3: _c(3, "mark_copy", "Second stored copy of construction mark", "string", None, "service", "yes", "Exact equality with field 1 in all 46 corpus records", "confirmed", "The consumer role is undocumented; synchronizing it with field 1 is confirmed."),
     4: _c(4, "section_type_code", "Numeric section-family code", "integer", None, "service", "yes", "RX38 cross-comparison", "probable", "One-to-one mapping with field 5 in the available corpus."),
     5: _c(5, "section_type", "Section family", "string", None, "input", "yes", "RX38 files + RX3 report + help"),
     8: _c(8, "height_mm", "Overall section height", units="mm", source="RX38 ↔ rx3.rxdb exact match"),

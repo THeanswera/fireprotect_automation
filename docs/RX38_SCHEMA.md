@@ -4,8 +4,8 @@
 
 ## Уровень доказанности
 
-- `confirmed`: 55
-- `probable`: 14
+- `confirmed`: 56
+- `probable`: 13
 - `unknown`: 131
 
 `probable` не входит в безопасный writable-набор. Код разрешает менять только `confirmed`; попытка изменить неизвестный/вероятный индекс блокируется.
@@ -17,7 +17,7 @@
 | 0 | record_type | Record discriminator | literal[Tconstr] | — | service | yes | All RX38 files | confirmed | — |
 | 1 | mark | Construction mark/name | string | — | input | yes | RX38 files + RX3 report | confirmed | — |
 | 2 | unknown_002 | Not established | unknown | — | unknown | unknown | No admissible evidence | unknown | Preserved verbatim; do not write through the typed API. |
-| 3 | mark_copy | Second stored copy of construction mark | string | — | service | yes | All RX38 files | probable | Always equals field 1 in the available corpus; internal use is not documented. |
+| 3 | mark_copy | Second stored copy of construction mark | string | — | service | yes | Exact equality with field 1 in all 46 corpus records | confirmed | The consumer role is undocumented; synchronizing it with field 1 is confirmed. |
 | 4 | section_type_code | Numeric section-family code | integer | — | service | yes | RX38 cross-comparison | probable | One-to-one mapping with field 5 in the available corpus. |
 | 5 | section_type | Section family | string | — | input | yes | RX38 files + RX3 report + help | confirmed | — |
 | 6 | unknown_006 | Not established | unknown | — | unknown | unknown | No admissible evidence | unknown | Preserved verbatim; do not write through the typed API. |
