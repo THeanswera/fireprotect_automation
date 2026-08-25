@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from dataclasses import replace
-from decimal import Decimal
 from pathlib import Path
 
 from ..model import ProjectElement, ProvenanceType, Quantity, Unit, ValueProvenance
@@ -42,11 +41,11 @@ def apply_lira_force_row(
     updates = {
         "load_case": row.load_case,
         "combination": row.combination,
-        "N": Quantity.of(Decimal(str(row.N)), Unit.NEWTON),
-        "Mx": Quantity.of(Decimal(str(row.Mx)), Unit.NEWTON_METER),
-        "My": Quantity.of(Decimal(str(row.My)), Unit.NEWTON_METER),
-        "Qx": Quantity.of(Decimal(str(row.Qx)), Unit.NEWTON),
-        "Qy": Quantity.of(Decimal(str(row.Qy)), Unit.NEWTON),
+        "N": Quantity.of(row.N, Unit.NEWTON),
+        "Mx": Quantity.of(row.Mx, Unit.NEWTON_METER),
+        "My": Quantity.of(row.My, Unit.NEWTON_METER),
+        "Qx": Quantity.of(row.Qx, Unit.NEWTON),
+        "Qy": Quantity.of(row.Qy, Unit.NEWTON),
     }
     if set_governing_combination:
         updates["governing_combination"] = row.combination

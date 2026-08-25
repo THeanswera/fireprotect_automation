@@ -3,7 +3,11 @@ from datetime import datetime
 import pytest
 
 from fireprotect.model import ProjectElement, Unit
-from fireprotect.project_io import ProjectDataError, project_element_from_dict
+from fireprotect.project_io import (
+    ProjectDataError,
+    project_element_from_dict,
+    project_element_to_dict,
+)
 
 
 def _payload():
@@ -41,3 +45,11 @@ def test_json_boundary_rejects_bare_number():
     payload["length"] = 3.5
     with pytest.raises(ProjectDataError, match="exactly 'value' and 'unit'"):
         project_element_from_dict(payload)
+
+
+def test_project_element_json_round_trip_preserves_units_and_provenance():
+    element = project_element_from_dict(_payload())
+    reparsed = project_element_from_dict(project_element_to_dict(element))
+    assert reparsed == element
+    assert reparsed.length is not None
+    assert reparsed.length.unit is Unit.METER

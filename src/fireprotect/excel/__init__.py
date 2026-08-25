@@ -8,6 +8,12 @@ from .mapping import (
     resolve_field,
 )
 from .project import write_project_elements_copy
+from .obm import (
+    ExcelCellChange,
+    ObmWorkbookExportError,
+    ObmWorkbookExportReport,
+    export_obm_workbook,
+)
 from .writer import (
     CopyOnlyViolationError,
     ExcelCopyResult,
@@ -26,11 +32,15 @@ __all__ = [
     "ExcelCopyResult",
     "ExcelExportError",
     "FieldResolver",
+    "ExcelCellChange",
     "FormulaOverwriteError",
     "SourceWorkbookChangedError",
+    "ObmWorkbookExportError",
+    "ObmWorkbookExportReport",
     "WorkbookMapping",
     "WorkbookMappingError",
     "file_sha256",
+    "export_obm_workbook",
     "resolve_field",
     "write_mapped_copy",
     "write_project_elements_copy",

@@ -38,6 +38,13 @@ def _positive(name: str, value: Decimal | int | str) -> Decimal:
     return result
 
 
+def _positive_integer(name: str, value: Decimal | int | str) -> Decimal:
+    result = _positive(name, value)
+    if result != result.to_integral_value():
+        raise ValueError(f"{name} must be a positive integer")
+    return result
+
+
 @dataclass(frozen=True)
 class ISection:
     height_mm: Decimal
@@ -201,7 +208,7 @@ def calculate_geometry(
     quantity: Decimal | int | str,
 ) -> GeometryResult:
     length = _positive("length_m", length_m)
-    count = _positive("quantity", quantity)
+    count = _positive_integer("quantity", quantity)
     area = _positive("section.area_mm2", section.area_mm2)
     full_perimeter = _positive("full_perimeter_mm", section.full_perimeter_mm())
     heated_perimeter = exposure.heated_perimeter_mm

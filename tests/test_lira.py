@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import builtins
+from decimal import Decimal
 from pathlib import Path
 
 import pytest
@@ -45,12 +46,12 @@ def assert_converted(row: object) -> None:
     assert row.section == "30K1"
     assert row.load_case == "LC-2"
     assert row.combination == "ULS-7"
-    assert row.N == pytest.approx(-125_500.0)
-    assert row.Mx == pytest.approx(12_250.0)
-    assert row.My == pytest.approx(-320.0)
-    assert row.Qx == pytest.approx(750.0)
-    assert row.Qy == pytest.approx(2 * 9_806.65)
-    assert row.source.N == pytest.approx(-125.5)
+    assert row.N == Decimal("-125500")
+    assert row.Mx == Decimal("12250")
+    assert row.My == Decimal("-320")
+    assert row.Qx == Decimal("750")
+    assert row.Qy == Decimal("19613.30")
+    assert row.source.N == Decimal("-125.5")
     assert row.source.units.N == "kN"
 
 

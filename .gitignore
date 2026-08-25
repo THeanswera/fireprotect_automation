@@ -13,6 +13,8 @@
 
 # Real-data fixtures are never published
 /tests/fixtures/
+/validation/
+/pipeline_runs/
 
 # Python build/test artifacts
 __pycache__/

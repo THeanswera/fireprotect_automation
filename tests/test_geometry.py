@@ -84,6 +84,16 @@ def test_binary_float_is_rejected_at_boundary():
         ISection(298.0, "299", "9", "14", "11080")
 
 
+def test_fractional_element_quantity_is_rejected():
+    with pytest.raises(ValueError, match="positive integer"):
+        calculate_geometry(
+            RectangularHollowSection("160", "160", "8", "4644"),
+            HeatingExposure("640", ("all",), "engineer input"),
+            length_m="7.75",
+            quantity="1.5",
+        )
+
+
 def test_regression_mismatch_is_reported_not_resolved():
     comparison = compare_geometry_value(
         "ptm",

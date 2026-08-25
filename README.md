@@ -6,8 +6,10 @@
 ЛИРА (CSV / HTML / XLSX)
     -> ProjectElement + provenance + явные единицы
     -> RX38 из совместимого шаблона
-    -> копия существующей Excel-книги
-    -> будущая проектная документация
+    -> ручной расчёт в GUI RX3
+    -> Rx3Result -> ProjectElement
+    -> проверенная копия существующей Excel-книги
+    -> project_audit.json / project_audit.md
 ```
 
 Проект не подставляет типовые инженерные значения вместо отсутствующих.
@@ -24,8 +26,14 @@ production-режиме нельзя подтвердить без `NormativeTra
 - geometry-модуль для периметров, ПТМ, section factor и площади обработки;
 - `ProjectElement -> RX38` только через совместимый шаблон, с round-trip
   отчётом и сохранением неизвестных полей;
-- анализ рабочей Excel-книги и copy-only OOXML writer, который не меняет
-  исходник, формулы и стили.
+- обратный мост `RX38 -> Rx3Result -> ProjectElement`, который типизирует
+  только CONFIRMED-поля и помечает их provenance как `RX3_RESULT`;
+- команды подготовки ручной GUI-проверки RX3 и анализа сохранённого
+  результа с разделением CONFIRMED / PROBABLE / UNKNOWN;
+- типизированный copy-only экспорт в фиксированную 44-строчную Excel-книгу с
+  проверкой ZIP, openpyxl, SHA-256 и точной карты 579 формул;
+- экспериментальный `pipeline`, который останавливается перед RX3 и продолжает
+  работу после появления `calculated.rx38`.
 
 Независимая нормативная верификация расчётов ещё не завершена. Текущий статус:
 **NOT READY FOR ISSUE**.
@@ -50,6 +58,9 @@ python -m fireprotect.cli inspect-rx38 FILE.rx38
 python -m fireprotect.cli validate-rx38 FILE.rx38
 python -m fireprotect.cli lookup-profile RX3_DB.rxdb "30К1" --standard "СТО АСЧМ 20-93"
 python -m fireprotect.cli rx38-create INPUT.json TEMPLATE.rx38 OUTPUT.rx38 --template-mark "К1" --report report.json
+python -m fireprotect.cli prepare-rx3-validation INPUT.json TEMPLATE.rx38 --output-dir validation/rx3_gui_test --template-mark "К1"
+python -m fireprotect.cli validate-rx3-result generated.rx38 calculated.rx38
+python -m fireprotect.cli pipeline pipeline.json
 ```
 
 JSON для `rx38-create` обязан явно перечислять все поля `ProjectElement`:
@@ -61,6 +72,8 @@ JSON для `rx38-create` обязан явно перечислять все п
 
 - [карта RX38](docs/RX38_SCHEMA.md);
 - [карта Excel-книги](docs/EXCEL_DATA_MAP.md);
+- [аудит 579 формул Excel](docs/EXCEL_FORMULA_AUDIT.md);
+- [запуск сквозного MVP](docs/PIPELINE_MVP.md);
 - [текущий прогресс](docs/PROGRESS.md);
 - [открытые вопросы](docs/OPEN_QUESTIONS.md);
 - [нормативная прослеживаемость](normative/traceability.md).

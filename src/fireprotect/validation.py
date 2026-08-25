@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from decimal import Decimal
 
 from .rx3.parser import Rx38Record
 
@@ -26,7 +27,9 @@ def validate_rx38_record(record: Rx38Record) -> list[ValidationIssue]:
         issues.append(ValidationIssue("ERROR", record.mark, "Некорректный обогреваемый периметр"))
     if record.ptm_mm is not None and record.area_mm2 and record.perimeter_mm:
         expected = record.area_mm2 / record.perimeter_mm
-        if abs(expected - record.ptm_mm) > max(0.02, expected * 0.002):
+        if abs(expected - record.ptm_mm) > max(
+            Decimal("0.02"), expected * Decimal("0.002")
+        ):
             issues.append(
                 ValidationIssue(
                     "WARN", record.mark,

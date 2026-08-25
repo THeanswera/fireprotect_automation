@@ -90,24 +90,20 @@ class Rx38Record:
         return self.fields[19] if len(self.fields) > 19 and self.record_type == "Tconstr" else None
 
     @property
-    def area_mm2(self) -> float | None:
-        value = _decimal(self.fields[20]) if len(self.fields) > 20 and self.record_type == "Tconstr" else None
-        return float(value) if value is not None else None
+    def area_mm2(self) -> Decimal | None:
+        return _decimal(self.fields[20]) if len(self.fields) > 20 and self.record_type == "Tconstr" else None
 
     @property
-    def perimeter_mm(self) -> float | None:
-        value = _decimal(self.fields[21]) if len(self.fields) > 21 and self.record_type == "Tconstr" else None
-        return float(value) if value is not None else None
+    def perimeter_mm(self) -> Decimal | None:
+        return _decimal(self.fields[21]) if len(self.fields) > 21 and self.record_type == "Tconstr" else None
 
     @property
-    def ptm_mm(self) -> float | None:
-        value = _decimal(self.fields[22]) if len(self.fields) > 22 and self.record_type == "Tconstr" else None
-        return float(value) if value is not None else None
+    def ptm_mm(self) -> Decimal | None:
+        return _decimal(self.fields[22]) if len(self.fields) > 22 and self.record_type == "Tconstr" else None
 
     @property
-    def section_factor_1_per_m(self) -> float | None:
-        value = _decimal(self.fields[23]) if len(self.fields) > 23 and self.record_type == "Tconstr" else None
-        return float(value) if value is not None else None
+    def section_factor_1_per_m(self) -> Decimal | None:
+        return _decimal(self.fields[23]) if len(self.fields) > 23 and self.record_type == "Tconstr" else None
 
 
 @dataclass(frozen=True)

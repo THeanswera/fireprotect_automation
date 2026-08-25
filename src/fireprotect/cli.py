@@ -5,7 +5,12 @@ import json
 from pathlib import Path
 
 from .project_io import read_project_element_json
+from .pipeline import run_pipeline
 from .rx3.project_adapter import create_rx38_from_project_element
+from .rx3.gui_validation import (
+    prepare_rx3_validation,
+    validate_rx3_result_files,
+)
 from .rx3.parser import Rx38Construction, construction_records, read_rx38
 from .rx3.profiles import ProfileRepository, list_tables
 from .validation import validate_rx38_record
@@ -75,6 +80,56 @@ def cmd_rx38_create(args: argparse.Namespace) -> None:
     print(payload)
 
 
+def cmd_prepare_rx3_validation(args: argparse.Namespace) -> None:
+    bundle = prepare_rx3_validation(
+        args.input,
+        args.template,
+        args.output_dir,
+        template_mark=args.template_mark,
+    )
+    print(
+        json.dumps(
+            {
+                "directory": str(bundle.directory),
+                "template": str(bundle.template),
+                "generated": str(bundle.generated),
+                "project_element": str(bundle.project_element),
+                "diff_json": str(bundle.diff_json),
+                "diff_markdown": str(bundle.diff_markdown),
+                "instructions": str(bundle.instructions),
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+    )
+
+
+def cmd_validate_rx3_result(args: argparse.Namespace) -> None:
+    report = validate_rx3_result_files(
+        args.before,
+        args.after,
+        json_report=args.json_report,
+        markdown_report=args.markdown_report,
+        overwrite=args.overwrite,
+    )
+    print(
+        json.dumps(
+            {
+                "json_report": str(report.json_path),
+                "markdown_report": str(report.markdown_path),
+                "status": report.data["status"],
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+    )
+
+
+def cmd_pipeline(args: argparse.Namespace) -> None:
+    result = run_pipeline(args.config)
+    print(json.dumps(result.as_dict(), ensure_ascii=False, indent=2))
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(prog="fireprotect")
     subparsers = parser.add_subparsers(required=True)
@@ -107,6 +162,36 @@ def main() -> None:
     command.add_argument("--template-mark")
     command.add_argument("--report", type=Path)
     command.set_defaults(func=cmd_rx38_create)
+
+    command = subparsers.add_parser(
+        "prepare-rx3-validation",
+        help="Create a self-contained folder for the manual RX3 GUI checkpoint",
+    )
+    command.add_argument("input", type=Path)
+    command.add_argument("template", type=Path)
+    command.add_argument(
+        "--output-dir", type=Path, default=Path("validation/rx3_gui_test")
+    )
+    command.add_argument("--template-mark")
+    command.set_defaults(func=cmd_prepare_rx3_validation)
+
+    command = subparsers.add_parser(
+        "validate-rx3-result",
+        help="Classify RX38 changes after a manual RX3 calculation",
+    )
+    command.add_argument("before", type=Path)
+    command.add_argument("after", type=Path)
+    command.add_argument("--json-report", type=Path)
+    command.add_argument("--markdown-report", type=Path)
+    command.add_argument("--overwrite", action="store_true")
+    command.set_defaults(func=cmd_validate_rx3_result)
+
+    command = subparsers.add_parser(
+        "pipeline",
+        help="Run the experimental LIRA -> RX3 checkpoint -> Excel pipeline",
+    )
+    command.add_argument("config", type=Path)
+    command.set_defaults(func=cmd_pipeline)
 
     args = parser.parse_args()
     args.func(args)

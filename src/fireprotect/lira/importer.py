@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-import math
+from decimal import Decimal, InvalidOperation
 from typing import Any
 
 from .errors import LiraMappingError, LiraRowError
@@ -73,7 +73,7 @@ class LiraForceImporter:
             return str(int(value))
         return str(value).strip()
 
-    def _number(self, row: RawTableRow, header: str, field: str) -> float:
+    def _number(self, row: RawTableRow, header: str, field: str) -> Decimal:
         value: Any = row.values.get(header)
         if value is None or (isinstance(value, str) and not value.strip()):
             raise LiraRowError(
@@ -86,14 +86,14 @@ class LiraForceImporter:
                     normalized = normalized.replace(self.mapping.thousands_separator, "")
                 if self.mapping.decimal_separator == ",":
                     normalized = normalized.replace(",", ".")
-                number = float(normalized)
+                number = Decimal(normalized)
             else:
-                number = float(value)
-        except (TypeError, ValueError) as exc:
+                number = Decimal(str(value))
+        except (InvalidOperation, TypeError, ValueError) as exc:
             raise LiraRowError(
                 f"row {row.row_number}, field {field}: {value!r} is not a number"
             ) from exc
-        if not math.isfinite(number):
+        if not number.is_finite():
             raise LiraRowError(
                 f"row {row.row_number}, field {field}: value must be finite"
             )

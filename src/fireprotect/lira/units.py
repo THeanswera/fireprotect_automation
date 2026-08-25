@@ -2,24 +2,26 @@
 
 from __future__ import annotations
 
+from decimal import Decimal
+
 from .errors import LiraMappingError
 
 
 _FORCE_FACTORS = {
-    "n": 1.0,
-    "kn": 1_000.0,
-    "mn": 1_000_000.0,
-    "kgf": 9.80665,
-    "tf": 9_806.65,
+    "n": Decimal("1"),
+    "kn": Decimal("1000"),
+    "mn": Decimal("1000000"),
+    "kgf": Decimal("9.80665"),
+    "tf": Decimal("9806.65"),
 }
 _MOMENT_FACTORS = {
-    "n*m": 1.0,
-    "kn*m": 1_000.0,
-    "mn*m": 1_000_000.0,
-    "n*mm": 0.001,
-    "kn*mm": 1.0,
-    "kgf*m": 9.80665,
-    "tf*m": 9_806.65,
+    "n*m": Decimal("1"),
+    "kn*m": Decimal("1000"),
+    "mn*m": Decimal("1000000"),
+    "n*mm": Decimal("0.001"),
+    "kn*mm": Decimal("1"),
+    "kgf*m": Decimal("9.80665"),
+    "tf*m": Decimal("9806.65"),
 }
 
 
@@ -45,7 +47,7 @@ def validate_force_unit(field: str, unit: str) -> None:
         )
 
 
-def to_si(field: str, value: float, unit: str) -> float:
+def to_si(field: str, value: Decimal, unit: str) -> Decimal:
     """Convert an axial/shear force or moment to N or N*m."""
 
     validate_force_unit(field, unit)

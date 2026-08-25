@@ -8,6 +8,7 @@ mapping and SI conversion pipeline as the file adapters.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from decimal import Decimal, InvalidOperation
 from typing import Any, Mapping, Protocol, runtime_checkable
 
 
@@ -23,6 +24,18 @@ CANONICAL_FIELDS = (
     "Qy",
 )
 FORCE_FIELDS = ("N", "Mx", "My", "Qx", "Qy")
+
+
+def _decimal_force(value: object, *, field: str) -> Decimal:
+    if isinstance(value, bool):
+        raise TypeError(f"{field} must be numeric, not bool")
+    try:
+        result = value if isinstance(value, Decimal) else Decimal(str(value))
+    except (InvalidOperation, ValueError, TypeError) as exc:
+        raise TypeError(f"{field} must be a decimal number") from exc
+    if not result.is_finite():
+        raise ValueError(f"{field} must be finite")
+    return result
 
 
 @dataclass(frozen=True, slots=True)
@@ -49,12 +62,20 @@ class ForceUnits:
 class SourceForceValues:
     """Original numeric values and their explicitly declared units."""
 
-    N: float
-    Mx: float
-    My: float
-    Qx: float
-    Qy: float
+    N: Decimal
+    Mx: Decimal
+    My: Decimal
+    Qx: Decimal
+    Qy: Decimal
     units: ForceUnits
+
+    def __post_init__(self) -> None:
+        for field in FORCE_FIELDS:
+            object.__setattr__(
+                self, field, _decimal_force(getattr(self, field), field=field)
+            )
+        if not isinstance(self.units, ForceUnits):
+            raise TypeError("units must be ForceUnits")
 
 
 @dataclass(frozen=True, slots=True)
@@ -70,13 +91,23 @@ class LiraForceRow:
     section: str
     load_case: str
     combination: str
-    N: float
-    Mx: float
-    My: float
-    Qx: float
-    Qy: float
+    N: Decimal
+    Mx: Decimal
+    My: Decimal
+    Qx: Decimal
+    Qy: Decimal
     source: SourceForceValues
     source_row: int
+
+    def __post_init__(self) -> None:
+        for field in FORCE_FIELDS:
+            object.__setattr__(
+                self, field, _decimal_force(getattr(self, field), field=field)
+            )
+        if not isinstance(self.source, SourceForceValues):
+            raise TypeError("source must be SourceForceValues")
+        if isinstance(self.source_row, bool) or self.source_row < 1:
+            raise ValueError("source_row must be a positive integer")
 
 
 @dataclass(frozen=True, slots=True)
