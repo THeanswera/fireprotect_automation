@@ -1,9 +1,19 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from enum import Enum
 from typing import Literal
 
 Confidence = Literal["confirmed", "probable", "unknown"]
+
+
+class WritePolicy(str, Enum):
+    SAFE_DIRECT = "SAFE_DIRECT"
+    SAFE_WITH_COMPATIBILITY_CHECK = "SAFE_WITH_COMPATIBILITY_CHECK"
+    RESULT_ONLY = "RESULT_ONLY"
+    READ_ONLY = "READ_ONLY"
+    EXPERIMENTAL = "EXPERIMENTAL"
+    FORBIDDEN = "FORBIDDEN"
 
 
 @dataclass(frozen=True)
@@ -18,6 +28,28 @@ class FieldSpec:
     source: str
     confidence: Confidence
     comment: str = ""
+    write_policy: WritePolicy = WritePolicy.FORBIDDEN
+    evidence_type: str = "UNSPECIFIED"
+    evidence_sources: tuple[str, ...] = ()
+    controlled_experiment_ids: tuple[str, ...] = ()
+    corpus_count: int | None = None
+    exact_identity: bool = False
+    report_correlation: bool = False
+    database_match: bool = False
+    help_match: bool = False
+    reviewer_note: str = ""
+
+
+def _write_policy(index: int, direction: str, confidence: Confidence) -> WritePolicy:
+    if confidence != "confirmed":
+        return WritePolicy.FORBIDDEN
+    if direction == "output":
+        return WritePolicy.RESULT_ONLY
+    if index == 0:
+        return WritePolicy.READ_ONLY
+    if index in {1, 3}:
+        return WritePolicy.SAFE_DIRECT
+    return WritePolicy.SAFE_WITH_COMPATIBILITY_CHECK
 
 
 def _c(
@@ -32,7 +64,28 @@ def _c(
     confidence: Confidence = "confirmed",
     comment: str = "",
 ) -> FieldSpec:
-    return FieldSpec(index, name, purpose, data_type, units, direction, required, source, confidence, comment)
+    return FieldSpec(
+        index,
+        name,
+        purpose,
+        data_type,
+        units,
+        direction,
+        required,
+        source,
+        confidence,
+        comment,
+        _write_policy(index, direction, confidence),
+        "CORPUS_AND_DOCUMENTATION",
+        (source,),
+        (),
+        46 if "46" in source or "corpus" in source.casefold() else None,
+        "Exact identity" in source or "exact match" in source.casefold(),
+        "report" in source.casefold(),
+        "rx3.rxdb" in source.casefold() or "rx3.xml" in source.casefold(),
+        "help" in source.casefold(),
+        comment,
+    )
 
 
 # Only positions supported by admissible evidence are named here. All other
@@ -111,6 +164,12 @@ FIELD_SPECS: dict[int, FieldSpec] = {
 
 TCONSTR_FIELD_COUNT = 200
 CONFIRMED_INDICES = frozenset(i for i, spec in FIELD_SPECS.items() if spec.confidence == "confirmed")
+WRITABLE_CONFIRMED_INDICES = frozenset(
+    i
+    for i in CONFIRMED_INDICES
+    if FIELD_SPECS[i].write_policy
+    in {WritePolicy.SAFE_DIRECT, WritePolicy.SAFE_WITH_COMPATIBILITY_CHECK}
+)
 
 
 def field_spec(index: int) -> FieldSpec:

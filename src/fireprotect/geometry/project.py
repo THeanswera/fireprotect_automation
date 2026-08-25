@@ -29,13 +29,20 @@ def apply_geometry_result(
             f"Geometry provenance must match {GEOMETRY_PROJECT_FIELDS}; "
             f"missing={sorted(missing)}, extra={sorted(extra)}"
         )
-    values = {
-        "area": Quantity.of(result.area.value, Unit.SQUARE_MILLIMETER),
-        "full_perimeter": Quantity.of(result.full_perimeter.value, Unit.MILLIMETER),
-        "heated_perimeter": Quantity.of(result.heated_perimeter.value, Unit.MILLIMETER),
-        "ptm": Quantity.of(result.ptm.value, Unit.MILLIMETER),
-        "protected_area": Quantity.of(result.protected_area_total.value, Unit.SQUARE_METER),
-    }
     merged_provenance = dict(element.provenance)
     merged_provenance.update(provenance)
-    return replace(element, provenance=merged_provenance, **values)
+    return replace(
+        element,
+        area=Quantity.of(result.area.value, Unit.SQUARE_MILLIMETER),
+        full_perimeter=Quantity.of(
+            result.full_perimeter.value, Unit.MILLIMETER
+        ),
+        heated_perimeter=Quantity.of(
+            result.heated_perimeter.value, Unit.MILLIMETER
+        ),
+        ptm=Quantity.of(result.ptm.value, Unit.MILLIMETER),
+        protected_area=Quantity.of(
+            result.protected_area_total.value, Unit.SQUARE_METER
+        ),
+        provenance=merged_provenance,
+    )

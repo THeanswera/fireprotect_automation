@@ -1,14 +1,26 @@
 import csv
 import json
+from datetime import date
+from decimal import Decimal
 from hashlib import sha256
 from pathlib import Path
 
 import pytest
 
+from fireprotect.execution import ExecutionMode
 from fireprotect.rx3.gui_validation import (
     Rx3GuiValidationError,
     prepare_rx3_validation,
     validate_rx3_result_files,
+)
+from fireprotect.rx3.safety import (
+    ActionZeroTolerance,
+    EvidenceStatus,
+    ForceConventionStatus,
+    LiraRx3ForceConvention,
+    Rx3SafetyContext,
+    Rx3TemplateEvidence,
+    Rx3TemplateUseCase,
 )
 
 
@@ -24,8 +36,9 @@ def _template(path: Path) -> None:
         19: "30 К1",
         20: "11080",
         33: "245",
+        42: "С245",
         44: "650",
-        50: "10",
+        50: "0",
         54: "15",
         72: "Нет",
     }.items():
@@ -78,6 +91,10 @@ def _project_payload() -> dict:
         load_case="LC1",
         combination="C1",
         N=q("-125.5", "kN"),
+        Mx=q("0", "kN*m"),
+        My=q("0", "kN*m"),
+        Qx=q("0", "kN"),
+        Qy=q("0", "kN"),
         governing_combination="C1",
         required_fire_resistance=q("90", "min"),
         stress_state="Сжатый стержень",
@@ -106,6 +123,42 @@ def _project_payload() -> dict:
     return payload
 
 
+def _safety_context() -> Rx3SafetyContext:
+    confirmed = date(2026, 8, 25)
+    return Rx3SafetyContext(
+        ExecutionMode.DRAFT,
+        ActionZeroTolerance.strict(),
+        Rx3TemplateEvidence(
+            Rx3TemplateUseCase.AXIAL_ONLY,
+            EvidenceStatus.VERIFIED,
+            "controlled RX3 template validation",
+            True,
+            "test engineer",
+            confirmed,
+            "1",
+            True,
+        ),
+        LiraRx3ForceConvention(
+            "LIRA CSV",
+            "RX3",
+            "tension",
+            "compression",
+            "element local axes",
+            "Mx->Mx, My->My",
+            "Qx->Qx, Qy->Qy",
+            {name: Decimal("1") for name in ("N", "Mx", "My", "Qx", "Qy")},
+            "identity test convention",
+            "controlled validation protocol",
+            ForceConventionStatus.VERIFIED,
+            True,
+            "test engineer",
+            confirmed,
+            "1",
+        ),
+        None,
+    )
+
+
 def _edit_rx38(source: Path, destination: Path) -> None:
     with source.open("r", encoding="utf-8", newline="") as stream:
         rows = list(csv.reader(stream, delimiter=";"))
@@ -130,7 +183,8 @@ def test_prepare_bundle_and_classify_manual_rx3_changes(tmp_path: Path):
     template_hash = sha256(source_template.read_bytes()).hexdigest()
 
     bundle = prepare_rx3_validation(
-        source_project, source_template, bundle_dir, template_mark="К1"
+        source_project, source_template, bundle_dir, template_mark="К1",
+        safety_context=_safety_context(),
     )
 
     assert sha256(source_template.read_bytes()).hexdigest() == template_hash

@@ -12,8 +12,10 @@ from zipfile import BadZipFile, ZipFile
 from openpyxl import load_workbook
 
 from ..decision import RequiredFireResistanceDecision
+from ..execution import ExecutionMode
 from ..model import ProjectElement, Quantity, Unit
 from ..rx3.profiles import normalize_profile_name
+from ..technical import FireproofingTechnicalEntry, TechnicalDataStatus
 from .mapping import ColumnBinding, WorkbookMapping
 from .writer import ExcelCopyResult, file_sha256, write_mapped_copy
 
@@ -60,6 +62,10 @@ class ObmWorkbookExportReport:
     warnings: tuple[str, ...]
     json_report: Path
     markdown_report: Path
+    export_kind: str
+    technical_data_status: str
+    template_verification_status: str
+    recalculation_status: str
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -75,6 +81,10 @@ class ObmWorkbookExportReport:
             "warnings": list(self.warnings),
             "json_report": str(self.json_report),
             "markdown_report": str(self.markdown_report),
+            "export_kind": self.export_kind,
+            "technical_data_status": self.technical_data_status,
+            "template_verification_status": self.template_verification_status,
+            "recalculation_status": self.recalculation_status,
         }
 
 
@@ -211,6 +221,9 @@ def export_obm_workbook(
     *,
     json_report: str | Path | None = None,
     markdown_report: str | Path | None = None,
+    mode: ExecutionMode = ExecutionMode.DRAFT,
+    technical_entry: FireproofingTechnicalEntry | None = None,
+    verified_template_sha256: str | None = None,
 ) -> ObmWorkbookExportReport:
     """Populate only confirmed input cells in a verified copy of the fixed template."""
 
@@ -218,6 +231,30 @@ def export_obm_workbook(
     choices = tuple(decisions)
     source = Path(source_path).resolve(strict=True)
     output = Path(output_path).resolve(strict=False)
+    technical_status = (
+        technical_entry.status
+        if technical_entry is not None
+        else TechnicalDataStatus.UNVERIFIED_TECHNICAL_DATA
+    )
+    if (
+        mode is ExecutionMode.PRODUCTION
+        and (
+            technical_entry is None
+            or not technical_entry.verified_for_production
+        )
+    ):
+        raise ObmWorkbookExportError(
+            "Production Excel thickness/consumption export requires verified primary technical data"
+        )
+    source_hash = file_sha256(source)
+    template_verified = (
+        verified_template_sha256 is not None
+        and source_hash == verified_template_sha256.lower()
+    )
+    if mode is ExecutionMode.PRODUCTION and not template_verified:
+        raise ObmWorkbookExportError(
+            "Production Excel export requires a verified template SHA-256"
+        )
     json_path = (
         Path(json_report).resolve(strict=False)
         if json_report
@@ -325,11 +362,16 @@ def export_obm_workbook(
 
     for target in (json_path, md_path):
         target.parent.mkdir(parents=True, exist_ok=True)
-    warnings = (
-        "UNVERIFIED_TECHNICAL_DATA: thickness and consumption lookup tables have no primary technical document in the workspace",
+    warning_items = [
         "EXCEL_RECALCULATION_REQUIRED: formula caches remain stale until Microsoft Excel recalculates the copy",
         "The export is valid only for the fixed 44-row template and does not infer G/H quantity factors or heating exposure",
-    )
+    ]
+    if technical_status is not TechnicalDataStatus.VERIFIED_TECHNICAL_DATA:
+        warning_items.insert(
+            0,
+            "UNVERIFIED_TECHNICAL_DATA: thickness and consumption lookup tables have no primary technical document in the workspace",
+        )
+    warnings = tuple(warning_items)
     report = ObmWorkbookExportReport(
         output,
         copy_result.source_sha256,
@@ -343,6 +385,10 @@ def export_obm_workbook(
         warnings,
         json_path,
         md_path,
+        "EXCEL_COMPATIBILITY_EXPORT",
+        technical_status.value,
+        "VERIFIED" if template_verified else "UNVERIFIED",
+        "EXCEL_RECALCULATION_REQUIRED",
     )
     json_path.write_text(
         json.dumps(report.as_dict(), ensure_ascii=False, indent=2) + "\n",
@@ -356,14 +402,18 @@ def export_obm_workbook(
         f"- Output SHA-256: `{report.output_sha256}`",
         f"- Формулы: {report.formula_count_before} → {report.formula_count_after}; сохранены: `{report.formulas_preserved}`",
         f"- ZIP integrity: `{report.zip_integrity}`; openpyxl: `{report.openpyxl_opened}`",
+        f"- Export kind: `{report.export_kind}`",
+        f"- Technical data: `{report.technical_data_status}`",
+        f"- Template verification: `{report.template_verification_status}`",
+        f"- Recalculation: `{report.recalculation_status}`",
         "",
         "## Изменённые входные ячейки",
         "",
     ]
     if changes:
-        for item in changes:
+        for change in changes:
             lines.append(
-                f"- `{item.cell}` ({item.project_field}): `{item.before}` → `{item.after}` {item.unit or ''}".rstrip()
+                f"- `{change.cell}` ({change.project_field}): `{change.before}` → `{change.after}` {change.unit or ''}".rstrip()
             )
     else:
         lines.append("Значения подтверждённых входных ячеек уже совпадали.")

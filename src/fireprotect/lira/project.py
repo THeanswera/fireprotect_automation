@@ -38,24 +38,48 @@ def apply_lira_force_row(
         )
 
     source = str(source_file)
-    updates = {
-        "load_case": row.load_case,
-        "combination": row.combination,
-        "N": Quantity.of(row.N, Unit.NEWTON),
-        "Mx": Quantity.of(row.Mx, Unit.NEWTON_METER),
-        "My": Quantity.of(row.My, Unit.NEWTON_METER),
-        "Qx": Quantity.of(row.Qx, Unit.NEWTON),
-        "Qy": Quantity.of(row.Qy, Unit.NEWTON),
-    }
-    if set_governing_combination:
-        updates["governing_combination"] = row.combination
+    updated_fields = (
+        "load_case",
+        "combination",
+        "N",
+        "Mx",
+        "My",
+        "Qx",
+        "Qy",
+    )
 
     provenance = dict(element.provenance)
-    for field_name in updates:
+    for field_name in updated_fields:
         provenance[field_name] = ValueProvenance(
             ProvenanceType.SOURCE,
             file=source,
             row=row.source_row,
             field=field_name,
         )
-    return replace(element, provenance=provenance, **updates)
+    if set_governing_combination:
+        provenance["governing_combination"] = ValueProvenance(
+            ProvenanceType.ENGINEER_INPUT,
+            file=source,
+            row=row.source_row,
+            field="governing_combination",
+            formula=(
+                "explicit selector; records an engineering decision and does not "
+                "prove a mathematical maximum"
+            ),
+        )
+    return replace(
+        element,
+        load_case=row.load_case,
+        combination=row.combination,
+        N=Quantity.of(row.N, Unit.NEWTON),
+        Mx=Quantity.of(row.Mx, Unit.NEWTON_METER),
+        My=Quantity.of(row.My, Unit.NEWTON_METER),
+        Qx=Quantity.of(row.Qx, Unit.NEWTON),
+        Qy=Quantity.of(row.Qy, Unit.NEWTON),
+        governing_combination=(
+            row.combination
+            if set_governing_combination
+            else element.governing_combination
+        ),
+        provenance=provenance,
+    )

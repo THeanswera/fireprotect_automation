@@ -170,35 +170,35 @@ def _resolve_values(
     if mapping.cells and element is None:
         raise WorkbookMappingError("Cell bindings require element=...")
 
-    for binding in mapping.cells:
-        value = _binding_value(element, binding, resolver)
-        if value is None and not binding.write_none:
+    for cell_binding in mapping.cells:
+        value = _binding_value(element, cell_binding, resolver)
+        if value is None and not cell_binding.write_none:
             continue
         pending.append(
             _PendingValue(
-                sheet=binding.sheet,
-                cell=_normalise_cell(binding.cell),
+                sheet=cell_binding.sheet,
+                cell=_normalise_cell(cell_binding.cell),
                 value=value,
             )
         )
 
-    for binding in mapping.columns:
-        column = _normalise_column(binding.column)
-        if binding.last_row is not None:
-            capacity = binding.last_row - binding.first_row + 1
+    for column_binding in mapping.columns:
+        column = _normalise_column(column_binding.column)
+        if column_binding.last_row is not None:
+            capacity = column_binding.last_row - column_binding.first_row + 1
             if len(elements) > capacity:
                 raise WorkbookMappingError(
-                    f"Column {binding.sheet}!{column} accepts {capacity} rows, "
+                    f"Column {column_binding.sheet}!{column} accepts {capacity} rows, "
                     f"got {len(elements)}"
                 )
         for offset, item in enumerate(elements):
-            value = _binding_value(item, binding, resolver)
-            if value is None and not binding.write_none:
+            value = _binding_value(item, column_binding, resolver)
+            if value is None and not column_binding.write_none:
                 continue
             pending.append(
                 _PendingValue(
-                    sheet=binding.sheet,
-                    cell=f"{column}{binding.first_row + offset}",
+                    sheet=column_binding.sheet,
+                    cell=f"{column}{column_binding.first_row + offset}",
                     value=value,
                 )
             )
@@ -219,7 +219,10 @@ def _binding_value(
     binding: CellBinding | ColumnBinding,
     resolver: FieldResolver,
 ) -> Any:
-    assert source is not None
+    if source is None:
+        raise WorkbookMappingError(
+            f"Binding {binding.field!r} requires a source object"
+        )
     value = resolver(source, binding.field)
     if binding.transform is not None:
         value = binding.transform(value)
@@ -360,7 +363,8 @@ def _reject_non_anchor_merged_cell(
 
 def _split_coordinate(cell: str) -> tuple[str, int]:
     match = _CELL_RE.fullmatch(cell)
-    assert match is not None
+    if match is None:
+        raise WorkbookMappingError(f"Invalid A1 cell coordinate: {cell!r}")
     return match.group(1).upper(), int(match.group(2))
 
 
@@ -388,6 +392,8 @@ def _set_cell_value(cell: ET.Element, value: Any) -> None:
         ET.SubElement(cell, _M + "v").text = str(value)
         return
     if isinstance(value, float):
+        # Generic workbook callers may supply external-library floats. Domain
+        # engineering adapters emit Decimal before reaching this boundary.
         if not math.isfinite(value):
             raise WorkbookMappingError("Excel numeric values must be finite")
         cell.attrib.pop("t", None)

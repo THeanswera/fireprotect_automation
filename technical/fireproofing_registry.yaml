@@ -1,0 +1,37 @@
+schema_version: 1
+generated_at: "2026-08-25"
+policy: >-
+  Workbook tables and project explanatory notes are secondary sources. Production
+  thickness or consumption selection requires registered primary manufacturer data.
+solutions:
+  - id: OBM_EXCEL_TABLES_UNVERIFIED
+    manufacturer: null
+    system_name: null
+    product_name: null
+    component_name: null
+    certificate_number: null
+    certificate_valid_from: null
+    certificate_valid_to: null
+    technical_specification: null
+    technological_regulation: null
+    fire_test_protocol: null
+    applicability_document: null
+    steel_profile_type: null
+    ptm_range: null
+    fire_resistance: null
+    required_thickness: null
+    specific_consumption: null
+    primer_compatibility: null
+    coating_type: null
+    application_method: null
+    layer_requirements: null
+    density: null
+    environmental_restrictions: null
+    path: null
+    document_sha256: null
+    source_document: "01_Общая ОБМ — копия.xlsx (secondary source only)"
+    source_page_or_table: "Толщина ОЗ; Расход ОЗ"
+    status: UNVERIFIED_TECHNICAL_DATA
+    note: >-
+      No primary technical specification, test protocol, certificate or manufacturer
+      regulation is registered. The R90 discrepancy remains unresolved.

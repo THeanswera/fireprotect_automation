@@ -8,7 +8,16 @@
 - `probable`: 13
 - `unknown`: 131
 
-`probable` не входит в безопасный writable-набор. Код разрешает менять только `confirmed`; попытка изменить неизвестный/вероятный индекс блокируется.
+`probable` не входит в безопасный writable-набор. Semantic confidence теперь
+отделён от write safety. `WritePolicy` имеет значения `SAFE_DIRECT`,
+`SAFE_WITH_COMPATIBILITY_CHECK`, `RESULT_ONLY`, `READ_ONLY`, `EXPERIMENTAL` и
+`FORBIDDEN`. UNKNOWN/PROBABLE запрещены; confirmed output fields 44/54 имеют
+`RESULT_ONLY`; field 0 имеет `READ_ONLY`; остальные расчётные inputs требуют
+явной compatibility-проверки. Счётчики confidence не изменились.
+
+`FieldSpec` также хранит evidence type/sources, controlled experiment ids,
+corpus count, признаки exact identity/report/database/help match и reviewer
+note. Наличие CONFIRMED-семантики само по себе не даёт права записи.
 
 ## Карта всех полей
 
@@ -228,3 +237,14 @@
 ## Что пока не доказано
 
 Большая часть строки относится к внутренним флагам, промежуточным характеристикам, комбинированным усилиям и моделям древесины. Одинаковое значение во всех проектах не доказывает назначения. Нужны контролируемые пары RX38, где в интерфейсе меняется ровно один параметр.
+
+Mappings Mx/My/Qx/Qy остаются неподтверждёнными. Field 50 остаётся
+`probable`; индексы My/Qx/Qy не назначаются по догадке. Поэтому ненулевое
+значение любого из четырёх компонентов блокирует генерацию до записи файла.
+Field 50=0 не доказывает, что шаблон осевой: нужен отдельный `AXIAL_ONLY`
+evidence для всего calculation profile.
+
+Fields 44 и 54 могут физически сохранять значения старого шаблона, но они
+помечаются `STALE_TEMPLATE_RESULT`, исключены из `Rx3Input` и принимаются
+только из отдельного calculated-файла после GUI validation. UNKNOWN tokens
+сохраняются verbatim и получают opaque fingerprint без интерпретации.

@@ -16,6 +16,7 @@ from .diff import diff_records
 from .parser import construction_records, read_rx38
 from .project_adapter import create_rx38_from_project_element
 from .result import rx38_record_to_rx3_result
+from .safety import GuiExecutionEvidence, Rx3SafetyContext
 from .schema import field_spec
 
 
@@ -29,6 +30,8 @@ class Rx3ValidationBundle:
     template: Path
     generated: Path
     project_element: Path
+    rx3_input: Path
+    template_profile: Path
     diff_json: Path
     diff_markdown: Path
     instructions: Path
@@ -96,6 +99,7 @@ def prepare_rx3_validation(
     output_directory: str | Path,
     *,
     template_mark: str | None = None,
+    safety_context: Rx3SafetyContext | None = None,
 ) -> Rx3ValidationBundle:
     """Create a self-contained, non-destructive RX3 GUI validation bundle."""
 
@@ -111,6 +115,8 @@ def prepare_rx3_validation(
     template = directory / "template.rx38"
     generated = directory / "generated.rx38"
     project_copy = directory / "project_element.json"
+    rx3_input = directory / "rx3_input.json"
+    template_profile = directory / "rx3_template_profile.json"
     diff_json = directory / "diff_before_after.json"
     diff_markdown = directory / "diff_before_after.md"
     instructions = directory / "README_VALIDATION.md"
@@ -123,6 +129,7 @@ def prepare_rx3_validation(
         template,
         generated,
         template_mark=template_mark,
+        safety_context=safety_context,
     )
     changes = [
         {
@@ -135,7 +142,7 @@ def prepare_rx3_validation(
         }
         for item in creation.changed_fields
     ]
-    payload = {
+    payload: dict[str, Any] = {
         "template": {"file": template.name, "sha256": _sha256(template)},
         "generated": {"file": generated.name, "sha256": _sha256(generated)},
         "project_element": {
@@ -147,8 +154,22 @@ def prepare_rx3_validation(
         "unknown_fields_count": creation.unknown_fields_count,
         "warnings": list(creation.warnings),
         "round_trip_valid": creation.round_trip_valid,
+        "safety_mode": creation.safety_mode,
+        "steel_compatibility": creation.steel_compatibility,
+        "template_profile": creation.template_profile,
+        "stale_template_result_indices": list(
+            creation.stale_template_result_indices
+        ),
     }
     _write_new(diff_json, json.dumps(payload, ensure_ascii=False, indent=2) + "\n")
+    _write_new(
+        rx3_input,
+        json.dumps(creation.rx3_input, ensure_ascii=False, indent=2) + "\n",
+    )
+    _write_new(
+        template_profile,
+        json.dumps(creation.template_profile, ensure_ascii=False, indent=2) + "\n",
+    )
     _write_new(
         diff_markdown,
         _changes_markdown("Diff template.rx38 → generated.rx38", changes),
@@ -159,14 +180,16 @@ def prepare_rx3_validation(
 
 1. Откройте `template.rx38` в RX3 и убедитесь, что исходный файл читается.
 2. Откройте `generated.rx38` в RX3. Если RX3 показывает ошибку — остановитесь и сохраните текст/скриншот ошибки.
-3. Сверьте марку, профиль, длину, количество, сталь, N, закрепление и требуемый R с `project_element.json`.
-4. Нажмите расчёт в RX3. Не меняйте инженерные параметры без фиксации изменения.
-5. Сохраните рассчитанный файл в этой папке под именем `calculated.rx38`; не перезаписывайте `template.rx38` и `generated.rx38`.
-6. Выполните:
+3. Сверьте `project_element.json`, `rx3_input.json` и `rx3_template_profile.json`.
+4. Зафиксируйте экранные значения mark, profile, steel, N, Mx, My, Qx, Qy, length, support, effective length, fire regime, R и режим critical-temperature calculation.
+5. Для AXIAL_ONLY убедитесь, что Mx=My=Qx=Qy=0. При любом расхождении остановитесь.
+6. Нажмите расчёт в RX3. Не меняйте инженерные параметры без фиксации изменения.
+7. Сохраните рассчитанный файл в этой папке под именем `calculated.rx38`; не перезаписывайте `template.rx38` и `generated.rx38`.
+8. Выполните:
 
-   `python -m fireprotect.cli validate-rx3-result generated.rx38 calculated.rx38`
+   `python -m fireprotect.cli validate-rx3-result generated.rx38 calculated.rx38 --gui-evidence ENGINEER_CONFIRMED`
 
-7. Передайте `calculated.rx38`, `rx3_validation_report.json` и `rx3_validation_report.md` обратно в проект.
+9. Передайте `calculated.rx38`, evidence, `rx3_result.json`, `rx3_validation_report.json` и `rx3_validation_report.md` обратно в проект.
 """,
     )
     return Rx3ValidationBundle(
@@ -174,6 +197,8 @@ def prepare_rx3_validation(
         template,
         generated,
         project_copy,
+        rx3_input,
+        template_profile,
         diff_json,
         diff_markdown,
         instructions,
@@ -212,9 +237,13 @@ def validate_rx3_result_files(
     json_report: str | Path | None = None,
     markdown_report: str | Path | None = None,
     overwrite: bool = False,
+    gui_execution_evidence: GuiExecutionEvidence = GuiExecutionEvidence.NOT_PROVIDED,
+    evidence_reference: str | None = None,
 ) -> Rx3ValidationReport:
     before_path = Path(before_rx38).resolve(strict=True)
     after_path = Path(after_rx38).resolve(strict=True)
+    if not isinstance(gui_execution_evidence, GuiExecutionEvidence):
+        gui_execution_evidence = GuiExecutionEvidence(gui_execution_evidence)
     before = construction_records(read_rx38(before_path))
     after = construction_records(read_rx38(after_path))
     if len(before) != len(after):
@@ -253,10 +282,40 @@ def validate_rx3_result_files(
             }
         )
 
-    payload = {
-        "status": "GUI_RESULT_ANALYSED_NOT_NORMATIVELY_VERIFIED",
-        "before": {"path": str(before_path), "sha256": _sha256(before_path)},
-        "after": {"path": str(after_path), "sha256": _sha256(after_path)},
+    before_hash = _sha256(before_path)
+    after_hash = _sha256(after_path)
+    byte_identical = before_hash == after_hash
+    expected_output_fields = {44, 54}
+    result_fields_changed = all(
+        expected_output_fields.issubset(indices) for indices in change_sets
+    )
+    recalculation_proven = not byte_identical and result_fields_changed
+    gui_verified = (
+        recalculation_proven
+        and gui_execution_evidence
+        in {
+            GuiExecutionEvidence.ENGINEER_CONFIRMED,
+            GuiExecutionEvidence.SCREENSHOT_REFERENCED,
+        }
+    )
+    status = (
+        "RX3_RECALCULATION_NOT_PROVEN"
+        if not recalculation_proven
+        else "RX3_RESULT_ANALYSED"
+        if gui_verified
+        else "RX3_GUI_RECALCULATION_UNVERIFIED"
+    )
+    payload: dict[str, Any] = {
+        "status": status,
+        "before": {"path": str(before_path), "sha256": before_hash},
+        "after": {"path": str(after_path), "sha256": after_hash},
+        "byte_identical": byte_identical,
+        "expected_result_fields": sorted(expected_output_fields),
+        "expected_result_fields_changed": result_fields_changed,
+        "rx3_recalculation_proven": recalculation_proven,
+        "gui_execution_evidence": gui_execution_evidence.value,
+        "evidence_reference": evidence_reference,
+        "gui_recalculation_verified": gui_verified,
         "records": records,
         "dependency_candidates": _dependency_candidates(change_sets),
         "dependency_warning": (
@@ -276,14 +335,36 @@ def validate_rx3_result_files(
         encoding="utf-8",
         newline="\n",
     )
+    result_path = after_path.parent / "rx3_result.json"
+    if result_path.exists() and not overwrite:
+        raise Rx3GuiValidationError(f"Report already exists: {result_path}")
+    result_path.write_text(
+        json.dumps(
+            {
+                "status": status,
+                "gui_execution_evidence": gui_execution_evidence.value,
+                "results": [item["rx3_result"] for item in records],
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+        newline="\n",
+    )
 
     lines = [
         "# Отчёт проверки результата RX3",
         "",
-        "Статус: **GUI_RESULT_ANALYSED_NOT_NORMATIVELY_VERIFIED**.",
+        f"Статус: **{status}**.",
         "",
         f"- BEFORE SHA-256: `{payload['before']['sha256']}`",
         f"- AFTER SHA-256: `{payload['after']['sha256']}`",
+        f"- Byte-identical: `{byte_identical}`",
+        f"- Expected result fields 44/54 changed: `{result_fields_changed}`",
+        f"- RX3 recalculation proven: `{recalculation_proven}`",
+        f"- GUI evidence: `{gui_execution_evidence.value}`",
+        f"- GUI recalculation verified: `{gui_verified}`",
         "",
     ]
     for record in records:

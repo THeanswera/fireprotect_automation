@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.5.0 — 2026-08-25
+
+- Добавлены execution modes `DRAFT`, `VALIDATION`, `PRODUCTION` и центральный
+  release gate `IssueReadiness`; это не означает production readiness.
+- Ненулевые `Mx/My/Qx/Qy` теперь блокируют RX38 до подтверждения mappings;
+  осевой validation path требует отдельного `AXIAL_ONLY` evidence.
+- Добавлены явная LIRA -> RX3 force convention, typed steel compatibility и
+  `Rx3CalculationProfile` с fingerprint неизвестных полей.
+- `Rx3Input` отделён от `Rx3Result`; template outputs помечаются stale, а
+  byte-identical generated/calculated не считается пересчётом RX3.
+- Normative registry стал production gate по document id, статусу редакции,
+  дате действия и SHA-256; добавлен registry первичной технической
+  документации огнезащиты.
+- Excel остаётся copy-only compatibility export и получает обязательный
+  `EXCEL_RECALCULATION_REQUIRED` до пересчёта в Microsoft Excel.
+- Добавлены controlled experiment CLI/protocol, negative safety suite,
+  GitHub Actions для Python 3.11/3.12, ruff и mypy.
+
 ## 0.4.0 — 2026-08-25
 
 - Добавлен двусторонний мост RX3: `Rx3Result` извлекает только

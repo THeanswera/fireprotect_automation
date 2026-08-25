@@ -1,11 +1,11 @@
 import csv
-from dataclasses import replace
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from decimal import Decimal
 from pathlib import Path
 
 import pytest
 
+from fireprotect.execution import ExecutionMode
 from fireprotect.model import (
     EffectiveLengthParameters,
     ProjectElement,
@@ -21,6 +21,16 @@ from fireprotect.rx3.project_adapter import (
     Rx38TemplateMismatchError,
     create_rx38_from_project_element,
 )
+from fireprotect.rx3.safety import (
+    ActionZeroTolerance,
+    EvidenceStatus,
+    ForceConventionStatus,
+    LiraRx3ForceConvention,
+    Rx3SafetyContext,
+    Rx3TemplateEvidence,
+    Rx3TemplateUseCase,
+    UnverifiedRx38ActionMappingError,
+)
 
 
 def _template_fields() -> list[str]:
@@ -33,7 +43,7 @@ def _template_fields() -> list[str]:
         26: "0,00018849", 27: "0,000062409", 28: "0,000062409",
         29: "0,0012651", 30: "0,0004175", 32: "7850", 33: "245", 34: "206000",
         42: "С245", 44: "650", 45: "Cжатый стержень", 48: "Шарнирное опирание по концам",
-        49: "100", 50: "777", 51: "2,31", 52: "0,2", 54: "15", 55: "60",
+        49: "100", 50: "0", 51: "2,31", 52: "0,2", 54: "15", 55: "60",
         66: "287,0274", 67: "287,0274", 72: "Нет", 82: "25", 83: "1", 84: "1",
         85: "1", 86: "1194", 87: "3,9402", 88: "3,9402", 104: "Стандартный температурный режим",
         113: "9,27973199329983", 114: "107,761732851986", 141: "0,7",
@@ -69,8 +79,11 @@ def _element(**overrides) -> ProjectElement:
         "E": Quantity.of("206", Unit.GIGAPASCAL),
         "density": Quantity.of("7850", Unit.KILOGRAM_PER_CUBIC_METER),
         "load_case": "LC1", "combination": "C1", "N": Quantity.of("200", Unit.KILONEWTON),
-        "Mx": Quantity.of("12", Unit.KILONEWTON_METER), "My": None,
-        "Qx": None, "Qy": None, "governing_combination": "C1",
+        "Mx": Quantity.of("0", Unit.KILONEWTON_METER),
+        "My": Quantity.of("0", Unit.KILONEWTON_METER),
+        "Qx": Quantity.of("0", Unit.KILONEWTON),
+        "Qy": Quantity.of("0", Unit.KILONEWTON),
+        "governing_combination": "C1",
         "required_fire_resistance": Quantity.of("60", Unit.MINUTE),
         "stress_state": "Cжатый стержень", "heating_sides": 4,
         "support_condition": "Шарнирное опирание по концам",
@@ -95,22 +108,62 @@ def _element(**overrides) -> ProjectElement:
     return ProjectElement(**data)
 
 
+def _safety_context() -> Rx3SafetyContext:
+    confirmed = date(2026, 8, 25)
+    return Rx3SafetyContext(
+        ExecutionMode.DRAFT,
+        ActionZeroTolerance.strict(),
+        Rx3TemplateEvidence(
+            Rx3TemplateUseCase.AXIAL_ONLY,
+            EvidenceStatus.VERIFIED,
+            "controlled RX3 template validation",
+            True,
+            "test engineer",
+            confirmed,
+            "1",
+            True,
+        ),
+        LiraRx3ForceConvention(
+            "LIRA CSV",
+            "RX3",
+            "tension",
+            "compression",
+            "element local axes",
+            "Mx->Mx, My->My",
+            "Qx->Qx, Qy->Qy",
+            {name: Decimal("1") for name in ("N", "Mx", "My", "Qx", "Qy")},
+            "identity test convention",
+            "controlled validation protocol",
+            ForceConventionStatus.VERIFIED,
+            True,
+            "test engineer",
+            confirmed,
+            "1",
+        ),
+        None,
+    )
+
+
 def test_project_element_to_rx38_safe_template_round_trip(template_rx38, tmp_path):
     output = tmp_path / "output.rx38"
     report = create_rx38_from_project_element(
-        _element(), template_rx38, output, template_mark="К1"
+        _element(), template_rx38, output, template_mark="К1",
+        safety_context=_safety_context(),
     )
     assert report.round_trip_valid
     assert report.unknown_fields_count == 131
-    assert any("Mx preserved" in warning for warning in report.warnings)
-    assert any("RX3_RECALCULATION_REQUIRED" in warning for warning in report.warnings)
+    assert any(
+        "Mx/My/Qx/Qy mappings remain unconfirmed" in warning
+        for warning in report.warnings
+    )
+    assert any("STALE_TEMPLATE_RESULT" in warning for warning in report.warnings)
     changed = {change.index for change in report.changed_fields}
     assert {1, 3, 14, 15, 24, 25, 49, 51, 66, 67}.issubset(changed)
     assert 50 not in changed  # Mx is still unconfirmed and remains verbatim.
 
     original = construction_records(read_rx38(template_rx38))[0]
     result = construction_records(read_rx38(output))[0]
-    assert result.fields[50] == original.fields[50] == "777"
+    assert result.fields[50] == original.fields[50] == "0"
     assert result.fields[135] == original.fields[135]
     assert len(result.fields) == 200
 
@@ -118,7 +171,8 @@ def test_project_element_to_rx38_safe_template_round_trip(template_rx38, tmp_pat
 def test_profile_mismatch_is_blocked(template_rx38, tmp_path):
     with pytest.raises(Rx38TemplateMismatchError, match="Profile mismatch"):
         create_rx38_from_project_element(
-            _element(profile_name="35 К1"), template_rx38, tmp_path / "bad.rx38", template_mark="К1"
+            _element(profile_name="35 К1"), template_rx38, tmp_path / "bad.rx38", template_mark="К1",
+            safety_context=_safety_context(),
         )
 
 
@@ -131,6 +185,7 @@ def test_different_effective_axes_require_engineer_decision(template_rx38, tmp_p
         create_rx38_from_project_element(
             _element(effective_length_parameters=parameters),
             template_rx38, tmp_path / "bad.rx38", template_mark="К1",
+            safety_context=_safety_context(),
         )
 
 
@@ -139,6 +194,20 @@ def test_ptm_conflict_is_blocked(template_rx38, tmp_path):
         create_rx38_from_project_element(
             _element(ptm=Quantity.of("7", Unit.MILLIMETER)),
             template_rx38, tmp_path / "bad.rx38", template_mark="К1",
+            safety_context=_safety_context(),
+        )
+
+
+def test_nonzero_moment_is_blocked_without_confirmed_rx38_mapping(
+    template_rx38, tmp_path
+):
+    with pytest.raises(UnverifiedRx38ActionMappingError, match="Mx=12"):
+        create_rx38_from_project_element(
+            _element(Mx=Quantity.of("12", Unit.KILONEWTON_METER)),
+            template_rx38,
+            tmp_path / "blocked.rx38",
+            template_mark="К1",
+            safety_context=_safety_context(),
         )
 
 

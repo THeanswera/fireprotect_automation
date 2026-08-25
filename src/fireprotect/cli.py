@@ -4,8 +4,9 @@ import argparse
 import json
 from pathlib import Path
 
+from .execution import ExecutionMode
 from .project_io import read_project_element_json
-from .pipeline import run_pipeline
+from .pipeline import run_pipeline, rx3_safety_context_from_dict
 from .rx3.project_adapter import create_rx38_from_project_element
 from .rx3.gui_validation import (
     prepare_rx3_validation,
@@ -13,6 +14,7 @@ from .rx3.gui_validation import (
 )
 from .rx3.parser import Rx38Construction, construction_records, read_rx38
 from .rx3.profiles import ProfileRepository, list_tables
+from .rx3.safety import GuiExecutionEvidence, Rx3SafetyContext
 from .validation import validate_rx38_record
 
 
@@ -68,11 +70,13 @@ def cmd_lookup_profile(args: argparse.Namespace) -> None:
 
 def cmd_rx38_create(args: argparse.Namespace) -> None:
     element = read_project_element_json(args.input)
+    context = _read_safety_context(args.safety_context, args.mode)
     report = create_rx38_from_project_element(
         element,
         args.template,
         args.output,
         template_mark=args.template_mark,
+        safety_context=context,
     )
     payload = json.dumps(report.as_dict(), ensure_ascii=False, indent=2)
     if args.report is not None:
@@ -81,11 +85,13 @@ def cmd_rx38_create(args: argparse.Namespace) -> None:
 
 
 def cmd_prepare_rx3_validation(args: argparse.Namespace) -> None:
+    context = _read_safety_context(args.safety_context, args.mode)
     bundle = prepare_rx3_validation(
         args.input,
         args.template,
         args.output_dir,
         template_mark=args.template_mark,
+        safety_context=context,
     )
     print(
         json.dumps(
@@ -94,6 +100,8 @@ def cmd_prepare_rx3_validation(args: argparse.Namespace) -> None:
                 "template": str(bundle.template),
                 "generated": str(bundle.generated),
                 "project_element": str(bundle.project_element),
+                "rx3_input": str(bundle.rx3_input),
+                "template_profile": str(bundle.template_profile),
                 "diff_json": str(bundle.diff_json),
                 "diff_markdown": str(bundle.diff_markdown),
                 "instructions": str(bundle.instructions),
@@ -111,6 +119,8 @@ def cmd_validate_rx3_result(args: argparse.Namespace) -> None:
         json_report=args.json_report,
         markdown_report=args.markdown_report,
         overwrite=args.overwrite,
+        gui_execution_evidence=GuiExecutionEvidence(args.gui_evidence),
+        evidence_reference=args.evidence_reference,
     )
     print(
         json.dumps(
@@ -123,6 +133,34 @@ def cmd_validate_rx3_result(args: argparse.Namespace) -> None:
             indent=2,
         )
     )
+
+
+def _read_safety_context(
+    path: Path | None, mode: str
+) -> Rx3SafetyContext:
+    payload = {}
+    if path is not None:
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise ValueError(f"Cannot read RX3 safety context: {exc}") from exc
+    return rx3_safety_context_from_dict(
+        payload,
+        mode=ExecutionMode.parse(mode),
+    )
+
+
+def cmd_rx38_experiment_diff(args: argparse.Namespace) -> None:
+    report = validate_rx3_result_files(
+        args.base,
+        args.changed,
+        json_report=args.json_report,
+        markdown_report=args.markdown_report,
+        overwrite=args.overwrite,
+        gui_execution_evidence=GuiExecutionEvidence.HASH_ONLY,
+        evidence_reference=args.experiment_id,
+    )
+    print(json.dumps(report.data, ensure_ascii=False, indent=2))
 
 
 def cmd_pipeline(args: argparse.Namespace) -> None:
@@ -161,6 +199,8 @@ def main() -> None:
     command.add_argument("output", type=Path)
     command.add_argument("--template-mark")
     command.add_argument("--report", type=Path)
+    command.add_argument("--mode", choices=[item.value for item in ExecutionMode], default="DRAFT")
+    command.add_argument("--safety-context", type=Path)
     command.set_defaults(func=cmd_rx38_create)
 
     command = subparsers.add_parser(
@@ -173,6 +213,8 @@ def main() -> None:
         "--output-dir", type=Path, default=Path("validation/rx3_gui_test")
     )
     command.add_argument("--template-mark")
+    command.add_argument("--mode", choices=[item.value for item in ExecutionMode], default="VALIDATION")
+    command.add_argument("--safety-context", type=Path)
     command.set_defaults(func=cmd_prepare_rx3_validation)
 
     command = subparsers.add_parser(
@@ -184,7 +226,25 @@ def main() -> None:
     command.add_argument("--json-report", type=Path)
     command.add_argument("--markdown-report", type=Path)
     command.add_argument("--overwrite", action="store_true")
+    command.add_argument(
+        "--gui-evidence",
+        choices=[item.value for item in GuiExecutionEvidence],
+        default=GuiExecutionEvidence.NOT_PROVIDED.value,
+    )
+    command.add_argument("--evidence-reference")
     command.set_defaults(func=cmd_validate_rx3_result)
+
+    command = subparsers.add_parser(
+        "rx38-experiment-diff",
+        help="Create a machine-readable controlled differential RX38 report",
+    )
+    command.add_argument("base", type=Path)
+    command.add_argument("changed", type=Path)
+    command.add_argument("--experiment-id", required=True)
+    command.add_argument("--json-report", type=Path)
+    command.add_argument("--markdown-report", type=Path)
+    command.add_argument("--overwrite", action="store_true")
+    command.set_defaults(func=cmd_rx38_experiment_diff)
 
     command = subparsers.add_parser(
         "pipeline",

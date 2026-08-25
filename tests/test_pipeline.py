@@ -74,8 +74,9 @@ def _template(path: Path) -> None:
         19: "30 K1",
         20: "11080",
         33: "245",
+        42: "S245",
         44: "650",
-        50: "10",
+        50: "0",
         54: "15",
         72: "None",
     }.items():
@@ -107,11 +108,13 @@ def test_pipeline_stops_for_rx3_and_resumes_after_calculated_file(tmp_path: Path
     _template(template)
     lira.write_text(
         "id;section;case;comb;N;Mx;My;Qx;Qy\n"
-        "17;30K1;LC1;C1;-125.5;12;3;4;5\n",
+        "17;30K1;LC1;C1;-125.5;0;0;0;0\n",
         encoding="utf-8",
     )
     payload = {
-        "schema_version": 1,
+        "schema_version": 2,
+        "execution_mode": "VALIDATION",
+        "calculation_date": "2026-08-25",
         "workspace": "run",
         "lira": {
             "format": "csv",
@@ -145,6 +148,43 @@ def test_pipeline_stops_for_rx3_and_resumes_after_calculated_file(tmp_path: Path
                 "set_governing_combination": True,
                 "rx38_template": "template.rx38",
                 "template_mark": "K1",
+                "gui_execution_evidence": "ENGINEER_CONFIRMED",
+                "gui_evidence_reference": "pytest controlled GUI run",
+                "rx3_safety": {
+                    "template_evidence": {
+                        "use_case": "AXIAL_ONLY",
+                        "status": "VERIFIED",
+                        "source": "controlled RX3 template validation",
+                        "engineer_confirmation": True,
+                        "confirmed_by": "test engineer",
+                        "confirmed_at": "2026-08-25",
+                        "version": "1",
+                        "calculation_profile_verified": True,
+                    },
+                    "force_convention": {
+                        "source_system": "LIRA CSV",
+                        "target_system": "RX3",
+                        "positive_n_meaning": "tension",
+                        "negative_n_meaning": "compression",
+                        "local_axes": "element local axes",
+                        "moment_mapping": "Mx->Mx, My->My",
+                        "shear_mapping": "Qx->Qx, Qy->Qy",
+                        "multipliers": {
+                            "N": "1",
+                            "Mx": "1",
+                            "My": "1",
+                            "Qx": "1",
+                            "Qy": "1"
+                        },
+                        "rule_name": "identity test convention",
+                        "evidence_source": "controlled validation protocol",
+                        "status": "VERIFIED",
+                        "engineer_confirmation": True,
+                        "confirmed_by": "test engineer",
+                        "confirmed_at": "2026-08-25",
+                        "version": "1"
+                    }
+                },
                 "required_fire_resistance_decision": {
                     "R": {"value": "90", "unit": "min"},
                     "construction_type": "column",
@@ -168,7 +208,7 @@ def test_pipeline_stops_for_rx3_and_resumes_after_calculated_file(tmp_path: Path
 
     _calculate(generated, first.waiting_for[0])
     second = run_pipeline(config)
-    assert second.status == "RX3_RESULT_IMPORTED_PIPELINE_COMPLETE"
+    assert second.status == "RX3_RESULT_ANALYSED"
     assert not second.waiting_for
     audit = json.loads(second.audit_json.read_text(encoding="utf-8"))
     assert audit["rx3_results"][0]["result"]["critical_temperature"] == {
@@ -180,3 +220,17 @@ def test_pipeline_stops_for_rx3_and_resumes_after_calculated_file(tmp_path: Path
         "value": "675",
         "unit": "degC",
     }
+    assert audit["issue_readiness"]["status"] == "NOT_READY_FOR_ISSUE"
+    element_audit = audit["element_audits"][0]
+    assert element_audit["lira_source"]["source_values"]["units"]["N"] == "kN"
+    assert element_audit["force_convention"]["transformations"][0][
+        "status"
+    ] == "VERIFIED"
+    assert element_audit["geometry"]["calculated"]["formula"] == (
+        "area_mm2 / heated_perimeter_mm"
+    )
+    assert element_audit["steel"]["compatibility"]["status"] == (
+        "LEGACY_NUMERIC_MATCH"
+    )
+    assert element_audit["rx3_generated"]["changed_fields"]
+    assert element_audit["rx3_result"]["gui_recalculation_verified"] is True

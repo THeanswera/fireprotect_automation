@@ -13,7 +13,7 @@ from datetime import datetime
 from decimal import Decimal, InvalidOperation
 from enum import Enum
 from types import MappingProxyType
-from typing import Any, ClassVar, Mapping
+from typing import ClassVar, Mapping
 
 
 class ModelValidationError(ValueError):

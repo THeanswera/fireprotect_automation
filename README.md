@@ -13,9 +13,10 @@
 ```
 
 Проект не подставляет типовые инженерные значения вместо отсутствующих.
-Неоднозначное соответствие профиля, сторон обогрева, расчётной длины или поля
-RX38 приводит к ошибке либо явному warning. Нормативный результат в
-production-режиме нельзя подтвердить без `NormativeTrace`.
+Неоднозначное соответствие расчётно значимого поля приводит к blocker.
+Warning используется только для некритической диагностики и не заменяет
+доказательство. Нормативный результат в production нельзя подтвердить без
+`NormativeTrace`, допустимой редакции, даты действия и проверки SHA-256.
 
 ## Реализовано
 
@@ -29,11 +30,19 @@ production-режиме нельзя подтвердить без `NormativeTra
 - обратный мост `RX38 -> Rx3Result -> ProjectElement`, который типизирует
   только CONFIRMED-поля и помечает их provenance как `RX3_RESULT`;
 - команды подготовки ручной GUI-проверки RX3 и анализа сохранённого
-  результа с разделением CONFIRMED / PROBABLE / UNKNOWN;
+  результата с разделением CONFIRMED / PROBABLE / UNKNOWN;
 - типизированный copy-only экспорт в фиксированную 44-строчную Excel-книгу с
   проверкой ZIP, openpyxl, SHA-256 и точной карты 579 формул;
 - экспериментальный `pipeline`, который останавливается перед RX3 и продолжает
-  работу после появления `calculated.rx38`.
+  работу после появления `calculated.rx38`;
+- режимы `DRAFT` / `VALIDATION` / `PRODUCTION` и центральный
+  `IssueReadiness`; production работает fail closed;
+- запрет генерации при ненулевых `Mx/My/Qx/Qy`, пока mappings не CONFIRMED;
+- явные force convention, steel compatibility, template profile и строгая
+  граница `Rx3Input` / `Rx3Result`;
+- нормативный и технический registries; неподтверждённые таблицы Excel не
+  используются для production-подбора толщины;
+- GitHub Actions для Python 3.11/3.12, pytest, ruff и mypy.
 
 Независимая нормативная верификация расчётов ещё не завершена. Текущий статус:
 **NOT READY FOR ISSUE**.
@@ -43,6 +52,9 @@ production-режиме нельзя подтвердить без `NormativeTra
 ```powershell
 python -m pip install -e .
 python -m pytest -q
+python -m pip install -e ".[dev]"
+python -m ruff check src tests
+python -m mypy src
 ```
 
 `openpyxl>=3.1,<3.2` устанавливается как зависимость и используется для XLSX-
@@ -57,9 +69,10 @@ python tools/rx38_diff.py group-by-profile ..\rx3\*.rx38 --profile "30 К1"
 python -m fireprotect.cli inspect-rx38 FILE.rx38
 python -m fireprotect.cli validate-rx38 FILE.rx38
 python -m fireprotect.cli lookup-profile RX3_DB.rxdb "30К1" --standard "СТО АСЧМ 20-93"
-python -m fireprotect.cli rx38-create INPUT.json TEMPLATE.rx38 OUTPUT.rx38 --template-mark "К1" --report report.json
-python -m fireprotect.cli prepare-rx3-validation INPUT.json TEMPLATE.rx38 --output-dir validation/rx3_gui_test --template-mark "К1"
-python -m fireprotect.cli validate-rx3-result generated.rx38 calculated.rx38
+python -m fireprotect.cli rx38-create INPUT.json TEMPLATE.rx38 OUTPUT.rx38 --template-mark "К1" --mode VALIDATION --safety-context safety.json --report report.json
+python -m fireprotect.cli prepare-rx3-validation INPUT.json TEMPLATE.rx38 --output-dir validation/rx3_gui_test --template-mark "К1" --mode VALIDATION --safety-context safety.json
+python -m fireprotect.cli validate-rx3-result generated.rx38 calculated.rx38 --gui-evidence ENGINEER_CONFIRMED --evidence-reference RX3-EXP-01
+python -m fireprotect.cli rx38-experiment-diff BASE.rx38 CHANGED.rx38 --experiment-id RX3-EXP-01
 python -m fireprotect.cli pipeline pipeline.json
 ```
 
@@ -76,7 +89,10 @@ JSON для `rx38-create` обязан явно перечислять все п
 - [запуск сквозного MVP](docs/PIPELINE_MVP.md);
 - [текущий прогресс](docs/PROGRESS.md);
 - [открытые вопросы](docs/OPEN_QUESTIONS.md);
-- [нормативная прослеживаемость](normative/traceability.md).
+- [нормативная прослеживаемость](normative/traceability.md);
+- [модель безопасности](docs/SAFETY_MODEL.md);
+- [controlled experiments RX3](docs/RX3_CONTROLLED_EXPERIMENTS.md);
+- [production release gate](docs/PRODUCTION_RELEASE_GATE.md).
 
 ## Непубликуемые исходные данные
 

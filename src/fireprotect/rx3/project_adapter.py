@@ -7,18 +7,27 @@ from pathlib import Path
 import tempfile
 from typing import Any
 
-from ..model import Dimension, EffectiveLengthParameters, ProjectElement, Quantity, Unit
+from ..execution import ExecutionMode
+from ..model import EffectiveLengthParameters, ProjectElement, Quantity, Unit
 from .diff import diff_records
 from .parser import (
     Rx38Construction,
     Rx38Document,
     Rx38Record,
-    construction_records,
     read_rx38_document,
     write_rx38,
 )
 from .profiles import normalize_profile_name, normalize_standard
 from .schema import TCONSTR_FIELD_COUNT, field_spec
+from .safety import (
+    Rx3SafetyContext,
+    SteelCompatibilityError,
+    SteelCompatibilityReport,
+    TemplateProfileError,
+    build_rx3_input,
+    evaluate_calculation_profile,
+    evaluate_steel_compatibility,
+)
 
 
 class Rx38ProjectAdapterError(ValueError):
@@ -52,6 +61,11 @@ class Rx38CreationReport:
     unknown_fields_count: int
     warnings: tuple[str, ...]
     round_trip_valid: bool
+    safety_mode: str
+    rx3_input: dict[str, Any]
+    steel_compatibility: dict[str, Any]
+    template_profile: dict[str, Any]
+    stale_template_result_indices: tuple[int, ...]
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -64,6 +78,13 @@ class Rx38CreationReport:
             "unknown_fields_count": self.unknown_fields_count,
             "warnings": list(self.warnings),
             "round_trip_valid": self.round_trip_valid,
+            "safety_mode": self.safety_mode,
+            "rx3_input": self.rx3_input,
+            "steel_compatibility": self.steel_compatibility,
+            "template_profile": self.template_profile,
+            "stale_template_result_indices": list(
+                self.stale_template_result_indices
+            ),
         }
 
 
@@ -137,8 +158,26 @@ def _single_effective_value(
 
 
 def project_element_to_rx38_record(
-    element: ProjectElement, template: Rx38Record
+    element: ProjectElement,
+    template: Rx38Record,
+    *,
+    safety_context: Rx3SafetyContext | None = None,
 ) -> tuple[Rx38Record, tuple[str, ...]]:
+    record, warnings, _ = _prepare_rx38_record(
+        element,
+        template,
+        safety_context=safety_context,
+    )
+    return record, warnings
+
+
+def _prepare_rx38_record(
+    element: ProjectElement,
+    template: Rx38Record,
+    *,
+    safety_context: Rx3SafetyContext | None,
+) -> tuple[Rx38Record, tuple[str, ...], dict[str, Any]]:
+    context = safety_context or Rx3SafetyContext.draft()
     element.require_fields(
         "mark", "section_type", "profile_standard", "profile_name", "area",
         "heated_perimeter", "ptm", "length", "quantity", "steel_grade", "E",
@@ -146,6 +185,26 @@ def project_element_to_rx38_record(
         "effective_length_parameters", "required_fire_resistance",
     )
     _require_template_compatibility(element, template)
+    rx3_input, _, action_warnings = build_rx3_input(element, context)
+    steel_report: SteelCompatibilityReport = evaluate_steel_compatibility(
+        element,
+        template,
+        context.steel_properties,
+    )
+    if context.mode is ExecutionMode.PRODUCTION and not steel_report.verified:
+        raise SteelCompatibilityError(
+            "Production requires a verified RX3 steel-strength mapping; legacy numeric equality is insufficient"
+        )
+
+    template_mx = Decimal(template.fields[50].replace(",", ".") or "0")
+    mx_tolerance = context.action_zero_tolerance.moment.to(
+        Unit.KILONEWTON_METER
+    ).value
+    if abs(template_mx) > mx_tolerance:
+        raise TemplateProfileError(
+            "AXIAL_ONLY template conflicts with non-zero probable RX38 field 50; "
+            "the value cannot be cleared through the safe typed API"
+        )
 
     area_mm2 = _as_decimal(element.area, Unit.SQUARE_MILLIMETER)  # type: ignore[arg-type]
     perimeter_mm = _as_decimal(element.heated_perimeter, Unit.MILLIMETER)  # type: ignore[arg-type]
@@ -167,7 +226,10 @@ def project_element_to_rx38_record(
             )
 
     parameters = element.effective_length_parameters
-    assert parameters is not None
+    if parameters is None:
+        raise Rx38EngineeringConflictError(
+            "RX38 creation requires explicit effective-length parameters"
+        )
     effective_length, effective_factor = _single_effective_value(parameters)
     if effective_length is None or effective_factor is None:
         raise Rx38EngineeringConflictError(
@@ -193,26 +255,19 @@ def project_element_to_rx38_record(
         42: element.steel_grade or "",
         45: element.stress_state or "",
         48: element.support_condition or "",
-        49: _format_decimal(_as_decimal(element.N, Unit.KILONEWTON)),  # type: ignore[arg-type]
+        49: _format_decimal(_as_decimal(rx3_input.axial_force, Unit.KILONEWTON)),
         51: _format_decimal(_as_decimal(effective_length, Unit.METER)),
         55: _format_decimal(_as_decimal(element.required_fire_resistance, Unit.MINUTE)),  # type: ignore[arg-type]
         66: _format_decimal(area_mm2 * Decimal("0.000001") * length_m * _as_decimal(element.density, Unit.KILOGRAM_PER_CUBIC_METER)),  # type: ignore[arg-type]
         67: _format_decimal(area_mm2 * Decimal("0.000001") * length_m * quantity * _as_decimal(element.density, Unit.KILOGRAM_PER_CUBIC_METER)),  # type: ignore[arg-type]
         141: _format_decimal(effective_factor),
     }
-    if element.critical_temperature is not None:
-        values[44] = _format_decimal(_as_decimal(element.critical_temperature, Unit.CELSIUS))
-    if element.unprotected_fire_resistance is not None:
-        values[54] = _format_decimal(_as_decimal(element.unprotected_fire_resistance, Unit.MINUTE))
+    values.update(steel_report.write_values)
 
-    warnings: list[str] = []
-    if element.Ry is not None:
-        warnings.append(
-            "Ry preserved from template: RX38 field 33 is a stored yield-strength value, but its equivalence to ProjectElement.Ry is not proven"
-        )
-    for name in ("Mx", "My", "Qx", "Qy"):
-        if getattr(element, name) is not None:
-            warnings.append(f"{name} preserved from template: its RX38 index is not confirmed")
+    warnings: list[str] = list(action_warnings) + list(steel_report.warnings)
+    warnings.append(
+        "Mx/My/Qx/Qy mappings remain unconfirmed; only a verified AXIAL_ONLY profile with zero actions may proceed"
+    )
     if element.heating_sides is not None:
         warnings.append(
             "heating_sides has no confirmed RX38 index; heated_perimeter was written, template heating flags were preserved"
@@ -223,21 +278,51 @@ def project_element_to_rx38_record(
     ):
         if getattr(element, name) is not None:
             warnings.append(f"{name} preserved from template: no safe confirmed RX38 mapping")
-    if element.critical_temperature is None or element.unprotected_fire_resistance is None:
+    stale_indices = tuple(
+        index for index in (44, 54) if template.fields[index].strip()
+    )
+    if stale_indices:
         warnings.append(
-            "RX3_RECALCULATION_REQUIRED: one or more RX3 result fields remain from the template"
+            "STALE_TEMPLATE_RESULT: RX3 output fields remain physically present but are excluded from Rx3Input and cannot be accepted before a proven recalculation"
         )
 
     updated = template
     for index, value in values.items():
-        updated = updated.with_confirmed_field(index, value)
-    return updated, tuple(warnings)
+        updated = updated.with_typed_field(
+            index,
+            value,
+            compatibility_verified=True,
+        )
+    profile = evaluate_calculation_profile(
+        updated,
+        values,
+        context.template_evidence,
+    )
+    if context.mode.value in {"VALIDATION", "PRODUCTION"} and not profile.verified:
+        raise TemplateProfileError(
+            "RX3 calculation profile is not verified for VALIDATION/PRODUCTION"
+        )
+    safety = {
+        "mode": context.mode.value,
+        "rx3_input": rx3_input.as_dict(),
+        "steel_compatibility": steel_report.as_dict(),
+        "template_profile": profile.as_dict(),
+        "stale_template_result_indices": list(stale_indices),
+    }
+    return updated, tuple(warnings), safety
 
 
 def project_element_to_rx38_construction(
-    element: ProjectElement, template: Rx38Record
+    element: ProjectElement,
+    template: Rx38Record,
+    *,
+    safety_context: Rx3SafetyContext | None = None,
 ) -> Rx38Construction:
-    record, _ = project_element_to_rx38_record(element, template)
+    record, _ = project_element_to_rx38_record(
+        element,
+        template,
+        safety_context=safety_context,
+    )
     return Rx38Construction.from_record(record)
 
 
@@ -247,6 +332,7 @@ def create_rx38_from_project_element(
     output_path: str | Path,
     *,
     template_mark: str | None = None,
+    safety_context: Rx3SafetyContext | None = None,
 ) -> Rx38CreationReport:
     template_path = Path(template_path).resolve(strict=True)
     output_path = Path(output_path).resolve(strict=False)
@@ -261,7 +347,11 @@ def create_rx38_from_project_element(
     output_path.parent.mkdir(parents=True, exist_ok=True)
     document = read_rx38_document(template_path)
     record_index, template = _select_template_record(document, element, template_mark)
-    updated, warnings = project_element_to_rx38_record(element, template)
+    updated, warnings, safety = _prepare_rx38_record(
+        element,
+        template,
+        safety_context=safety_context,
+    )
     output_document = document.replace_record(record_index, updated)
     handle = tempfile.NamedTemporaryFile(
         prefix=f".{output_path.stem}.",
@@ -305,4 +395,11 @@ def create_rx38_from_project_element(
         unknown_fields_count=unknown_count,
         warnings=warnings,
         round_trip_valid=True,
+        safety_mode=safety["mode"],
+        rx3_input=safety["rx3_input"],
+        steel_compatibility=safety["steel_compatibility"],
+        template_profile=safety["template_profile"],
+        stale_template_result_indices=tuple(
+            safety["stale_template_result_indices"]
+        ),
     )

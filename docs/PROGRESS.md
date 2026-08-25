@@ -40,7 +40,8 @@
 - **UNKNOWN:** реальный формат будущего экспорта ЛИРА и назначение нескольких
   служебных блоков Excel пока отсутствуют в исходных данных.
 - **BLOCKED:** запись Mx/My/Qx/Qy, материала и сторон обогрева в RX38 до
-  доказательства индексов; такие значения сохраняются из шаблона с warning.
+  доказательства индексов; ненулевые Mx/My/Qx/Qy теперь останавливают
+  генерацию, а не остаются из шаблона с warning.
 - **BLOCKED:** production-подбор толщины и расхода до идентификации нормативной
   редакции и технической документации конкретного материала.
 - **BLOCKED:** выпуск результата до GUI smoke-test созданного файла в RX3 и
@@ -75,3 +76,22 @@
 
 Статус проекта остаётся **NOT READY FOR ISSUE**: реализован безопасный обмен и
 диагностика, но независимая нормативная верификация расчётов не завершена.
+
+## Этап 4 — production safety gates
+
+- **CONFIRMED:** введены `DRAFT` / `VALIDATION` / `PRODUCTION`; только
+  production без blockers теоретически может получить `READY_FOR_ISSUE`.
+- **CONFIRMED:** Mx/My/Qx/Qy fail closed, tolerance использует `Decimal`, а
+  pure axial требует отдельного `AXIAL_ONLY` evidence.
+- **CONFIRMED:** знак N преобразуется только через явный versioned
+  `LiraRx3ForceConvention` с audit исходного и целевого значения.
+- **CONFIRMED:** steel grade и field 33 проходят совместную compatibility
+  проверку; result fields 44/54 имеют write policy `RESULT_ONLY`.
+- **CONFIRMED:** stale template results не входят в `Rx3Input`; byte-identical
+  calculated/generated даёт `RX3_RECALCULATION_NOT_PROVEN`.
+- **CONFIRMED:** normative и technical registries встроены в release gate;
+  непроверенные редакции и вторичные Excel-таблицы не допускаются production.
+- **CONFIRMED:** CI проверяет Python 3.11/3.12, pytest, ruff и mypy.
+- **BLOCKED:** реальные mappings Mx/My/Qx/Qy, sign convention, steel field 33,
+  GUI smoke-test, Excel recalculation и primary manufacturer data всё ещё
+  требуют внешних доказательств.

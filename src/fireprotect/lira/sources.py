@@ -93,17 +93,20 @@ class _HtmlTableParser(HTMLParser):
     def handle_endtag(self, tag: str) -> None:
         tag = tag.lower()
         if self._table_depth == 1 and tag in {"th", "td"} and self._cell_parts is not None:
-            assert self._current_row is not None
+            if self._current_row is None:
+                raise LiraFormatError("HTML cell closed outside a table row")
             self._current_row.append(" ".join("".join(self._cell_parts).split()))
             self._cell_parts = None
         elif self._table_depth == 1 and tag == "tr" and self._current_row is not None:
-            assert self._current_table is not None
+            if self._current_table is None:
+                raise LiraFormatError("HTML row closed outside a table")
             if self._current_row:
                 self._current_table.append(self._current_row)
             self._current_row = None
         elif tag == "table" and self._table_depth:
             if self._table_depth == 1:
-                assert self._current_table is not None
+                if self._current_table is None:
+                    raise LiraFormatError("HTML table state is inconsistent")
                 self.tables.append(self._current_table)
                 self._current_table = None
             self._table_depth -= 1
@@ -165,11 +168,14 @@ class XlsxTableSource:
                 raise LiraFormatError(
                     f"{self.path}: worksheet {self.sheet_name!r} does not exist"
                 )
+            if worksheet is None:
+                raise LiraFormatError(f"{self.path}: workbook has no active worksheet")
             matrix = [list(row) for row in worksheet.iter_rows(values_only=True)]
+            worksheet_title = worksheet.title
         finally:
             workbook.close()
         return _rows_from_matrix(
             matrix,
             header_index=self.header_row - 1,
-            source=f"{self.path}:{worksheet.title}",
+            source=f"{self.path}:{worksheet_title}",
         )

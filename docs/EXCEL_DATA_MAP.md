@@ -327,6 +327,12 @@ write_project_elements_copy(template, result, project_elements, mapping)
 - формулы не вычисляются writer-ом; в копии выставляются `calcMode=auto`,
   `fullCalcOnLoad=1`, `forceFullCalc=1` для пересчёта при открытии.
 
+Копия имеет статус `EXCEL_COMPATIBILITY_EXPORT`, не
+`CANONICAL_PROJECT_DATA`. Флаги пересчёта являются запросом Excel, а не
+доказательством выполненного вычисления; до GUI-пересчёта сохраняется blocker
+`EXCEL_RECALCULATION_REQUIRED`. Production также требует проверенный SHA-256
+точной версии template и primary technical evidence для толщины/расхода.
+
 На реальной книге выполнен временный export в `данные!L6` и `данные!G6`:
 OOXML прошёл `ZipFile.testzip()`, состав всех 33 частей сохранился, карты всех
 579 формул и style ID всех ячеек до/после совпали, `styles.xml` бинарно совпал,

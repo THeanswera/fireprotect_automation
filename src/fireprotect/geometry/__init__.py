@@ -262,4 +262,7 @@ def compare_geometry_value(
 
 
 # Imported last to avoid a cycle while project.py imports GeometryResult.
-from .project import GEOMETRY_PROJECT_FIELDS, apply_geometry_result  # noqa: E402
+from .project import (  # noqa: E402
+    GEOMETRY_PROJECT_FIELDS as GEOMETRY_PROJECT_FIELDS,
+    apply_geometry_result as apply_geometry_result,
+)

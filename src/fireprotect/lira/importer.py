@@ -39,10 +39,6 @@ class LiraForceImporter:
 
     def _convert_row(self, row: RawTableRow) -> LiraForceRow:
         columns = self.mapping.columns
-        text = {
-            field: self._required_text(row, columns[field], field)
-            for field in ("element_id", "section", "load_case", "combination")
-        }
         raw_forces = {
             field: self._number(row, columns[field], field) for field in FORCE_FIELDS
         }
@@ -56,8 +52,21 @@ class LiraForceImporter:
             units=ForceUnits(**source_units.as_dict()),
         )
         return LiraForceRow(
-            **text,
-            **si_forces,
+            element_id=self._required_text(
+                row, columns["element_id"], "element_id"
+            ),
+            section=self._required_text(row, columns["section"], "section"),
+            load_case=self._required_text(
+                row, columns["load_case"], "load_case"
+            ),
+            combination=self._required_text(
+                row, columns["combination"], "combination"
+            ),
+            N=si_forces["N"],
+            Mx=si_forces["Mx"],
+            My=si_forces["My"],
+            Qx=si_forces["Qx"],
+            Qy=si_forces["Qy"],
             source=source_values,
             source_row=row.row_number,
         )

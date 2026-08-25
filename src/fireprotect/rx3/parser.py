@@ -6,7 +6,12 @@ from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Iterable
 
-from .schema import CONFIRMED_INDICES, TCONSTR_FIELD_COUNT, field_spec
+from .schema import (
+    CONFIRMED_INDICES,
+    TCONSTR_FIELD_COUNT,
+    WritePolicy,
+    field_spec,
+)
 
 
 class Rx38FormatError(ValueError):
@@ -62,12 +67,43 @@ class Rx38Record:
         return self.fields[index]
 
     def with_confirmed_field(self, index: int, value: str) -> "Rx38Record":
+        """Backward-compatible safe write with an explicit compatibility claim."""
+
+        return self.with_typed_field(index, value, compatibility_verified=True)
+
+    def with_typed_field(
+        self,
+        index: int,
+        value: str,
+        *,
+        compatibility_verified: bool = False,
+    ) -> "Rx38Record":
         if self.record_type != "Tconstr":
             raise UnsafeRx38WriteError("Only Tconstr records may be edited")
         if index not in CONFIRMED_INDICES:
             spec = field_spec(index)
             raise UnsafeRx38WriteError(
                 f"Field {index} ({spec.name}) is not confirmed and cannot be edited safely"
+            )
+        spec = field_spec(index)
+        if spec.write_policy is WritePolicy.RESULT_ONLY:
+            raise UnsafeRx38WriteError(
+                f"Field {index} ({spec.name}) is RESULT_ONLY and cannot be written as Rx3Input"
+            )
+        if spec.write_policy in {
+            WritePolicy.READ_ONLY,
+            WritePolicy.EXPERIMENTAL,
+            WritePolicy.FORBIDDEN,
+        }:
+            raise UnsafeRx38WriteError(
+                f"Field {index} ({spec.name}) write policy is {spec.write_policy.value}"
+            )
+        if (
+            spec.write_policy is WritePolicy.SAFE_WITH_COMPATIBILITY_CHECK
+            and not compatibility_verified
+        ):
+            raise UnsafeRx38WriteError(
+                f"Field {index} ({spec.name}) requires a compatibility check"
             )
         updated = list(self.fields)
         updated[index] = str(value)
@@ -249,10 +285,24 @@ def write_rx38(document: Rx38Document, path: str | Path) -> None:
         if record.record_type == "Tconstr" and len(record.fields) != TCONSTR_FIELD_COUNT:
             raise UnsafeRx38WriteError("Writer refuses non-200-field Tconstr records")
         changed = {i for i, (old, new) in enumerate(zip(original, record.fields)) if old != new}
-        unsafe = changed - CONFIRMED_INDICES
+        unsafe = {
+            index
+            for index in changed
+            if index not in CONFIRMED_INDICES
+            or field_spec(index).write_policy
+            in {
+                WritePolicy.RESULT_ONLY,
+                WritePolicy.READ_ONLY,
+                WritePolicy.EXPERIMENTAL,
+                WritePolicy.FORBIDDEN,
+            }
+        }
         if unsafe:
-            names = ", ".join(f"{i}:{field_spec(i).name}" for i in sorted(unsafe))
-            raise UnsafeRx38WriteError(f"Refusing changes to unconfirmed fields: {names}")
+            names = ", ".join(
+                f"{i}:{field_spec(i).name}:{field_spec(i).write_policy.value}"
+                for i in sorted(unsafe)
+            )
+            raise UnsafeRx38WriteError(f"Refusing unsafe field changes: {names}")
         tokens = record.raw_tokens or tuple(_serialize_token(v, "") for v in original)
         serialized = [
             token if i not in changed else _serialize_token(record.fields[i], token)

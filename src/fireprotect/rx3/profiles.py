@@ -11,7 +11,8 @@ ProfileStatus = Literal["FOUND", "NOT_FOUND", "AMBIGUOUS"]
 
 
 def normalize_profile_name(value: str) -> str:
-    normalized = value.casefold().translate(str.maketrans({"х": "x", "×": "x", ",": "."}))
+    replacements: dict[str, str | int | None] = {"х": "x", "×": "x", ",": "."}
+    normalized = value.casefold().translate(str.maketrans(replacements))
     return re.sub(r"\s+", "", normalized)
 
 

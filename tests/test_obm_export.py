@@ -1,5 +1,4 @@
 from datetime import datetime, timezone
-from decimal import Decimal
 from hashlib import sha256
 from pathlib import Path
 
@@ -121,6 +120,8 @@ def test_fixed_obm_export_preserves_all_formulas_and_reports_changes(tmp_path: P
     assert report.formulas_preserved and report.zip_integrity and report.openpyxl_opened
     assert len([item for item in report.cell_changes if item.project_field == "length"]) == 44
     assert "UNVERIFIED_TECHNICAL_DATA" in " ".join(report.warnings)
+    assert report.export_kind == "EXCEL_COMPATIBILITY_EXPORT"
+    assert report.recalculation_status == "EXCEL_RECALCULATION_REQUIRED"
     assert report.json_report.exists() and report.markdown_report.exists()
     workbook = load_workbook(output, data_only=False)
     try:
