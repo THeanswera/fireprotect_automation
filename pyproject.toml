@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "fireprotect-automation"
+version = "0.2.0"
+description = "Автоматизация проектов огнезащиты стальных конструкций"
+requires-python = ">=3.11"
+dependencies = []
+
+[project.scripts]
+fireprotect = "fireprotect.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]

@@ -1,0 +1,33 @@
+# Local source/evidence workspace
+/fireprotect_automation_starter/
+/rx3/
+/Примеры/
+/*.zip
+/*.pdf
+/*.xlsx
+/*.xls
+/*.doc
+/*.docx
+/*.dwg
+/*.lir
+
+# Real-data fixtures are never published
+/tests/fixtures/
+
+# Python build/test artifacts
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+htmlcov/
+.venv/
+venv/
+*.egg-info/
+build/
+dist/
+
+# Editors and operating systems
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db

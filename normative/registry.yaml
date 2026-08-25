@@ -1,0 +1,67 @@
+schema_version: 1
+generated_at: "2026-08-25"
+policy: >-
+  A file is registered by its exact SHA-256. IDENTIFICATION_REQUIRED and
+  EDITION_VERIFICATION_REQUIRED entries must not be used for production calculations.
+documents:
+  - id: SP_FIRE_STEEL_2026_LOCAL
+    designation: null
+    title: "Системы противопожарной защиты. Конструкции стальные строительные. Нормы и правила обеспечения огнестойкости"
+    year: 2026
+    edition: null
+    amendments: []
+    path: "../SP-stalnye-konstruktsii.pdf"
+    file_mtime: "2026-08-25T10:32:03+03:00"
+    size_bytes: 1942885
+    sha256: "b15ec26b93d066fca4a0db1d67c5f97563ebd96f48874dc6ee64ab359c0303bb"
+    status: IDENTIFICATION_REQUIRED
+    note: "Точное официальное обозначение и дата введения должны быть извлечены из титульных страниц и проверены."
+
+  - id: SP_16_13330_2017_LOCAL
+    designation: "СП 16.13330.2017"
+    title: "Стальные конструкции"
+    year: 2017
+    edition: "локальный PDF с пометкой 'изм1' в имени"
+    amendments: ["Изменение № 1 — заявлено именем файла, состав требует проверки"]
+    path: "../СП 16.13330.2017 изм1.pdf"
+    file_mtime: "2026-08-25T10:31:34+03:00"
+    size_bytes: 2738439
+    sha256: "5357700e3ca900300f2d03c9ae575a747c08be4afc0fa8930ce09e00e0e33551"
+    status: EDITION_VERIFICATION_REQUIRED
+
+  - id: SP_20_13330_2016_LOCAL
+    designation: "СП 20.13330.2016"
+    title: "Нагрузки и воздействия"
+    year: 2016
+    edition: null
+    amendments: []
+    path: "../СП 20 нагрузки и воздействия.pdf"
+    file_mtime: "2026-08-25T10:31:48+03:00"
+    size_bytes: 5433083
+    sha256: "6520671a0ba61774b76f3c995ec24c4989df394ee0349c401e15f77ec3e35d57"
+    status: EDITION_VERIFICATION_REQUIRED
+    note: "Номера включённых изменений должны быть проверены по титульным страницам."
+
+  - id: STO_ARSS_11251254_001_022_1_LOCAL
+    designation: "СТО АРСС 11251254.001-022-1"
+    title: "Методические рекомендации по разработке проекта огнезащиты стальных конструкций"
+    year: null
+    edition: "локальный PDF от 20.02.2023 по имени файла"
+    amendments: []
+    path: "../sto-arss-proekt-ognezashity-20.02.23 (1).pdf"
+    file_mtime: "2026-08-25T10:31:59+03:00"
+    size_bytes: 1142644
+    sha256: "b81db6991f0f60c13e75bd173f9d03133df67e6a58c10a8774122fcf9cd4646a"
+    status: EDITION_VERIFICATION_REQUIRED
+
+  - id: STO_ARSS_11251254_001_018_03_LOCAL
+    designation: "СТО АРСС 11251254.001-018-03"
+    title: "Проектирование огнезащиты несущих стальных конструкций с применением различных типов облицовок"
+    year: null
+    edition: null
+    amendments: []
+    path: "../sto-arss-konstruktivnaya-ognezashita (1).pdf"
+    file_mtime: "2026-08-25T10:31:57+03:00"
+    size_bytes: 2901830
+    sha256: "f0a1ee3d3ed92e64747316e8b365a43307426b477984bf5613c4f8675277dd94"
+    status: EDITION_VERIFICATION_REQUIRED
