@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import csv
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Iterable
@@ -20,6 +20,9 @@ class Rx38FormatError(ValueError):
 
 class UnsafeRx38WriteError(ValueError):
     pass
+
+
+_PARSED_RX38_ORIGIN = object()
 
 
 def _decimal(value: str) -> Decimal | None:
@@ -62,14 +65,16 @@ class Rx38Record:
     original_fields: tuple[str, ...] = ()
     newline: str = "\r\n"
     line_number: int | None = None
+    _origin_token: object | None = field(default=None, repr=False, compare=False)
+    _source_path: Path | None = field(default=None, repr=False, compare=False)
 
     def field(self, index: int) -> str:
         return self.fields[index]
 
     def with_confirmed_field(self, index: int, value: str) -> "Rx38Record":
-        """Backward-compatible safe write with an explicit compatibility claim."""
+        """Write a direct-safe confirmed field without claiming compatibility."""
 
-        return self.with_typed_field(index, value, compatibility_verified=True)
+        return self.with_typed_field(index, value)
 
     def with_typed_field(
         self,
@@ -78,6 +83,8 @@ class Rx38Record:
         *,
         compatibility_verified: bool = False,
     ) -> "Rx38Record":
+        if not isinstance(compatibility_verified, bool):
+            raise TypeError("compatibility_verified must be bool")
         if self.record_type != "Tconstr":
             raise UnsafeRx38WriteError("Only Tconstr records may be edited")
         if index not in CONFIRMED_INDICES:
@@ -237,7 +244,7 @@ def _decode(data: bytes) -> tuple[str, str, bool]:
 
 
 def read_rx38_document(path: str | Path) -> Rx38Document:
-    path = Path(path)
+    path = Path(path).resolve(strict=True)
     text, encoding, has_bom = _decode(path.read_bytes())
     records: list[Rx38Record] = []
     for line_number, raw_line in enumerate(text.splitlines(keepends=True), 1):
@@ -261,7 +268,18 @@ def read_rx38_document(path: str | Path) -> Rx38Document:
                 f"{path}:{line_number}: Tconstr has {len(row)} fields, expected {TCONSTR_FIELD_COUNT}"
             )
         fields = tuple(row)
-        records.append(Rx38Record(row[0], fields, tokens, fields, newline, line_number))
+        records.append(
+            Rx38Record(
+                row[0],
+                fields,
+                tokens,
+                fields,
+                newline,
+                line_number,
+                _origin_token=_PARSED_RX38_ORIGIN,
+                _source_path=path,
+            )
+        )
     return Rx38Document(tuple(records), encoding, has_bom, path)
 
 
@@ -277,8 +295,25 @@ def _serialize_token(value: str, original_token: str) -> str:
 
 
 def write_rx38(document: Rx38Document, path: str | Path) -> None:
+    destination = Path(path).resolve(strict=False)
+    source_paths = {
+        record._source_path.resolve(strict=False)
+        for record in document.records
+        if record._source_path is not None
+    }
+    if document.source is not None:
+        source_paths.add(document.source.resolve(strict=False))
+    if destination in source_paths:
+        raise UnsafeRx38WriteError("Writer refuses to overwrite the source RX38")
     lines: list[str] = []
     for record in document.records:
+        if record.record_type == "Tconstr" and (
+            record._origin_token is not _PARSED_RX38_ORIGIN
+            or not record.original_fields
+        ):
+            raise UnsafeRx38WriteError(
+                "Safe Tconstr writing requires an immutable parser-origin baseline"
+            )
         original = record.original_fields or record.fields
         if len(record.fields) != len(original):
             raise UnsafeRx38WriteError("Writer cannot add or remove positional fields")
@@ -313,7 +348,7 @@ def write_rx38(document: Rx38Document, path: str | Path) -> None:
     payload = text.encode(document.encoding)
     if document.has_bom and document.encoding == "utf-8":
         payload = b"\xef\xbb\xbf" + payload
-    Path(path).write_bytes(payload)
+    destination.write_bytes(payload)
 
 
 def construction_records(records: Iterable[Rx38Record]) -> list[Rx38Record]:

@@ -114,6 +114,8 @@ def write_mapped_copy(
     workbook's established table layout and styles.
     """
 
+    if not isinstance(overwrite, bool):
+        raise TypeError("overwrite must be bool")
     source = Path(source_path).resolve(strict=True)
     output = Path(output_path).resolve(strict=False)
     if source == output:

@@ -21,6 +21,7 @@
 rx3.exe
 rx3.rxdb
 fpm.rxdb
+*.rxdb
 calculated*.rx38
 *_screenshot.png
 *_screenshot.jpg
@@ -28,6 +29,16 @@ calculated*.rx38
 *.xlsx
 *.xlsm
 *.docx
+*.xls
+*.doc
+*.dwg
+*.lir
+*.tmp
+*.temp
+validation/
+pipeline_runs/
+runs/
+screenshots/
 
 # Python build/test artifacts
 __pycache__/

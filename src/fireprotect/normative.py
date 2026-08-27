@@ -176,7 +176,36 @@ class NormativeValidation:
 
     @property
     def valid_for_production(self) -> bool:
-        return not self.blockers
+        if (
+            self.trace is None
+            or self.document is None
+            or not self.document.production_allowed
+            or self.document.effective_from is None
+            or self.document.path is None
+            or not self.document.path.is_file()
+            or not self.document.sha256
+            or self.blockers
+            or self.trace.document_id != self.document.document_id
+            or self.trace.edition != self.document.edition
+        ):
+            return False
+        raw_calculation_date = self.evidence.get("calculation_date")
+        if not isinstance(raw_calculation_date, str):
+            return False
+        try:
+            calculation_date = date.fromisoformat(raw_calculation_date)
+        except ValueError:
+            return False
+        if not self.document.effective_on(calculation_date):
+            return False
+        expected_hash = self.evidence.get("expected_sha256")
+        actual_hash = self.evidence.get("actual_sha256")
+        if expected_hash != self.document.sha256 or actual_hash != expected_hash:
+            return False
+        try:
+            return _file_hash(self.document.path) == self.document.sha256
+        except OSError:
+            return False
 
 
 def validate_normative_trace(
@@ -186,6 +215,8 @@ def validate_normative_trace(
     calculation_date: date,
     mode: ExecutionMode,
 ) -> NormativeValidation:
+    if not isinstance(mode, ExecutionMode):
+        raise TypeError("mode must be ExecutionMode")
     blockers: list[ReleaseBlocker] = []
     if trace is None:
         if mode is ExecutionMode.PRODUCTION:
@@ -275,7 +306,10 @@ def validate_normative_trace(
 
 
 def require_normative_trace(
-    trace: NormativeTrace | None, *, production: bool = True
+    trace: NormativeTrace | None,
+    *,
+    production: bool = True,
+    registry_validation: NormativeValidation | None = None,
 ) -> NormativeTrace | None:
     """Require traceability before a normative result is used in production.
 
@@ -283,12 +317,22 @@ def require_normative_trace(
     remain unconfirmed until a trace is attached.
     """
 
+    if not isinstance(production, bool):
+        raise TypeError("production must be bool")
     if trace is not None and not isinstance(trace, NormativeTrace):
         raise TypeError("trace must be NormativeTrace or None")
-    if production and trace is None:
+    if registry_validation is not None:
+        if not isinstance(registry_validation, NormativeValidation):
+            raise TypeError("registry_validation must be NormativeValidation or None")
+        if registry_validation.trace != trace:
+            raise ValueError("registry_validation does not match trace")
+    if production and (
+        trace is None
+        or registry_validation is None
+        or not registry_validation.valid_for_production
+    ):
         raise NormativeTraceRequiredError(
-            "A normative result cannot be confirmed in production without "
-            "NormativeTrace"
+            "A production normative result requires registry/date/hash-validated NormativeTrace"
         )
     return trace
 
@@ -299,13 +343,34 @@ class NormativeResult(Generic[T]):
 
     value: T
     trace: NormativeTrace | None
+    registry_validation: NormativeValidation | None = None
+
+    def __post_init__(self) -> None:
+        if self.trace is not None and not isinstance(self.trace, NormativeTrace):
+            raise TypeError("trace must be NormativeTrace or None")
+        if self.registry_validation is not None:
+            if not isinstance(self.registry_validation, NormativeValidation):
+                raise TypeError("registry_validation must be NormativeValidation or None")
+            if self.registry_validation.trace != self.trace:
+                raise ValueError("registry_validation does not match NormativeResult.trace")
 
     @property
     def confirmed(self) -> bool:
-        return self.trace is not None
+        return (
+            self.registry_validation is not None
+            and self.registry_validation.valid_for_production
+        )
 
     def validate(self, *, production: bool = True) -> NormativeResult[T]:
-        require_normative_trace(self.trace, production=production)
+        require_normative_trace(
+            self.trace,
+            production=production,
+            registry_validation=self.registry_validation,
+        )
+        if production and not self.confirmed:
+            raise NormativeTraceRequiredError(
+                "A production normative result requires successful registry/date/hash validation"
+            )
         return self
 
 

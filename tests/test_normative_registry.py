@@ -2,6 +2,8 @@ from datetime import date
 from hashlib import sha256
 from pathlib import Path
 
+import pytest
+
 from fireprotect.execution import ExecutionMode
 from fireprotect.normative import (
     NormativeRegistry,
@@ -96,3 +98,23 @@ def test_registered_hash_is_checked(tmp_path: Path):
     assert BlockerCode.NORMATIVE_SOURCE_HASH_MISMATCH in {
         blocker.code for blocker in validation.blockers
     }
+
+
+def test_string_production_mode_cannot_bypass_normative_gate(tmp_path: Path):
+    with pytest.raises(TypeError, match="ExecutionMode"):
+        validate_normative_trace(
+            None,
+            write_registry(tmp_path),
+            calculation_date=date(2026, 8, 25),
+            mode="PRODUCTION",  # type: ignore[arg-type]
+        )
+
+
+def test_draft_without_trace_is_not_valid_for_production(tmp_path: Path):
+    validation = validate_normative_trace(
+        None,
+        write_registry(tmp_path),
+        calculation_date=date(2026, 8, 25),
+        mode=ExecutionMode.DRAFT,
+    )
+    assert not validation.valid_for_production

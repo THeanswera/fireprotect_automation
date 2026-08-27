@@ -24,6 +24,7 @@ from fireprotect.rx3.safety import (
     Rx3TemplateEvidence,
     Rx3TemplateUseCase,
     SteelCalculationProperties,
+    rx38_record_fingerprint,
 )
 
 
@@ -96,6 +97,7 @@ def template_evidence(*, profile_verified: bool = True) -> Rx3TemplateEvidence:
         date(2026, 8, 25),
         "1",
         profile_verified,
+        rx38_record_fingerprint(make_record()),
     )
 
 

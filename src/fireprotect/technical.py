@@ -69,6 +69,11 @@ class FireproofingTechnicalEntry:
             self.source_document,
             self.source_page_or_table,
             self.document_sha256,
+            self.steel_profile_type,
+            self.ptm_range,
+            self.fire_resistance,
+            self.required_thickness,
+            self.specific_consumption,
         )
         if (
             self.status is not TechnicalDataStatus.VERIFIED_TECHNICAL_DATA
@@ -79,6 +84,21 @@ class FireproofingTechnicalEntry:
         ):
             return False
         return _file_hash(self.document_path) == self.document_sha256
+
+    def verified_for_production_on(self, calculation_date: date) -> bool:
+        if not isinstance(calculation_date, date):
+            raise TypeError("calculation_date must be date")
+        if not self.verified_for_production:
+            return False
+        if self.certificate_number is None:
+            return True
+        return (
+            self.certificate_valid_from is not None
+            and self.certificate_valid_to is not None
+            and self.certificate_valid_from
+            <= calculation_date
+            <= self.certificate_valid_to
+        )
 
 
 def _date(value: object, *, field: str) -> date | None:
@@ -182,8 +202,14 @@ class FireproofingTechnicalRegistry:
         return cls(entries, source)
 
     def require_for_selection(
-        self, entry_id: str, *, mode: ExecutionMode
+        self,
+        entry_id: str,
+        *,
+        mode: ExecutionMode,
+        calculation_date: date | None = None,
     ) -> FireproofingTechnicalEntry:
+        if not isinstance(mode, ExecutionMode):
+            raise TypeError("mode must be ExecutionMode")
         try:
             entry = self.entries[entry_id]
         except KeyError as exc:
@@ -192,7 +218,10 @@ class FireproofingTechnicalRegistry:
             ) from exc
         if (
             mode is ExecutionMode.PRODUCTION
-            and not entry.verified_for_production
+            and (
+                calculation_date is None
+                or not entry.verified_for_production_on(calculation_date)
+            )
         ):
             raise TechnicalRegistryError(
                 f"Production thickness selection blocked: {entry_id} lacks verified primary technical evidence"

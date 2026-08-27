@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import date
 from decimal import Decimal
 import json
 from pathlib import Path
@@ -15,6 +16,7 @@ from ..decision import RequiredFireResistanceDecision
 from ..execution import ExecutionMode
 from ..model import ProjectElement, Quantity, Unit
 from ..rx3.profiles import normalize_profile_name
+from ..normative import NormativeValidation
 from ..technical import FireproofingTechnicalEntry, TechnicalDataStatus
 from .mapping import ColumnBinding, WorkbookMapping
 from .writer import ExcelCopyResult, file_sha256, write_mapped_copy
@@ -224,9 +226,13 @@ def export_obm_workbook(
     mode: ExecutionMode = ExecutionMode.DRAFT,
     technical_entry: FireproofingTechnicalEntry | None = None,
     verified_template_sha256: str | None = None,
+    normative_validations: Iterable[NormativeValidation] | None = None,
+    calculation_date: date | None = None,
 ) -> ObmWorkbookExportReport:
     """Populate only confirmed input cells in a verified copy of the fixed template."""
 
+    if not isinstance(mode, ExecutionMode):
+        raise TypeError("mode must be ExecutionMode")
     items = tuple(elements)
     choices = tuple(decisions)
     source = Path(source_path).resolve(strict=True)
@@ -240,7 +246,8 @@ def export_obm_workbook(
         mode is ExecutionMode.PRODUCTION
         and (
             technical_entry is None
-            or not technical_entry.verified_for_production
+            or calculation_date is None
+            or not technical_entry.verified_for_production_on(calculation_date)
         )
     ):
         raise ObmWorkbookExportError(
@@ -255,6 +262,16 @@ def export_obm_workbook(
         raise ObmWorkbookExportError(
             "Production Excel export requires a verified template SHA-256"
         )
+    validations = tuple(normative_validations or ())
+    if mode is ExecutionMode.PRODUCTION:
+        if len(validations) != len(choices) or any(
+            not validation.valid_for_production
+            or validation.trace != decision.normative_trace
+            for decision, validation in zip(choices, validations)
+        ):
+            raise ObmWorkbookExportError(
+                "Production Excel export requires registry/date/hash-validated NormativeTrace for every decision"
+            )
     json_path = (
         Path(json_report).resolve(strict=False)
         if json_report

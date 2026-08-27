@@ -18,6 +18,16 @@ from .rx3.safety import GuiExecutionEvidence, Rx3SafetyContext
 from .validation import validate_rx38_record
 
 
+def _new_report_path(path: Path, *protected: Path) -> Path:
+    target = path.resolve(strict=False)
+    protected_paths = {item.resolve(strict=False) for item in protected}
+    if target in protected_paths:
+        raise ValueError("Report path must differ from every input/output data file")
+    if target.exists():
+        raise ValueError(f"Report already exists; refusing to overwrite it: {target}")
+    return target
+
+
 def cmd_inspect_rx38(args: argparse.Namespace) -> None:
     data = []
     for record in construction_records(read_rx38(args.file)):
@@ -69,6 +79,11 @@ def cmd_lookup_profile(args: argparse.Namespace) -> None:
 
 
 def cmd_rx38_create(args: argparse.Namespace) -> None:
+    report_path = (
+        None
+        if args.report is None
+        else _new_report_path(args.report, args.input, args.template, args.output)
+    )
     element = read_project_element_json(args.input)
     context = _read_safety_context(args.safety_context, args.mode)
     report = create_rx38_from_project_element(
@@ -79,8 +94,10 @@ def cmd_rx38_create(args: argparse.Namespace) -> None:
         safety_context=context,
     )
     payload = json.dumps(report.as_dict(), ensure_ascii=False, indent=2)
-    if args.report is not None:
-        args.report.write_text(payload + "\n", encoding="utf-8")
+    if report_path is not None:
+        report_path.parent.mkdir(parents=True, exist_ok=True)
+        with report_path.open("x", encoding="utf-8", newline="\n") as stream:
+            stream.write(payload + "\n")
     print(payload)
 
 

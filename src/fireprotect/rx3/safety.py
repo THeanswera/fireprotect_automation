@@ -64,6 +64,14 @@ class GuiExecutionEvidence(str, Enum):
     OTHER = "OTHER"
 
 
+def rx38_record_fingerprint(record: Rx38Record) -> str:
+    """Return a stable fingerprint covering every positional field."""
+
+    if record.record_type != "Tconstr" or len(record.fields) != TCONSTR_FIELD_COUNT:
+        raise ValueError("Template fingerprint requires one 200-field Tconstr record")
+    return sha256("\0".join(record.fields).encode("utf-8")).hexdigest()
+
+
 def _decimal(value: object, *, name: str) -> Decimal:
     if isinstance(value, bool) or isinstance(value, float):
         raise TypeError(f"{name} must be Decimal, int or str, not binary float")
@@ -97,6 +105,10 @@ class ActionZeroTolerance:
     moment: Quantity
 
     def __post_init__(self) -> None:
+        if not isinstance(self.force, Quantity) or not isinstance(
+            self.moment, Quantity
+        ):
+            raise TypeError("ActionZeroTolerance values must be Quantity")
         if self.force.dimension is not Dimension.FORCE:
             raise ValueError("ActionZeroTolerance.force must be a force")
         if self.moment.dimension is not Dimension.MOMENT:
@@ -135,23 +147,42 @@ class Rx3TemplateEvidence:
     confirmed_at: date | None
     version: str | None
     calculation_profile_verified: bool = False
+    template_record_sha256: str | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.use_case, Rx3TemplateUseCase):
             object.__setattr__(self, "use_case", Rx3TemplateUseCase(self.use_case))
         if not isinstance(self.status, EvidenceStatus):
             object.__setattr__(self, "status", EvidenceStatus(self.status))
-        if not self.source.strip():
+        if not isinstance(self.source, str) or not self.source.strip():
             raise ValueError("Rx3TemplateEvidence.source must not be empty")
-        if self.status is EvidenceStatus.VERIFIED and (
-            not self.engineer_confirmation
-            or not self.confirmed_by
-            or self.confirmed_at is None
-            or not self.version
-        ):
-            raise ValueError(
-                "VERIFIED template evidence requires engineer, date and version"
-            )
+        if not isinstance(self.engineer_confirmation, bool):
+            raise TypeError("template engineer_confirmation must be bool")
+        if not isinstance(self.calculation_profile_verified, bool):
+            raise TypeError("calculation_profile_verified must be bool")
+        if self.confirmed_at is not None and not isinstance(self.confirmed_at, date):
+            raise TypeError("template confirmed_at must be date or None")
+        if self.template_record_sha256 is not None:
+            if not isinstance(self.template_record_sha256, str):
+                raise TypeError("template_record_sha256 must be str or None")
+            fingerprint = self.template_record_sha256.lower()
+            if len(fingerprint) != 64 or any(
+                char not in "0123456789abcdef" for char in fingerprint
+            ):
+                raise ValueError("template_record_sha256 must be a SHA-256 hex digest")
+            object.__setattr__(self, "template_record_sha256", fingerprint)
+        if self.status is EvidenceStatus.VERIFIED:
+            if (
+                not self.engineer_confirmation
+                or not isinstance(self.confirmed_by, str)
+                or not self.confirmed_by.strip()
+                or self.confirmed_at is None
+                or not isinstance(self.version, str)
+                or not self.version.strip()
+            ):
+                raise ValueError(
+                    "VERIFIED template evidence requires engineer, date and version"
+                )
 
     @property
     def verified_axial_only(self) -> bool:
@@ -173,6 +204,7 @@ class Rx3TemplateEvidence:
             ),
             "version": self.version,
             "calculation_profile_verified": self.calculation_profile_verified,
+            "template_record_sha256": self.template_record_sha256,
         }
 
 
@@ -197,6 +229,10 @@ class LiraRx3ForceConvention:
     def __post_init__(self) -> None:
         if not isinstance(self.status, ForceConventionStatus):
             object.__setattr__(self, "status", ForceConventionStatus(self.status))
+        if not isinstance(self.engineer_confirmation, bool):
+            raise TypeError("force convention engineer_confirmation must be bool")
+        if self.confirmed_at is not None and not isinstance(self.confirmed_at, date):
+            raise TypeError("force convention confirmed_at must be date or None")
         for name in (
             "source_system",
             "target_system",
@@ -207,7 +243,8 @@ class LiraRx3ForceConvention:
             "shear_mapping",
             "rule_name",
         ):
-            if not getattr(self, name).strip():
+            value = getattr(self, name)
+            if not isinstance(value, str) or not value.strip():
                 raise ValueError(f"LiraRx3ForceConvention.{name} must not be empty")
         values = dict(self.multipliers)
         expected = {"N", "Mx", "My", "Qx", "Qy"}
@@ -216,16 +253,20 @@ class LiraRx3ForceConvention:
         converted = {name: _decimal(value, name=name) for name, value in values.items()}
         if any(value not in {Decimal("-1"), Decimal("1")} for value in converted.values()):
             raise ValueError("Force convention multipliers must be exactly -1 or 1")
-        if self.status is ForceConventionStatus.VERIFIED and (
-            not self.evidence_source
-            or not self.engineer_confirmation
-            or not self.confirmed_by
-            or self.confirmed_at is None
-            or not self.version
-        ):
-            raise ValueError(
-                "VERIFIED force convention requires evidence, engineer, date and version"
-            )
+        if self.status is ForceConventionStatus.VERIFIED:
+            if (
+                not isinstance(self.evidence_source, str)
+                or not self.evidence_source.strip()
+                or not self.engineer_confirmation
+                or not isinstance(self.confirmed_by, str)
+                or not self.confirmed_by.strip()
+                or self.confirmed_at is None
+                or not isinstance(self.version, str)
+                or not self.version.strip()
+            ):
+                raise ValueError(
+                    "VERIFIED force convention requires evidence, engineer, date and version"
+                )
         object.__setattr__(self, "multipliers", MappingProxyType(converted))
 
     @property
@@ -273,25 +314,57 @@ class SteelCalculationProperties:
     rx3_strength_mapping_verified: bool
 
     def __post_init__(self) -> None:
-        if not self.steel_grade.strip():
+        if not isinstance(self.steel_grade, str) or not self.steel_grade.strip():
             raise ValueError("steel_grade must not be empty")
         for name in ("source_document", "clause_or_table", "material_standard", "provenance"):
-            if not getattr(self, name).strip():
+            value = getattr(self, name)
+            if not isinstance(value, str) or not value.strip():
                 raise ValueError(f"SteelCalculationProperties.{name} must not be empty")
         if not isinstance(self.confidence, EvidenceStatus):
             object.__setattr__(self, "confidence", EvidenceStatus(self.confidence))
+        if not isinstance(self.rx3_strength_mapping_verified, bool):
+            raise TypeError("rx3_strength_mapping_verified must be bool")
         for name in (
             "nominal_yield_strength",
             "design_yield_strength",
             "rx3_stored_strength_parameter",
         ):
             value = getattr(self, name)
-            if value is not None and value.dimension is not Dimension.PRESSURE:
-                raise ValueError(f"{name} must be a pressure")
+            if value is not None:
+                if not isinstance(value, Quantity) or value.dimension is not Dimension.PRESSURE:
+                    raise ValueError(f"{name} must be a pressure")
+                if value.si_value <= 0:
+                    raise ValueError(f"{name} must be greater than zero")
+        for name in ("thickness_min", "thickness_max"):
+            value = getattr(self, name)
+            if value is not None:
+                if not isinstance(value, Quantity) or value.dimension is not Dimension.LENGTH:
+                    raise ValueError(f"{name} must be a length")
+                if value.si_value <= 0:
+                    raise ValueError(f"{name} must be greater than zero")
+        if (
+            self.thickness_min is not None
+            and self.thickness_max is not None
+            and self.thickness_min.si_value > self.thickness_max.si_value
+        ):
+            raise ValueError("thickness_min must not exceed thickness_max")
+        if not isinstance(self.elastic_modulus, Quantity):
+            raise TypeError("elastic_modulus must be Quantity")
         if self.elastic_modulus.dimension is not Dimension.PRESSURE:
             raise ValueError("elastic_modulus must be a pressure")
+        if self.elastic_modulus.si_value <= 0:
+            raise ValueError("elastic_modulus must be greater than zero")
+        if not isinstance(self.density, Quantity):
+            raise TypeError("density must be Quantity")
         if self.density.dimension is not Dimension.DENSITY:
             raise ValueError("density must be a density")
+        if self.density.si_value <= 0:
+            raise ValueError("density must be greater than zero")
+        if self.temperature_model is not None and (
+            not isinstance(self.temperature_model, str)
+            or not self.temperature_model.strip()
+        ):
+            raise ValueError("temperature_model must be non-empty when provided")
         if self.rx3_strength_mapping_verified and (
             self.confidence is not EvidenceStatus.VERIFIED
             or self.rx3_stored_strength_parameter is None
@@ -348,7 +421,11 @@ def evaluate_steel_compatibility(
     project_grade = element.steel_grade or ""
     template_grade = template.fields[42]
     template_strength = _record_decimal(template, 33)
+    template_elastic_modulus = _record_decimal(template, 34)
+    template_density = _record_decimal(template, 32)
     project_ry = element.Ry.to(Unit.MEGAPASCAL).value  # type: ignore[union-attr]
+    project_elastic_modulus = element.E.to(Unit.MEGAPASCAL).value  # type: ignore[union-attr]
+    project_density = element.density.to(Unit.KILOGRAM_PER_CUBIC_METER).value  # type: ignore[union-attr]
     write_values: dict[int, str] = {}
     blockers: list[str] = []
     warnings: list[str] = []
@@ -373,6 +450,10 @@ def evaluate_steel_compatibility(
             blockers.append(
                 "ProjectElement.Ry differs from template field 33 while its semantics remain ambiguous"
             )
+        if project_elastic_modulus != template_elastic_modulus:
+            blockers.append("ProjectElement.E differs from template field 34")
+        if project_density != template_density:
+            blockers.append("ProjectElement.density differs from template field 32")
         warnings.append(
             "LEGACY_STEEL_RY_AMBIGUITY: numeric equality is not proof that ProjectElement.Ry and RX38 field 33 have identical normative semantics"
         )
@@ -389,6 +470,10 @@ def evaluate_steel_compatibility(
             )
         if not _same_text(properties.steel_grade, project_grade):
             blockers.append("Verified steel profile grade differs from ProjectElement")
+        if not _same_text(template_grade, project_grade):
+            blockers.append(
+                "Steel grade change is blocked because the template thermal/numeric profile is not independently mapped"
+            )
         if properties.design_yield_strength is None:
             blockers.append(
                 "Verified steel profile has no design_yield_strength for ProjectElement.Ry compatibility"
@@ -469,6 +554,33 @@ class Rx3SafetyContext:
     steel_properties: SteelCalculationProperties | None
     controlled_experiment: bool = False
     allow_unverified_force_convention: bool = False
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.mode, ExecutionMode):
+            raise TypeError("Rx3SafetyContext.mode must be ExecutionMode")
+        if not isinstance(self.action_zero_tolerance, ActionZeroTolerance):
+            raise TypeError("action_zero_tolerance must be ActionZeroTolerance")
+        if self.template_evidence is not None and not isinstance(
+            self.template_evidence, Rx3TemplateEvidence
+        ):
+            raise TypeError("template_evidence must be Rx3TemplateEvidence or None")
+        if self.force_convention is not None and not isinstance(
+            self.force_convention, LiraRx3ForceConvention
+        ):
+            raise TypeError("force_convention must be LiraRx3ForceConvention or None")
+        if self.steel_properties is not None and not isinstance(
+            self.steel_properties, SteelCalculationProperties
+        ):
+            raise TypeError("steel_properties must be SteelCalculationProperties or None")
+        if not isinstance(self.controlled_experiment, bool):
+            raise TypeError("controlled_experiment must be bool")
+        if not isinstance(self.allow_unverified_force_convention, bool):
+            raise TypeError("allow_unverified_force_convention must be bool")
+        if self.mode is ExecutionMode.PRODUCTION and (
+            self.action_zero_tolerance.force.si_value != 0
+            or self.action_zero_tolerance.moment.si_value != 0
+        ):
+            raise ValueError("PRODUCTION requires exact-zero action tolerances")
 
     @classmethod
     def draft(cls) -> "Rx3SafetyContext":
@@ -633,6 +745,8 @@ def evaluate_calculation_profile(
     template: Rx38Record,
     required_values: Mapping[int, str],
     evidence: Rx3TemplateEvidence | None,
+    *,
+    evidence_template: Rx38Record | None = None,
 ) -> Rx3CalculationProfile:
     matches: list[int] = []
     mismatches: list[ProfileDifference] = []
@@ -660,7 +774,12 @@ def evaluate_calculation_profile(
     ]
     fingerprint = sha256("\0".join(unknown_tokens).encode("utf-8")).hexdigest()
     unverified: tuple[int, ...] = ()
-    if evidence is None or not evidence.calculation_profile_verified:
+    if (
+        evidence is None
+        or not evidence.calculation_profile_verified
+        or evidence.template_record_sha256
+        != rx38_record_fingerprint(evidence_template or template)
+    ):
         unverified = tuple(sorted(_CRITICAL_TEMPLATE_SETTINGS))
     return Rx3CalculationProfile(
         tuple(matches),

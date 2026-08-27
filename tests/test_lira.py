@@ -13,6 +13,7 @@ from fireprotect.lira import (
     LiraColumnMapping,
     LiraDependencyError,
     LiraForceImporter,
+    LiraFormatError,
     LiraMappingError,
     LiraRowError,
     RawTableRow,
@@ -108,7 +109,7 @@ def test_xlsx_import_is_optional_and_uses_selected_sheet(tmp_path: Path) -> None
     worksheet = workbook.active
     worksheet.title = "Bar forces"
     worksheet.append(list(HEADERS.values()))
-    worksheet.append([17, "30K1", "LC-2", "ULS-7", -125.5, 12.25, -320, 750, 2])
+    worksheet.append([17, "30K1", "LC-2", "ULS-7", "-125.5", "12.25", "-320", "750", "2"])
     workbook.save(source)
     workbook.close()
 
@@ -119,6 +120,15 @@ def test_xlsx_import_is_optional_and_uses_selected_sheet(tmp_path: Path) -> None
     assert len(result) == 1
     assert result[0].source_row == 2
     assert_converted(result[0])
+
+    with pytest.raises(LiraFormatError, match="explicit sheet_name"):
+        XlsxTableSource(source).read_rows()
+    with pytest.raises(LiraFormatError, match="data_only must be bool"):
+        XlsxTableSource(
+            source,
+            sheet_name="Bar forces",
+            data_only="false",  # type: ignore[arg-type]
+        ).read_rows()
 
 
 def test_xlsx_reports_clear_error_when_openpyxl_is_unavailable(
@@ -169,7 +179,7 @@ def test_missing_mapped_header_and_bad_value_include_context(tmp_path: Path) -> 
             values = dict(
                 zip(
                     HEADERS.values(),
-                    [17, "30K1", "LC-2", "ULS-7", -125.5, 12.25, "oops", 750, 2],
+                    [17, "30K1", "LC-2", "ULS-7", "-125.5", "12.25", "oops", "750", "2"],
                 )
             )
             return [RawTableRow(values, 84)]
@@ -184,7 +194,7 @@ def test_protocol_accepts_future_api_source_without_domain_dependency() -> None:
             values = dict(
                 zip(
                     HEADERS.values(),
-                    ["17", "30K1", "LC-2", "ULS-7", -125.5, 12.25, -320, 750, 2],
+                    ["17", "30K1", "LC-2", "ULS-7", "-125.5", "12.25", "-320", "750", "2"],
                 )
             )
             return [RawTableRow(values, 901)]

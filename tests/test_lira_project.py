@@ -1,4 +1,5 @@
 from datetime import datetime, timezone
+from decimal import Decimal
 
 import pytest
 
@@ -32,9 +33,14 @@ def _row(section: str = "30К1") -> LiraForceRow:
     units = ForceUnits("kN", "kN*m", "kN*m", "kN", "kN")
     return LiraForceRow(
         element_id="10", section=section, load_case="LC", combination="C1",
-        N=150000.0, Mx=12000.0, My=3000.0, Qx=4000.0, Qy=5000.0,
-        source=SourceForceValues(150.0, 12.0, 3.0, 4.0, 5.0, units),
+        N=Decimal("150000"), Mx=Decimal("12000"), My=Decimal("3000"),
+        Qx=Decimal("4000"), Qy=Decimal("5000"),
+        source=SourceForceValues(
+            Decimal("150"), Decimal("12"), Decimal("3"),
+            Decimal("4"), Decimal("5"), units
+        ),
         source_row=7,
+        source_sheet="Bar forces",
     )
 
 
@@ -44,6 +50,7 @@ def test_lira_row_populates_quantities_and_provenance_without_auto_governing():
     assert result.Mx is not None and result.Mx.to(Unit.KILONEWTON_METER).value == 12
     assert result.governing_combination is None
     assert result.trace_for("N").row == 7
+    assert result.trace_for("N").sheet == "Bar forces"
     assert result.trace_for("N").file == "forces.csv"
 
 

@@ -1,4 +1,5 @@
 from hashlib import sha256
+from datetime import date
 from pathlib import Path
 
 import pytest
@@ -65,7 +66,9 @@ def test_unverified_excel_tables_block_production_selection(tmp_path: Path):
     registry = write_technical_registry(tmp_path, verified=False)
     with pytest.raises(TechnicalRegistryError, match="blocked"):
         registry.require_for_selection(
-            "TEST_SYSTEM", mode=ExecutionMode.PRODUCTION
+            "TEST_SYSTEM",
+            mode=ExecutionMode.PRODUCTION,
+            calculation_date=date(2026, 8, 25),
         )
 
 
@@ -80,5 +83,25 @@ def test_unverified_data_can_be_inspected_in_draft(tmp_path: Path):
 def test_verified_primary_document_and_hash_allow_selection(tmp_path: Path):
     entry = write_technical_registry(
         tmp_path, verified=True
-    ).require_for_selection("TEST_SYSTEM", mode=ExecutionMode.PRODUCTION)
+    ).require_for_selection(
+        "TEST_SYSTEM",
+        mode=ExecutionMode.PRODUCTION,
+        calculation_date=date(2026, 8, 25),
+    )
     assert entry.verified_for_production
+
+
+def test_expired_certificate_blocks_production_selection(tmp_path: Path):
+    registry = write_technical_registry(tmp_path, verified=True)
+    with pytest.raises(TechnicalRegistryError, match="blocked"):
+        registry.require_for_selection(
+            "TEST_SYSTEM",
+            mode=ExecutionMode.PRODUCTION,
+            calculation_date=date(2028, 1, 1),
+        )
+
+
+def test_string_production_mode_cannot_bypass_selection_gate(tmp_path: Path):
+    registry = write_technical_registry(tmp_path, verified=False)
+    with pytest.raises(TypeError, match="ExecutionMode"):
+        registry.require_for_selection("TEST_SYSTEM", mode="PRODUCTION")  # type: ignore[arg-type]

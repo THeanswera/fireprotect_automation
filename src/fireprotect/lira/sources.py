@@ -24,7 +24,11 @@ def _validate_headers(headers: Sequence[Any], *, source: str) -> list[str]:
 
 
 def _rows_from_matrix(
-    matrix: Sequence[Sequence[Any]], *, header_index: int, source: str
+    matrix: Sequence[Sequence[Any]],
+    *,
+    header_index: int,
+    source: str,
+    sheet: str | None = None,
 ) -> list[RawTableRow]:
     if header_index < 0:
         raise LiraFormatError(f"{source}: header index cannot be negative")
@@ -43,7 +47,7 @@ def _rows_from_matrix(
                 f"{source}: row {row_number} has more values than the header"
             )
         values.extend([None] * (len(headers) - len(values)))
-        rows.append(RawTableRow(dict(zip(headers, values)), row_number))
+        rows.append(RawTableRow(dict(zip(headers, values)), row_number, sheet))
     return rows
 
 
@@ -146,8 +150,12 @@ class XlsxTableSource:
     data_only: bool = True
 
     def read_rows(self) -> list[RawTableRow]:
+        if isinstance(self.header_row, bool) or not isinstance(self.header_row, int):
+            raise LiraFormatError("XLSX header_row must be an integer")
         if self.header_row < 1:
             raise LiraFormatError("XLSX header_row must be one-based")
+        if not isinstance(self.data_only, bool):
+            raise LiraFormatError("XLSX data_only must be bool")
         try:
             from openpyxl import load_workbook
         except ImportError as exc:  # pragma: no cover - depends on test environment
@@ -155,14 +163,18 @@ class XlsxTableSource:
                 "XLSX import requires the optional dependency 'openpyxl'; "
                 "install it with: pip install openpyxl"
             ) from exc
+        if (
+            self.sheet_name is None
+            or not isinstance(self.sheet_name, str)
+            or not self.sheet_name.strip()
+        ):
+            raise LiraFormatError("XLSX import requires an explicit sheet_name")
 
         workbook = load_workbook(
             filename=Path(self.path), read_only=True, data_only=self.data_only
         )
         try:
-            if self.sheet_name is None:
-                worksheet = workbook.active
-            elif self.sheet_name in workbook.sheetnames:
+            if self.sheet_name in workbook.sheetnames:
                 worksheet = workbook[self.sheet_name]
             else:
                 raise LiraFormatError(
@@ -178,4 +190,5 @@ class XlsxTableSource:
             matrix,
             header_index=self.header_row - 1,
             source=f"{self.path}:{worksheet_title}",
+            sheet=worksheet_title,
         )

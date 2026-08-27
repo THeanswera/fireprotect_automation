@@ -5,6 +5,8 @@ import json
 from pathlib import Path
 import shutil
 
+import pytest
+
 from fireprotect.model import (
     EffectiveLengthParameters,
     ProjectElement,
@@ -13,8 +15,10 @@ from fireprotect.model import (
     Unit,
     ValueProvenance,
 )
-from fireprotect.pipeline import run_pipeline
+from fireprotect.pipeline import PipelineError, run_pipeline
 from fireprotect.project_io import write_project_element_json
+from fireprotect.rx3.parser import construction_records, read_rx38
+from fireprotect.rx3.safety import rx38_record_fingerprint
 
 
 def _element() -> ProjectElement:
@@ -73,9 +77,13 @@ def _template(path: Path) -> None:
         17: "STO ASCHM 20-93",
         19: "30 K1",
         20: "11080",
+        32: "7850",
         33: "245",
+        34: "206000",
         42: "S245",
         44: "650",
+        45: "compression",
+        48: "pinned",
         50: "0",
         54: "15",
         72: "None",
@@ -160,6 +168,9 @@ def test_pipeline_stops_for_rx3_and_resumes_after_calculated_file(tmp_path: Path
                         "confirmed_at": "2026-08-25",
                         "version": "1",
                         "calculation_profile_verified": True,
+                        "template_record_sha256": rx38_record_fingerprint(
+                            construction_records(read_rx38(template))[0]
+                        ),
                     },
                     "force_convention": {
                         "source_system": "LIRA CSV",
@@ -234,3 +245,36 @@ def test_pipeline_stops_for_rx3_and_resumes_after_calculated_file(tmp_path: Path
     )
     assert element_audit["rx3_generated"]["changed_fields"]
     assert element_audit["rx3_result"]["gui_recalculation_verified"] is True
+
+    legacy_payload = json.loads(json.dumps(payload))
+    legacy_payload["schema_version"] = 1
+    legacy_payload["execution_mode"] = "PRODUCTION"
+    legacy_payload.pop("calculation_date")
+    legacy_payload["workspace"] = "legacy_run"
+    config.write_text(json.dumps(legacy_payload), encoding="utf-8")
+    legacy = run_pipeline(config)
+    legacy_audit = json.loads(legacy.audit_json.read_text(encoding="utf-8"))
+    assert legacy_audit["execution_mode"] == "DRAFT"
+    assert legacy.issue_readiness.blockers[0].code.value == "NON_PRODUCTION_MODE"
+
+    production_payload = json.loads(json.dumps(payload))
+    production_payload["execution_mode"] = "PRODUCTION"
+    production_payload["workspace"] = "production_unverified_technical"
+    config.write_text(json.dumps(production_payload), encoding="utf-8")
+    with pytest.raises(PipelineError, match="technical selection gate blocked"):
+        run_pipeline(config)
+
+    changed_mode = json.loads(json.dumps(payload))
+    changed_mode["execution_mode"] = "DRAFT"
+    config.write_text(json.dumps(changed_mode), encoding="utf-8")
+    with pytest.raises(PipelineError, match="does not match current"):
+        run_pipeline(config)
+
+    float_payload = json.loads(json.dumps(payload))
+    float_payload["workspace"] = "float_run"
+    float_payload["elements"][0]["required_fire_resistance_decision"]["R"][
+        "value"
+    ] = 90.0
+    config.write_text(json.dumps(float_payload), encoding="utf-8")
+    with pytest.raises(PipelineError, match="binary float"):
+        run_pipeline(config)

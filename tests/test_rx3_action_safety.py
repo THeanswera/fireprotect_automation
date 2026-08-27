@@ -87,3 +87,28 @@ def test_pure_axial_verified_input_is_created_without_result_fields():
         "Qy",
         "force_transformations",
     }
+
+
+def test_production_rejects_nonzero_action_tolerance():
+    with pytest.raises(ValueError, match="exact-zero"):
+        Rx3SafetyContext(
+            ExecutionMode.PRODUCTION,
+            ActionZeroTolerance(
+                Quantity.of("1", Unit.KILONEWTON),
+                Quantity.of("1", Unit.KILONEWTON_METER),
+            ),
+            template_evidence(),
+            force_convention(),
+            None,
+        )
+
+
+def test_string_production_mode_cannot_bypass_rx3_context():
+    with pytest.raises(TypeError, match="ExecutionMode"):
+        Rx3SafetyContext(
+            "PRODUCTION",  # type: ignore[arg-type]
+            ActionZeroTolerance.strict(),
+            template_evidence(),
+            force_convention(),
+            None,
+        )

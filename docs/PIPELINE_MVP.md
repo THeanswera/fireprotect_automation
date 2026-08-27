@@ -47,7 +47,8 @@
           "confirmed_by": "engineer name",
           "confirmed_at": "2026-08-25",
           "version": "1",
-          "calculation_profile_verified": true
+          "calculation_profile_verified": true,
+          "template_record_sha256": "<sha256 of the exact 200-field Tconstr record>"
         },
         "force_convention": {
           "source_system": "LIRA export version",
@@ -91,6 +92,8 @@
 Schema v2 требует `execution_mode` и `calculation_date`. Показанные evidence
 значения являются формой конфигурации, а не готовыми production-данными: их
 можно помечать `VERIFIED` только после фактического controlled protocol.
+Для `VALIDATION` и `PRODUCTION` поле `template_record_sha256` должно связывать
+evidence с точно тем 200-польным `Tconstr`, который используется при генерации.
 `set_governing_combination=true` фиксирует явный инженерный selector и не
 доказывает математический максимум сочетаний.
 

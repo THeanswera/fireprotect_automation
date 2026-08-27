@@ -1,4 +1,7 @@
 from collections import Counter
+from dataclasses import replace
+
+import pytest
 
 from fireprotect.rx3.safety import evaluate_calculation_profile
 from fireprotect.rx3.schema import WritePolicy, field_spec
@@ -40,3 +43,17 @@ def test_schema_counts_and_write_policies_remain_explicit():
     assert field_spec(54).write_policy is WritePolicy.RESULT_ONLY
     assert field_spec(50).write_policy is WritePolicy.FORBIDDEN
     assert field_spec(135).write_policy is WritePolicy.FORBIDDEN
+
+
+def test_profile_verified_flag_must_be_a_real_bool():
+    with pytest.raises(TypeError, match="must be bool"):
+        replace(
+            template_evidence(),
+            calculation_profile_verified="false",  # type: ignore[arg-type]
+        )
+
+
+def test_profile_evidence_must_be_bound_to_the_exact_template():
+    evidence = replace(template_evidence(), template_record_sha256="0" * 64)
+    profile = evaluate_calculation_profile(make_record(), {82: "25"}, evidence)
+    assert profile.verified is False

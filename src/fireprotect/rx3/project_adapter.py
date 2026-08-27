@@ -27,6 +27,7 @@ from .safety import (
     build_rx3_input,
     evaluate_calculation_profile,
     evaluate_steel_compatibility,
+    rx38_record_fingerprint,
 )
 
 
@@ -185,7 +186,29 @@ def _prepare_rx38_record(
         "effective_length_parameters", "required_fire_resistance",
     )
     _require_template_compatibility(element, template)
+    if context.mode in {ExecutionMode.VALIDATION, ExecutionMode.PRODUCTION} and not _same_text(
+        element.stress_state or "", template.fields[45]
+    ):
+        raise Rx38TemplateMismatchError(
+            "Stress state differs from template while its paired RX38 code is unconfirmed"
+        )
+    if context.mode in {ExecutionMode.VALIDATION, ExecutionMode.PRODUCTION} and not _same_text(
+        element.support_condition or "", template.fields[48]
+    ):
+        raise Rx38TemplateMismatchError(
+            "Support condition differs from template while its paired RX38 code is unconfirmed"
+        )
     rx3_input, _, action_warnings = build_rx3_input(element, context)
+    if context.mode in {ExecutionMode.VALIDATION, ExecutionMode.PRODUCTION}:
+        evidence = context.template_evidence
+        if (
+            evidence is None
+            or evidence.template_record_sha256 is None
+            or evidence.template_record_sha256 != rx38_record_fingerprint(template)
+        ):
+            raise TemplateProfileError(
+                "AXIAL_ONLY evidence is not bound to the exact RX38 template record"
+            )
     steel_report: SteelCompatibilityReport = evaluate_steel_compatibility(
         element,
         template,
@@ -297,6 +320,7 @@ def _prepare_rx38_record(
         updated,
         values,
         context.template_evidence,
+        evidence_template=template,
     )
     if context.mode.value in {"VALIDATION", "PRODUCTION"} and not profile.verified:
         raise TemplateProfileError(

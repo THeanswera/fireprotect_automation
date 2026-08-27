@@ -53,6 +53,7 @@ def apply_lira_force_row(
         provenance[field_name] = ValueProvenance(
             ProvenanceType.SOURCE,
             file=source,
+            sheet=row.source_sheet,
             row=row.source_row,
             field=field_name,
         )
@@ -60,6 +61,7 @@ def apply_lira_force_row(
         provenance["governing_combination"] = ValueProvenance(
             ProvenanceType.ENGINEER_INPUT,
             file=source,
+            sheet=row.source_sheet,
             row=row.source_row,
             field="governing_combination",
             formula=(

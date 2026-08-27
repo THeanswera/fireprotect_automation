@@ -3,8 +3,9 @@
 ## Решение
 
 Центральный `IssueReadiness` содержит status, blockers, warnings и evidence.
-Единственное условие `READY_FOR_ISSUE`: режим `PRODUCTION` и пустой список
-blockers. Текущий репозиторий и имеющиеся проектные источники дают
+Единственное условие `READY_FOR_ISSUE`: режим `PRODUCTION`, пустой список
+blockers и явное положительное evidence по каждому обязательному production gate.
+Текущий репозиторий и имеющиеся проектные источники дают
 `NOT_READY_FOR_ISSUE`.
 
 ## Обязательные доказательства

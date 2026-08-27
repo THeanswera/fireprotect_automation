@@ -35,6 +35,22 @@ class BlockerCode(str, Enum):
     RX3_GUI_RECALCULATION_UNVERIFIED = "RX3_GUI_RECALCULATION_UNVERIFIED"
     EXCEL_RECALCULATION_REQUIRED = "EXCEL_RECALCULATION_REQUIRED"
     EXCEL_TEMPLATE_UNVERIFIED = "EXCEL_TEMPLATE_UNVERIFIED"
+    PRODUCTION_GATE_EVIDENCE_MISSING = "PRODUCTION_GATE_EVIDENCE_MISSING"
+
+
+REQUIRED_PRODUCTION_GATES = frozenset(
+    {
+        "rx3_action_mapping",
+        "force_convention",
+        "steel_compatibility",
+        "rx3_template_profile",
+        "normative_trace",
+        "fireproofing_technical_data",
+        "rx3_recalculation",
+        "excel_template",
+        "excel_recalculation",
+    }
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -78,6 +94,7 @@ def evaluate_issue_readiness(
 
     if not isinstance(mode, ExecutionMode):
         raise TypeError("mode must be ExecutionMode")
+    evidence_payload = dict(evidence or {})
     collected = list(blockers)
     if mode is not ExecutionMode.PRODUCTION:
         collected.insert(
@@ -87,9 +104,29 @@ def evaluate_issue_readiness(
                 f"{mode.value} workflows cannot be issued",
             ),
         )
+    else:
+        raw_gates = evidence_payload.get("production_gates")
+        verified_gates = (
+            {
+                str(name)
+                for name, value in raw_gates.items()
+                if value is True
+            }
+            if isinstance(raw_gates, Mapping)
+            else set()
+        )
+        missing_gates = sorted(REQUIRED_PRODUCTION_GATES - verified_gates)
+        if missing_gates:
+            collected.append(
+                ReleaseBlocker(
+                    BlockerCode.PRODUCTION_GATE_EVIDENCE_MISSING,
+                    "Required production gates lack positive evidence: "
+                    + ", ".join(missing_gates),
+                )
+            )
     status = (
         IssueReadinessStatus.READY_FOR_ISSUE
         if not collected
         else IssueReadinessStatus.NOT_READY_FOR_ISSUE
     )
-    return IssueReadiness(status, tuple(collected), warnings, evidence or {})
+    return IssueReadiness(status, tuple(collected), warnings, evidence_payload)

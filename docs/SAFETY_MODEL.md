@@ -47,8 +47,9 @@ match той же марки; расхождение блокирует гене
 - `PRODUCTION`: любое отсутствующее критическое доказательство является
   blocker, а не warning.
 
-`evaluate_issue_readiness` выдаёт `READY_FOR_ISSUE` только для production и
-только при пустом списке blockers. Warning никогда не снимает blocker.
+`evaluate_issue_readiness` выдаёт `READY_FOR_ISSUE` только для production,
+при пустом списке blockers и положительном evidence по всем
+обязательным production gates. Warning никогда не снимает blocker.
 
 ## Предел доказательств
 

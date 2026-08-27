@@ -8,6 +8,7 @@ from hashlib import sha256
 import json
 from pathlib import Path
 import re
+import tempfile
 from typing import Any, Mapping
 
 from .decision import RequiredFireResistanceDecision
@@ -28,6 +29,7 @@ from .model import ProjectElement, Quantity, Unit
 from .normative import (
     NormativeRegistry,
     NormativeTrace,
+    NormativeValidation,
     validate_normative_trace,
 )
 from .project_io import (
@@ -57,7 +59,7 @@ from .release import (
     ReleaseBlocker,
     evaluate_issue_readiness,
 )
-from .technical import FireproofingTechnicalRegistry
+from .technical import FireproofingTechnicalRegistry, TechnicalRegistryError
 
 
 class PipelineError(ValueError):
@@ -170,7 +172,9 @@ def _decision(value: object) -> RequiredFireResistanceDecision:
     trace = None if trace_data is None else NormativeTrace(**dict(_mapping(trace_data)))
     try:
         return RequiredFireResistanceDecision(
-            required_fire_resistance=Quantity.of(raw_r["value"], raw_r["unit"]),
+            required_fire_resistance=_quantity_value(
+                raw_r, field="required_fire_resistance_decision.R"
+            ),
             normative_trace=trace,
             **data,
         )
@@ -193,6 +197,10 @@ def _quantity_value(value: object, *, field: str) -> Quantity:
     data = _mapping(value)
     if set(data) != {"value", "unit"}:
         raise PipelineError(f"{field} must contain exactly value and unit")
+    if isinstance(data["value"], bool) or isinstance(data["value"], float):
+        raise PipelineError(
+            f"{field}.value must be a decimal string or integer, not binary float"
+        )
     try:
         return Quantity.of(data["value"], data["unit"])
     except (TypeError, ValueError) as exc:
@@ -238,9 +246,11 @@ def _safety_context(
                 raw.get("confirmed_at"), field="template_evidence.confirmed_at", required=False
             ),
             version=raw.get("version"),
-            calculation_profile_verified=raw.get(
-                "calculation_profile_verified", False
+            calculation_profile_verified=_bool_value(
+                raw.get("calculation_profile_verified", False),
+                field="template_evidence.calculation_profile_verified",
             ),
+            template_record_sha256=raw.get("template_record_sha256"),
         )
 
     convention_data = data.pop("force_convention", None)
@@ -298,8 +308,9 @@ def _safety_context(
             material_standard=str(raw.get("material_standard", "")),
             confidence=EvidenceStatus(str(raw.get("confidence"))),
             provenance=str(raw.get("provenance", "")),
-            rx3_strength_mapping_verified=raw.get(
-                "rx3_strength_mapping_verified", False
+            rx3_strength_mapping_verified=_bool_value(
+                raw.get("rx3_strength_mapping_verified", False),
+                field="steel_properties.rx3_strength_mapping_verified",
             ),
         )
 
@@ -335,6 +346,7 @@ def _lira_dict(row: LiraForceRow) -> dict[str, Any]:
         "load_case": row.load_case,
         "combination": row.combination,
         "source_row": row.source_row,
+        "source_sheet": row.source_sheet,
         "SI": {
             "N": {"value": str(row.N), "unit": "N"},
             "Mx": {"value": str(row.Mx), "unit": "N*m"},
@@ -367,6 +379,50 @@ def _write_or_verify_element(element: ProjectElement, path: Path) -> None:
         raise PipelineError(
             f"Pipeline inputs changed since the validation bundle was prepared: {path}. "
             "Use a new workspace for a new calculation."
+        )
+
+
+def _verify_existing_rx3_bundle(
+    *,
+    element_path: Path,
+    template: Path,
+    bundle_dir: Path,
+    template_mark: str | None,
+    safety_context: Rx3SafetyContext,
+) -> None:
+    """Rebuild immutable bundle inputs and reject stale or tampered resume state."""
+
+    required_names = (
+        "template.rx38",
+        "generated.rx38",
+        "project_element.json",
+        "rx3_input.json",
+        "rx3_template_profile.json",
+        "diff_before_after.json",
+    )
+    missing = [name for name in required_names if not (bundle_dir / name).is_file()]
+    if missing:
+        raise PipelineError(
+            f"Incomplete existing RX3 validation bundle {bundle_dir}: {missing}"
+        )
+    with tempfile.TemporaryDirectory(prefix="fireprotect-rx3-bundle-verify-") as raw:
+        expected_dir = Path(raw) / "bundle"
+        prepare_rx3_validation(
+            element_path,
+            template,
+            expected_dir,
+            template_mark=template_mark,
+            safety_context=safety_context,
+        )
+        mismatches = [
+            name
+            for name in required_names
+            if _hash(bundle_dir / name) != _hash(expected_dir / name)
+        ]
+    if mismatches:
+        raise PipelineError(
+            "Existing RX3 validation bundle does not match current element, "
+            f"template, mode or safety evidence: {mismatches}. Use a new workspace."
         )
 
 
@@ -439,7 +495,12 @@ def run_pipeline(config_path: str | Path) -> PipelineRunResult:
         raise PipelineError("pipeline schema_version must be 1 or 2")
     if schema_version == 2 and "execution_mode" not in config:
         raise PipelineError("pipeline schema_version 2 requires execution_mode")
-    mode = ExecutionMode.parse(config.get("execution_mode", "DRAFT"))
+    if schema_version == 1:
+        if "execution_mode" in config:
+            ExecutionMode.parse(config["execution_mode"])
+        mode = ExecutionMode.DRAFT
+    else:
+        mode = ExecutionMode.parse(config["execution_mode"])
     calculation_date = _date_value(
         config.get("calculation_date"),
         field="calculation_date",
@@ -482,12 +543,21 @@ def run_pipeline(config_path: str | Path) -> PipelineRunResult:
         config.get("fireproofing_technical_entry", "OBM_EXCEL_TABLES_UNVERIFIED")
     )
     try:
-        technical_entry = technical_registry.entries[technical_entry_id]
-    except KeyError as exc:
+        technical_entry = technical_registry.require_for_selection(
+            technical_entry_id,
+            mode=mode,
+            calculation_date=calculation_date,
+        )
+    except TechnicalRegistryError as exc:
         raise PipelineError(
-            f"Fireproofing technical entry is not registered: {technical_entry_id}"
+            f"Fireproofing technical selection gate blocked: {exc}"
         ) from exc
-    if not technical_entry.verified_for_production:
+    technical_verified_for_run = (
+        technical_entry.verified_for_production
+        and calculation_date is not None
+        and technical_entry.verified_for_production_on(calculation_date)
+    )
+    if not technical_verified_for_run:
         release_blockers.append(
             ReleaseBlocker(
                 BlockerCode.FIREPROOFING_TECHNICAL_DATA_UNVERIFIED,
@@ -525,15 +595,19 @@ def run_pipeline(config_path: str | Path) -> PipelineRunResult:
         "engineer_inputs": [],
         "warnings": [],
         "errors": [],
-        "unverified_data": [
-            "UNVERIFIED_TECHNICAL_DATA: Excel thickness/consumption tables lack a primary technical document"
-        ],
+        "unverified_data": (
+            []
+            if technical_verified_for_run
+            else [
+                "UNVERIFIED_TECHNICAL_DATA: Excel thickness/consumption tables lack a primary technical document"
+            ]
+        ),
         "waiting_for": [],
         "fireproofing_technical_data": {
             "registry": str(technical_registry_path),
             "entry_id": technical_entry_id,
             "status": technical_entry.status.value,
-            "verified_for_production": technical_entry.verified_for_production,
+            "verified_for_production": technical_verified_for_run,
             "source_document": technical_entry.source_document,
             "source_page_or_table": technical_entry.source_page_or_table,
             "document_sha256": technical_entry.document_sha256,
@@ -552,6 +626,7 @@ def run_pipeline(config_path: str | Path) -> PipelineRunResult:
 
         imported: list[ProjectElement] = []
         decisions: list[RequiredFireResistanceDecision] = []
+        normative_validations: list[NormativeValidation] = []
         bundles: list[
             tuple[Path, Path, ProjectElement, Rx3SafetyContext, dict[str, Any]]
         ] = []
@@ -576,6 +651,10 @@ def run_pipeline(config_path: str | Path) -> PipelineRunResult:
             ):
                 raise PipelineError(
                     f"elements[{index}].set_governing_combination must be explicit bool"
+                )
+            if mode is ExecutionMode.PRODUCTION and not item["set_governing_combination"]:
+                raise PipelineError(
+                    f"Element {element.element_id}: production requires an explicitly selected governing combination"
                 )
             element = apply_lira_force_row(
                 element,
@@ -624,6 +703,8 @@ def run_pipeline(config_path: str | Path) -> PipelineRunResult:
                     )
             else:
                 normative_validation = None
+            if normative_validation is not None:
+                normative_validations.append(normative_validation)
             if decision.normative_trace is not None:
                 audit["normative_traces"].append(
                     decision.as_dict()["normative_trace"]
@@ -650,6 +731,14 @@ def run_pipeline(config_path: str | Path) -> PipelineRunResult:
                     element_path,
                     template,
                     bundle_dir,
+                    template_mark=item.get("template_mark"),
+                    safety_context=safety_context,
+                )
+            else:
+                _verify_existing_rx3_bundle(
+                    element_path=element_path,
+                    template=template,
+                    bundle_dir=bundle_dir,
                     template_mark=item.get("template_mark"),
                     safety_context=safety_context,
                 )
@@ -859,6 +948,7 @@ def run_pipeline(config_path: str | Path) -> PipelineRunResult:
                 overwrite=True,
                 gui_execution_evidence=gui_evidence,
                 evidence_reference=element_audit["gui_evidence_reference"],
+                mode=safety_context.mode,
             )
             validation_statuses.append(validation.data["status"])
             if not validation.data["rx3_recalculation_proven"]:
@@ -935,6 +1025,8 @@ def run_pipeline(config_path: str | Path) -> PipelineRunResult:
                 mode=mode,
                 technical_entry=technical_entry,
                 verified_template_sha256=excel.get("verified_template_sha256"),
+                normative_validations=normative_validations,
+                calculation_date=calculation_date,
             )
             audit["excel"] = excel_report.as_dict()
             audit["warnings"].extend(excel_report.warnings)
@@ -978,6 +1070,50 @@ def run_pipeline(config_path: str | Path) -> PipelineRunResult:
                 "rx3_validation_statuses": validation_statuses,
                 "technical_data_status": technical_entry.status.value,
                 "excel_recalculation": "EXCEL_RECALCULATION_REQUIRED",
+                "production_gates": {
+                    "rx3_action_mapping": all(
+                        all(
+                            isinstance(getattr(element, name), Quantity)
+                            and getattr(element, name).si_value == 0
+                            for name in ("Mx", "My", "Qx", "Qy")
+                        )
+                        for _, _, element, _, _ in bundles
+                    ),
+                    "force_convention": all(
+                        context.force_convention is not None
+                        and context.force_convention.verified
+                        for _, _, _, context, _ in bundles
+                    ),
+                    "steel_compatibility": all(
+                        audit_item["steel"]["compatibility"]["status"]
+                        == "VERIFIED"
+                        for audit_item in audit["element_audits"]
+                    ),
+                    "rx3_template_profile": all(
+                        audit_item["rx3_template"]["profile"].get(
+                            "verified", False
+                        )
+                        for audit_item in audit["element_audits"]
+                    ),
+                    "normative_trace": len(normative_validations)
+                    == len(decisions)
+                    and all(
+                        validation.valid_for_production
+                        for validation in normative_validations
+                    ),
+                    "fireproofing_technical_data": technical_verified_for_run,
+                    "rx3_recalculation": all(
+                        audit_item["rx3_result"] is not None
+                        and audit_item["rx3_result"][
+                            "gui_recalculation_verified"
+                        ]
+                        for audit_item in audit["element_audits"]
+                    ),
+                    "excel_template": audit["excel"] is not None
+                    and audit["excel"]["template_verification_status"]
+                    == "VERIFIED",
+                    "excel_recalculation": False,
+                },
             },
         )
         audit["status"] = (

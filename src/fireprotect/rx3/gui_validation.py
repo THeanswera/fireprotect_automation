@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 from dataclasses import dataclass
+from decimal import Decimal, InvalidOperation
 from hashlib import sha256
 from itertools import combinations
 import json
@@ -11,6 +12,7 @@ from pathlib import Path
 import shutil
 from typing import Any
 
+from ..execution import ExecutionMode
 from ..project_io import read_project_element_json
 from .diff import diff_records
 from .parser import construction_records, read_rx38
@@ -187,7 +189,7 @@ def prepare_rx3_validation(
 7. Сохраните рассчитанный файл в этой папке под именем `calculated.rx38`; не перезаписывайте `template.rx38` и `generated.rx38`.
 8. Выполните:
 
-   `python -m fireprotect.cli validate-rx3-result generated.rx38 calculated.rx38 --gui-evidence ENGINEER_CONFIRMED`
+   `python -m fireprotect.cli validate-rx3-result generated.rx38 calculated.rx38 --gui-evidence ENGINEER_CONFIRMED --evidence-reference EVIDENCE-ID`
 
 9. Передайте `calculated.rx38`, evidence, `rx3_result.json`, `rx3_validation_report.json` и `rx3_validation_report.md` обратно в проект.
 """,
@@ -239,11 +241,16 @@ def validate_rx3_result_files(
     overwrite: bool = False,
     gui_execution_evidence: GuiExecutionEvidence = GuiExecutionEvidence.NOT_PROVIDED,
     evidence_reference: str | None = None,
+    mode: ExecutionMode = ExecutionMode.VALIDATION,
 ) -> Rx3ValidationReport:
     before_path = Path(before_rx38).resolve(strict=True)
     after_path = Path(after_rx38).resolve(strict=True)
+    if not isinstance(overwrite, bool):
+        raise TypeError("overwrite must be bool")
     if not isinstance(gui_execution_evidence, GuiExecutionEvidence):
         gui_execution_evidence = GuiExecutionEvidence(gui_execution_evidence)
+    if not isinstance(mode, ExecutionMode):
+        raise TypeError("mode must be ExecutionMode")
     before = construction_records(read_rx38(before_path))
     after = construction_records(read_rx38(after_path))
     if len(before) != len(after):
@@ -253,9 +260,24 @@ def validate_rx3_result_files(
 
     records: list[dict[str, Any]] = []
     change_sets: list[set[int]] = []
+    material_result_change_sets: list[set[int]] = []
+    unsafe_change_sets: list[set[int]] = []
+    expected_output_fields = {44, 54}
     for position, (old, new) in enumerate(zip(before, after), 1):
         changes = [_change_dict(item) for item in diff_records(old, new)]
-        change_sets.append({item["index"] for item in changes})
+        changed_indices = {item["index"] for item in changes}
+        change_sets.append(changed_indices)
+        material_changes: set[int] = set()
+        for index in expected_output_fields:
+            try:
+                old_value = Decimal(old.fields[index].strip().replace(",", "."))
+                new_value = Decimal(new.fields[index].strip().replace(",", "."))
+            except InvalidOperation:
+                continue
+            if old_value.is_finite() and new_value.is_finite() and old_value != new_value:
+                material_changes.add(index)
+        material_result_change_sets.append(material_changes)
+        unsafe_change_sets.append(changed_indices - expected_output_fields)
         records.append(
             {
                 "position": position,
@@ -285,13 +307,22 @@ def validate_rx3_result_files(
     before_hash = _sha256(before_path)
     after_hash = _sha256(after_path)
     byte_identical = before_hash == after_hash
-    expected_output_fields = {44, 54}
     result_fields_changed = all(
-        expected_output_fields.issubset(indices) for indices in change_sets
+        expected_output_fields.issubset(indices)
+        for indices in material_result_change_sets
     )
     recalculation_proven = not byte_identical and result_fields_changed
+    evidence_reference_valid = (
+        isinstance(evidence_reference, str) and bool(evidence_reference.strip())
+    )
+    unsafe_production_changes = (
+        mode is ExecutionMode.PRODUCTION
+        and any(indices for indices in unsafe_change_sets)
+    )
     gui_verified = (
         recalculation_proven
+        and evidence_reference_valid
+        and not unsafe_production_changes
         and gui_execution_evidence
         in {
             GuiExecutionEvidence.ENGINEER_CONFIRMED,
@@ -301,6 +332,8 @@ def validate_rx3_result_files(
     status = (
         "RX3_RECALCULATION_NOT_PROVEN"
         if not recalculation_proven
+        else "RX3_PRODUCTION_INPUTS_CHANGED"
+        if unsafe_production_changes
         else "RX3_RESULT_ANALYSED"
         if gui_verified
         else "RX3_GUI_RECALCULATION_UNVERIFIED"
@@ -313,9 +346,14 @@ def validate_rx3_result_files(
         "expected_result_fields": sorted(expected_output_fields),
         "expected_result_fields_changed": result_fields_changed,
         "rx3_recalculation_proven": recalculation_proven,
+        "execution_mode": mode.value,
         "gui_execution_evidence": gui_execution_evidence.value,
         "evidence_reference": evidence_reference,
+        "evidence_reference_valid": evidence_reference_valid,
         "gui_recalculation_verified": gui_verified,
+        "unsafe_production_change_indices": sorted(
+            set().union(*unsafe_change_sets) if unsafe_change_sets else set()
+        ),
         "records": records,
         "dependency_candidates": _dependency_candidates(change_sets),
         "dependency_warning": (
@@ -326,7 +364,16 @@ def validate_rx3_result_files(
     md_path = Path(markdown_report) if markdown_report else after_path.parent / "rx3_validation_report.md"
     json_path = json_path.resolve(strict=False)
     md_path = md_path.resolve(strict=False)
-    for target in (json_path, md_path):
+    result_path = (after_path.parent / "rx3_result.json").resolve(strict=False)
+    report_targets = (json_path, md_path, result_path)
+    protected_inputs = {before_path, after_path}
+    if any(target in protected_inputs for target in report_targets):
+        raise Rx3GuiValidationError(
+            "Validation reports must not overwrite before/after RX38 files"
+        )
+    if len(set(report_targets)) != len(report_targets):
+        raise Rx3GuiValidationError("Validation report paths must be distinct")
+    for target in report_targets:
         if target.exists() and not overwrite:
             raise Rx3GuiValidationError(f"Report already exists: {target}")
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -335,9 +382,6 @@ def validate_rx3_result_files(
         encoding="utf-8",
         newline="\n",
     )
-    result_path = after_path.parent / "rx3_result.json"
-    if result_path.exists() and not overwrite:
-        raise Rx3GuiValidationError(f"Report already exists: {result_path}")
     result_path.write_text(
         json.dumps(
             {
@@ -363,8 +407,11 @@ def validate_rx3_result_files(
         f"- Byte-identical: `{byte_identical}`",
         f"- Expected result fields 44/54 changed: `{result_fields_changed}`",
         f"- RX3 recalculation proven: `{recalculation_proven}`",
+        f"- Execution mode: `{mode.value}`",
         f"- GUI evidence: `{gui_execution_evidence.value}`",
+        f"- Evidence reference valid: `{evidence_reference_valid}`",
         f"- GUI recalculation verified: `{gui_verified}`",
+        f"- Unsafe production changes: `{payload['unsafe_production_change_indices']}`",
         "",
     ]
     for record in records:

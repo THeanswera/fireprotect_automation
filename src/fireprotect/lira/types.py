@@ -27,8 +27,8 @@ FORCE_FIELDS = ("N", "Mx", "My", "Qx", "Qy")
 
 
 def _decimal_force(value: object, *, field: str) -> Decimal:
-    if isinstance(value, bool):
-        raise TypeError(f"{field} must be numeric, not bool")
+    if isinstance(value, bool) or isinstance(value, float):
+        raise TypeError(f"{field} must be Decimal, int or str, not binary float")
     try:
         result = value if isinstance(value, Decimal) else Decimal(str(value))
     except (InvalidOperation, ValueError, TypeError) as exc:
@@ -98,6 +98,7 @@ class LiraForceRow:
     Qy: Decimal
     source: SourceForceValues
     source_row: int
+    source_sheet: str | None = None
 
     def __post_init__(self) -> None:
         for field in FORCE_FIELDS:
@@ -108,6 +109,10 @@ class LiraForceRow:
             raise TypeError("source must be SourceForceValues")
         if isinstance(self.source_row, bool) or self.source_row < 1:
             raise ValueError("source_row must be a positive integer")
+        if self.source_sheet is not None and (
+            not isinstance(self.source_sheet, str) or not self.source_sheet.strip()
+        ):
+            raise ValueError("source_sheet must be non-empty when provided")
 
 
 @dataclass(frozen=True, slots=True)
@@ -116,6 +121,7 @@ class RawTableRow:
 
     values: Mapping[str, Any]
     row_number: int
+    sheet: str | None = None
 
 
 @runtime_checkable

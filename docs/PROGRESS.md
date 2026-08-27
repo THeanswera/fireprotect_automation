@@ -80,7 +80,8 @@
 ## Этап 4 — production safety gates
 
 - **CONFIRMED:** введены `DRAFT` / `VALIDATION` / `PRODUCTION`; только
-  production без blockers теоретически может получить `READY_FOR_ISSUE`.
+  production без blockers и с positive evidence по всем обязательным gates
+  теоретически может получить `READY_FOR_ISSUE`.
 - **CONFIRMED:** Mx/My/Qx/Qy fail closed, tolerance использует `Decimal`, а
   pure axial требует отдельного `AXIAL_ONLY` evidence.
 - **CONFIRMED:** знак N преобразуется только через явный versioned

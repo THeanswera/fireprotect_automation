@@ -69,6 +69,7 @@ class LiraForceImporter:
             Qy=si_forces["Qy"],
             source=source_values,
             source_row=row.row_number,
+            source_sheet=row.sheet,
         )
 
     @staticmethod
@@ -87,6 +88,10 @@ class LiraForceImporter:
         if value is None or (isinstance(value, str) and not value.strip()):
             raise LiraRowError(
                 f"row {row.row_number}, field {field}: numeric value is required"
+            )
+        if isinstance(value, float):
+            raise LiraRowError(
+                f"row {row.row_number}, field {field}: binary float is not accepted; export decimal values as text"
             )
         try:
             if isinstance(value, str):

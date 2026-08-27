@@ -82,7 +82,7 @@ def test_safe_writer_changes_only_selected_confirmed_position(rx38_file, tmp_pat
     document = read_rx38_document(rx38_file)
     record_index = next(i for i, record in enumerate(document.records) if record.record_type == "Tconstr")
     original = document.records[record_index]
-    changed = original.with_confirmed_field(14, "6,25")
+    changed = original.with_typed_field(14, "6,25", compatibility_verified=True)
     output = tmp_path / "changed.rx38"
     write_rx38(document.replace_record(record_index, changed), output)
 

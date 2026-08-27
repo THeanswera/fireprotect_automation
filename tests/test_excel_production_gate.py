@@ -1,4 +1,5 @@
 from hashlib import sha256
+from datetime import date
 from pathlib import Path
 
 import pytest
@@ -23,6 +24,7 @@ def test_unverified_technical_data_blocks_before_excel_copy(tmp_path: Path):
             mode=ExecutionMode.PRODUCTION,
             technical_entry=entry,
             verified_template_sha256=before,
+            calculation_date=date(2026, 8, 25),
         )
     assert sha256(source.read_bytes()).hexdigest() == before
     assert not (tmp_path / "output.xlsx").exists()
@@ -42,5 +44,6 @@ def test_unverified_excel_template_hash_blocks_production(tmp_path: Path):
             mode=ExecutionMode.PRODUCTION,
             technical_entry=entry,
             verified_template_sha256="0" * 64,
+            calculation_date=date(2026, 8, 25),
         )
     assert not (tmp_path / "output.xlsx").exists()
