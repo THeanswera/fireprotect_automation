@@ -22,6 +22,7 @@ from typing import Any, Iterable
 from xml.etree import ElementTree as ET
 from zipfile import BadZipFile, ZIP_DEFLATED, ZipFile
 
+from ..files import ExclusiveInstallError, install_file_no_overwrite
 from .mapping import (
     CellBinding,
     ColumnBinding,
@@ -154,8 +155,8 @@ def write_mapped_copy(
             os.replace(temp_path, output)
         else:
             try:
-                os.link(temp_path, output)
-            except FileExistsError as exc:
+                install_file_no_overwrite(temp_path, output)
+            except ExclusiveInstallError as exc:
                 raise CopyOnlyViolationError(
                     f"Output workbook already exists: {output}"
                 ) from exc

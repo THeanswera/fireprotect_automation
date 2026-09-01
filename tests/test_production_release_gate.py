@@ -8,7 +8,7 @@ from fireprotect.release import (
 )
 
 
-def test_production_is_ready_only_when_blocker_list_is_empty():
+def test_boolean_self_certification_cannot_make_production_ready():
     readiness = evaluate_issue_readiness(
         mode=ExecutionMode.PRODUCTION,
         warnings=("review note",),
@@ -19,8 +19,13 @@ def test_production_is_ready_only_when_blocker_list_is_empty():
             },
         },
     )
-    assert readiness.status is IssueReadinessStatus.READY_FOR_ISSUE
-    assert readiness.blockers == ()
+    assert readiness.status is IssueReadinessStatus.NOT_READY_FOR_ISSUE
+    assert readiness.blockers[0].code is BlockerCode.PRODUCTION_GATE_EVIDENCE_MISSING
+    assert any(
+        blocker.code is BlockerCode.HEATING_EXPOSURE_UNVERIFIED
+        for blocker in readiness.blockers
+    )
+    assert not any(readiness.evidence["production_gate_evidence"].values())
 
 
 def test_single_engineering_blocker_forces_not_ready():

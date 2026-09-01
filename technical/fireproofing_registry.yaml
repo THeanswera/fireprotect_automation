@@ -5,6 +5,7 @@ policy: >-
   thickness or consumption selection requires registered primary manufacturer data.
 solutions:
   - id: OBM_EXCEL_TABLES_UNVERIFIED
+    version: "1"
     manufacturer: null
     system_name: null
     product_name: null

@@ -2,12 +2,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from decimal import Decimal
-import os
 from pathlib import Path
 import tempfile
 from typing import Any
 
 from ..execution import ExecutionMode
+from ..files import ExclusiveInstallError, install_file_no_overwrite
 from ..model import EffectiveLengthParameters, ProjectElement, Quantity, Unit
 from .diff import diff_records
 from .parser import (
@@ -21,6 +21,9 @@ from .parser import (
 from .profiles import normalize_profile_name, normalize_standard
 from .schema import TCONSTR_FIELD_COUNT, WritePolicy, field_spec
 from .safety import (
+    HeatingExposureError,
+    HeatingExposureVerification,
+    Rx3CalculationProfile,
     Rx3SafetyContext,
     SteelCompatibilityError,
     SteelCompatibilityReport,
@@ -67,7 +70,11 @@ class Rx38CreationReport:
     rx3_input: dict[str, Any]
     steel_compatibility: dict[str, Any]
     template_profile: dict[str, Any]
+    heating_exposure: dict[str, Any]
     stale_template_result_indices: tuple[int, ...]
+    steel_production_evidence: SteelCompatibilityReport
+    template_production_evidence: Rx3CalculationProfile
+    heating_production_evidence: HeatingExposureVerification
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -84,6 +91,7 @@ class Rx38CreationReport:
             "rx3_input": self.rx3_input,
             "steel_compatibility": self.steel_compatibility,
             "template_profile": self.template_profile,
+            "heating_exposure": self.heating_exposure,
             "stale_template_result_indices": list(
                 self.stale_template_result_indices
             ),
@@ -210,6 +218,20 @@ def _prepare_rx38_record(
             raise TemplateProfileError(
                 "AXIAL_ONLY evidence is not bound to the exact RX38 template record"
             )
+    heating_evidence = context.heating_exposure
+    heating_verification = HeatingExposureVerification.evaluate(
+        heating_evidence, element, template
+    )
+    heating_verified = heating_verification.verified
+    if (
+        context.mode in {ExecutionMode.VALIDATION, ExecutionMode.PRODUCTION}
+        and not heating_verified
+    ):
+        raise HeatingExposureError(
+            "HEATING_EXPOSURE_UNVERIFIED: VALIDATION/PRODUCTION requires typed "
+            "evidence binding ProjectElement.heating_sides to the exact RX38 "
+            "template record"
+        )
     steel_report: SteelCompatibilityReport = evaluate_steel_compatibility(
         element,
         template,
@@ -292,9 +314,11 @@ def _prepare_rx38_record(
     warnings.append(
         "Mx/My/Qx/Qy mappings remain unconfirmed; only a verified AXIAL_ONLY profile with zero actions may proceed"
     )
-    if element.heating_sides is not None:
+    if element.heating_sides is not None and not heating_verified:
         warnings.append(
-            "heating_sides has no confirmed RX38 index; heated_perimeter was written, template heating flags were preserved"
+            "HEATING_EXPOSURE_UNVERIFIED: heating_sides has no confirmed RX38 "
+            "index; heated_perimeter was written and template heating flags were "
+            "preserved for DRAFT inspection only"
         )
     for name in (
         "material_id", "coating_type", "required_thickness",
@@ -321,6 +345,7 @@ def _prepare_rx38_record(
         values,
         context.template_evidence,
         evidence_template=template,
+        steel_compatibility=steel_report,
     )
     if context.mode.value in {"VALIDATION", "PRODUCTION"} and not profile.verified:
         raise TemplateProfileError(
@@ -331,7 +356,11 @@ def _prepare_rx38_record(
         "rx3_input": rx3_input.as_dict(),
         "steel_compatibility": steel_report.as_dict(),
         "template_profile": profile.as_dict(),
+        "heating_exposure": heating_verification.as_dict(),
         "stale_template_result_indices": list(stale_indices),
+        "_steel_production_evidence": steel_report,
+        "_template_production_evidence": profile,
+        "_heating_production_evidence": heating_verification,
     }
     return updated, tuple(warnings), safety
 
@@ -400,8 +429,8 @@ def create_rx38_from_project_element(
                 f"Output RX38 appeared during creation; refusing to overwrite it: {output_path}"
             )
         try:
-            os.link(temporary_path, output_path)
-        except FileExistsError as exc:
+            install_file_no_overwrite(temporary_path, output_path)
+        except ExclusiveInstallError as exc:
             raise Rx38ProjectAdapterError(
                 f"Output RX38 appeared during creation; refusing to overwrite it: {output_path}"
             ) from exc
@@ -430,7 +459,11 @@ def create_rx38_from_project_element(
         rx3_input=safety["rx3_input"],
         steel_compatibility=safety["steel_compatibility"],
         template_profile=safety["template_profile"],
+        heating_exposure=safety["heating_exposure"],
         stale_template_result_indices=tuple(
             safety["stale_template_result_indices"]
         ),
+        steel_production_evidence=safety["_steel_production_evidence"],
+        template_production_evidence=safety["_template_production_evidence"],
+        heating_production_evidence=safety["_heating_production_evidence"],
     )

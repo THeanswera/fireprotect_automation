@@ -80,11 +80,17 @@
     }
   ],
   "excel": {
+    "template_id": "OBM_WORKBOOK_UNVERIFIED",
     "template": "01_Общая ОБМ — копия.xlsx",
     "output": "pipeline_runs/first_run/result.xlsx"
   }
 }
 ```
+
+The run selects only `template_id`; it cannot supply a verified SHA. Approval,
+formula-map identity, technical-data version and lookup fingerprint come from
+the repository-owned `templates/excel_registry.yaml`. The current OBM snapshot
+remains `UNVERIFIED` until primary technical data are reviewed.
 
 `format` может быть `csv`, `html` или `xlsx`; колонки и единицы задаются
 явно. Каждый селектор должен найти ровно одну строку ЛИРА. Значение R в

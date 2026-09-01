@@ -19,6 +19,13 @@ from ..rx3.profiles import normalize_profile_name
 from ..normative import NormativeValidation
 from ..technical import FireproofingTechnicalEntry, TechnicalDataStatus
 from .mapping import ColumnBinding, WorkbookMapping
+from .registry import (
+    ExcelTemplateEntry,
+    ExcelTemplateRegistryError,
+    ExcelTemplateStatus,
+    ExcelTemplateVerification,
+    verify_excel_template,
+)
 from .writer import ExcelCopyResult, file_sha256, write_mapped_copy
 
 
@@ -67,7 +74,9 @@ class ObmWorkbookExportReport:
     export_kind: str
     technical_data_status: str
     template_verification_status: str
+    template_verification: dict[str, Any]
     recalculation_status: str
+    template_evidence: ExcelTemplateVerification | None = None
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -86,6 +95,7 @@ class ObmWorkbookExportReport:
             "export_kind": self.export_kind,
             "technical_data_status": self.technical_data_status,
             "template_verification_status": self.template_verification_status,
+            "template_verification": self.template_verification,
             "recalculation_status": self.recalculation_status,
         }
 
@@ -225,7 +235,7 @@ def export_obm_workbook(
     markdown_report: str | Path | None = None,
     mode: ExecutionMode = ExecutionMode.DRAFT,
     technical_entry: FireproofingTechnicalEntry | None = None,
-    verified_template_sha256: str | None = None,
+    template_entry: ExcelTemplateEntry | None = None,
     normative_validations: Iterable[NormativeValidation] | None = None,
     calculation_date: date | None = None,
 ) -> ObmWorkbookExportReport:
@@ -254,13 +264,18 @@ def export_obm_workbook(
             "Production Excel thickness/consumption export requires verified primary technical data"
         )
     source_hash = file_sha256(source)
-    template_verified = (
-        verified_template_sha256 is not None
-        and source_hash == verified_template_sha256.lower()
+    registry_identity_valid = (
+        isinstance(template_entry, ExcelTemplateEntry)
+        and template_entry.status is ExcelTemplateStatus.APPROVED
+        and source_hash == template_entry.sha256
+        and technical_entry is not None
+        and technical_entry.entry_id == template_entry.technical_data_entry_id
+        and technical_entry.version == template_entry.technical_data_version
     )
-    if mode is ExecutionMode.PRODUCTION and not template_verified:
+    if mode is ExecutionMode.PRODUCTION and not registry_identity_valid:
         raise ObmWorkbookExportError(
-            "Production Excel export requires a verified template SHA-256"
+            "Production Excel export requires an APPROVED trusted template_id; "
+            "a SHA supplied by run configuration is not verification"
         )
     validations = tuple(normative_validations or ())
     if mode is ExecutionMode.PRODUCTION:
@@ -290,6 +305,7 @@ def export_obm_workbook(
         if target.exists():
             raise ObmWorkbookExportError(f"Report already exists: {target}")
     workbook = load_workbook(source, data_only=False, read_only=False)
+    template_verification: ExcelTemplateVerification | None = None
     try:
         if DATA_SHEET not in workbook.sheetnames:
             raise ObmWorkbookExportError(f"Required worksheet is missing: {DATA_SHEET}")
@@ -298,6 +314,28 @@ def export_obm_workbook(
             raise ObmWorkbookExportError(
                 f"Expected {EXPECTED_FORMULA_COUNT} formulas, found {len(formulas_before)}"
             )
+        if template_entry is not None:
+            try:
+                template_verification = verify_excel_template(
+                    template_entry,
+                    source,
+                    formulas_before,
+                    technical_entry,
+                )
+            except ExcelTemplateRegistryError as exc:
+                raise ObmWorkbookExportError(str(exc)) from exc
+            if mode is ExecutionMode.PRODUCTION and not template_verification.verified:
+                if (
+                    template_verification.lookup_table_sha256
+                    != template_verification.expected_lookup_table_sha256
+                ):
+                    raise ObmWorkbookExportError(
+                        "EXCEL_LOOKUP_TABLE_MISMATCH: workbook lookup tables do not "
+                        "match the trusted technical-data fingerprint"
+                    )
+                raise ObmWorkbookExportError(
+                    "Production Excel template content does not match its trusted registry entry"
+                )
         _validate_rows(items, choices, workbook)
         sheet = workbook[DATA_SHEET]
         changes: list[ExcelCellChange] = []
@@ -389,6 +427,18 @@ def export_obm_workbook(
             "UNVERIFIED_TECHNICAL_DATA: thickness and consumption lookup tables have no primary technical document in the workspace",
         )
     warnings = tuple(warning_items)
+    template_verified = (
+        template_verification is not None and template_verification.verified
+    )
+    template_verification_payload = (
+        template_verification.as_dict()
+        if template_verification is not None
+        else {
+            "template_id": None,
+            "registry_status": "NOT_REGISTERED",
+            "verified": False,
+        }
+    )
     report = ObmWorkbookExportReport(
         output,
         copy_result.source_sha256,
@@ -405,7 +455,9 @@ def export_obm_workbook(
         "EXCEL_COMPATIBILITY_EXPORT",
         technical_status.value,
         "VERIFIED" if template_verified else "UNVERIFIED",
+        template_verification_payload,
         "EXCEL_RECALCULATION_REQUIRED",
+        template_verification,
     )
     json_path.write_text(
         json.dumps(report.as_dict(), ensure_ascii=False, indent=2) + "\n",
@@ -422,6 +474,7 @@ def export_obm_workbook(
         f"- Export kind: `{report.export_kind}`",
         f"- Technical data: `{report.technical_data_status}`",
         f"- Template verification: `{report.template_verification_status}`",
+        f"- Template id: `{report.template_verification.get('template_id')}`",
         f"- Recalculation: `{report.recalculation_status}`",
         "",
         "## Изменённые входные ячейки",

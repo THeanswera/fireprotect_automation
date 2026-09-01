@@ -14,6 +14,7 @@ from typing import Any, Mapping
 from .decision import RequiredFireResistanceDecision
 from .execution import ExecutionMode
 from .excel.obm import export_obm_workbook
+from .excel.registry import ExcelTemplateRegistry, ExcelTemplateRegistryError
 from .lira import (
     CsvTableSource,
     ForceUnits,
@@ -41,12 +42,14 @@ from .rx3.gui_validation import (
     prepare_rx3_validation,
     validate_rx3_result_files,
 )
+from .rx3.project_adapter import Rx38CreationReport
 from .rx3.result import Rx3Result, apply_rx3_result, read_rx3_result
 from .rx3.safety import (
     ActionZeroTolerance,
     EvidenceStatus,
     ForceConventionStatus,
     GuiExecutionEvidence,
+    HeatingExposureEvidence,
     LiraRx3ForceConvention,
     Rx3SafetyContext,
     Rx3TemplateEvidence,
@@ -56,7 +59,9 @@ from .rx3.safety import (
 from .release import (
     BlockerCode,
     IssueReadiness,
+    ProductionEvidence,
     ReleaseBlocker,
+    TechnicalProductionEvidence,
     evaluate_issue_readiness,
 )
 from .technical import FireproofingTechnicalRegistry, TechnicalRegistryError
@@ -312,6 +317,43 @@ def _safety_context(
                 raw.get("rx3_strength_mapping_verified", False),
                 field="steel_properties.rx3_strength_mapping_verified",
             ),
+            temperature_model_code=raw.get("temperature_model_code"),
+            thermal_coefficients=(
+                None
+                if raw.get("thermal_coefficients") is None
+                else {
+                    int(index): value
+                    for index, value in _mapping(
+                        raw.get("thermal_coefficients")
+                    ).items()
+                }
+            ),
+        )
+
+    heating_data = data.pop("heating_exposure", None)
+    heating_exposure = None
+    if heating_data is not None:
+        heating_raw = _mapping(heating_data)
+        raw_heating_sides = heating_raw.get("heating_sides")
+        if isinstance(raw_heating_sides, bool) or not isinstance(
+            raw_heating_sides, int
+        ):
+            raise PipelineError("heating_exposure.heating_sides must be int")
+        heating_exposure = HeatingExposureEvidence(
+            project_element_id=str(heating_raw.get("project_element_id", "")),
+            heating_sides=raw_heating_sides,
+            template_record_sha256=str(
+                heating_raw.get("template_record_sha256", "")
+            ),
+            status=EvidenceStatus(str(heating_raw.get("status"))),
+            source=str(heating_raw.get("source", "")),
+            confirmed_by=heating_raw.get("confirmed_by"),
+            confirmed_at=_date_value(
+                heating_raw.get("confirmed_at"),
+                field="heating_exposure.confirmed_at",
+                required=False,
+            ),
+            version=heating_raw.get("version"),
         )
 
     controlled = data.pop("controlled_experiment", False)
@@ -328,6 +370,7 @@ def _safety_context(
         steel,
         controlled,
         allow_unverified,
+        heating_exposure,
     )
 
 
@@ -389,7 +432,7 @@ def _verify_existing_rx3_bundle(
     bundle_dir: Path,
     template_mark: str | None,
     safety_context: Rx3SafetyContext,
-) -> None:
+) -> Rx38CreationReport:
     """Rebuild immutable bundle inputs and reject stale or tampered resume state."""
 
     required_names = (
@@ -407,7 +450,7 @@ def _verify_existing_rx3_bundle(
         )
     with tempfile.TemporaryDirectory(prefix="fireprotect-rx3-bundle-verify-") as raw:
         expected_dir = Path(raw) / "bundle"
-        prepare_rx3_validation(
+        expected_bundle = prepare_rx3_validation(
             element_path,
             template,
             expected_dir,
@@ -424,6 +467,7 @@ def _verify_existing_rx3_bundle(
             "Existing RX3 validation bundle does not match current element, "
             f"template, mode or safety evidence: {mismatches}. Use a new workspace."
         )
+    return expected_bundle.creation
 
 
 def _write_audit(workspace: Path, payload: dict[str, Any]) -> tuple[Path, Path]:
@@ -606,6 +650,7 @@ def run_pipeline(config_path: str | Path) -> PipelineRunResult:
         "fireproofing_technical_data": {
             "registry": str(technical_registry_path),
             "entry_id": technical_entry_id,
+            "version": technical_entry.version,
             "status": technical_entry.status.value,
             "verified_for_production": technical_verified_for_run,
             "source_document": technical_entry.source_document,
@@ -627,6 +672,9 @@ def run_pipeline(config_path: str | Path) -> PipelineRunResult:
         imported: list[ProjectElement] = []
         decisions: list[RequiredFireResistanceDecision] = []
         normative_validations: list[NormativeValidation] = []
+        steel_production_evidence = []
+        template_production_evidence = []
+        heating_production_evidence = []
         bundles: list[
             tuple[Path, Path, ProjectElement, Rx3SafetyContext, dict[str, Any]]
         ] = []
@@ -727,21 +775,30 @@ def run_pipeline(config_path: str | Path) -> PipelineRunResult:
                 mode=mode,
             )
             if not generated.exists():
-                prepare_rx3_validation(
+                creation_evidence = prepare_rx3_validation(
                     element_path,
                     template,
                     bundle_dir,
                     template_mark=item.get("template_mark"),
                     safety_context=safety_context,
-                )
+                ).creation
             else:
-                _verify_existing_rx3_bundle(
+                creation_evidence = _verify_existing_rx3_bundle(
                     element_path=element_path,
                     template=template,
                     bundle_dir=bundle_dir,
                     template_mark=item.get("template_mark"),
                     safety_context=safety_context,
                 )
+            steel_production_evidence.append(
+                creation_evidence.steel_production_evidence
+            )
+            template_production_evidence.append(
+                creation_evidence.template_production_evidence
+            )
+            heating_production_evidence.append(
+                creation_evidence.heating_production_evidence
+            )
             rx3_input_path = bundle_dir / "rx3_input.json"
             template_profile_path = bundle_dir / "rx3_template_profile.json"
             if not rx3_input_path.exists() or not template_profile_path.exists():
@@ -801,6 +858,13 @@ def run_pipeline(config_path: str | Path) -> PipelineRunResult:
                         for name in ("area", "heated_perimeter", "ptm")
                     },
                 },
+                "heating_exposure": bundle_diff_audit.get(
+                    "heating_exposure",
+                    {
+                        "status": "NOT_PROVIDED",
+                        "verified_for_generation": False,
+                    },
+                ),
                 "steel": {
                     "grade": element.steel_grade,
                     "Ry": project_element_to_dict(element)["Ry"],
@@ -900,6 +964,30 @@ def run_pipeline(config_path: str | Path) -> PipelineRunResult:
                 blockers=tuple(release_blockers),
                 warnings=tuple(release_warnings),
                 evidence={"stage": "WAITING_FOR_RX3"},
+                production_evidence=ProductionEvidence(
+                    action_elements=tuple(imported),
+                    force_conventions=(
+                        tuple(
+                            context.force_convention
+                            for _, _, _, context, _ in bundles
+                            if context.force_convention is not None
+                        )
+                        if all(
+                            context.force_convention is not None
+                            for _, _, _, context, _ in bundles
+                        )
+                        else ()
+                    ),
+                    normative_validations=tuple(normative_validations),
+                    steel_compatibility=tuple(steel_production_evidence),
+                    rx3_template_profiles=tuple(template_production_evidence),
+                    heating_exposures=tuple(heating_production_evidence),
+                    technical_data=(
+                        (TechnicalProductionEvidence(technical_entry, calculation_date),)
+                        if calculation_date is not None
+                        else ()
+                    ),
+                ),
             )
             audit["status"] = "WAITING_FOR_RX3"
             audit["waiting_for"] = [str(path) for path in waiting]
@@ -923,6 +1011,7 @@ def run_pipeline(config_path: str | Path) -> PipelineRunResult:
 
         completed: list[ProjectElement] = []
         rx3_results: list[Rx3Result] = []
+        rx3_validation_reports = []
         validation_statuses: list[str] = []
         for index, (
             generated,
@@ -951,6 +1040,7 @@ def run_pipeline(config_path: str | Path) -> PipelineRunResult:
                 mode=safety_context.mode,
             )
             validation_statuses.append(validation.data["status"])
+            rx3_validation_reports.append(validation)
             if not validation.data["rx3_recalculation_proven"]:
                 raise PipelineError(
                     f"Element {element.element_id}: calculated.rx38 does not prove recalculation of RX3 result fields 44 and 54"
@@ -1020,15 +1110,38 @@ def run_pipeline(config_path: str | Path) -> PipelineRunResult:
             }
 
         excel_output: Path | None = None
+        excel_report = None
         excel_config = config.get("excel")
         if excel_config is not None:
             excel = _mapping(excel_config)
+            if "verified_template_sha256" in excel:
+                raise PipelineError(
+                    "excel.verified_template_sha256 is prohibited; select a trusted template_id"
+                )
             excel_template = _resolve(base, excel.get("template"), field="excel.template")
+            raw_template_id = excel.get("template_id")
+            if not isinstance(raw_template_id, str) or not raw_template_id.strip():
+                raise PipelineError("excel.template_id must be a non-empty string")
+            excel_registry_path = (
+                repository_root / "templates" / "excel_registry.yaml"
+            )
+            try:
+                excel_registry = ExcelTemplateRegistry.load(excel_registry_path)
+                excel_template_entry = excel_registry.require(raw_template_id)
+            except ExcelTemplateRegistryError as exc:
+                raise PipelineError(f"Excel template registry blocked: {exc}") from exc
             excel_output = _resolve(
                 base, excel.get("output"), field="excel.output", must_exist=False
             )
             audit["source_files"].append(
                 {"role": "excel_template", "path": str(excel_template), "sha256": _hash(excel_template)}
+            )
+            audit["source_files"].append(
+                {
+                    "role": "excel_template_registry",
+                    "path": str(excel_registry_path),
+                    "sha256": _hash(excel_registry_path),
+                }
             )
             excel_report = export_obm_workbook(
                 completed,
@@ -1039,7 +1152,7 @@ def run_pipeline(config_path: str | Path) -> PipelineRunResult:
                 markdown_report=workspace / "excel_export_audit.md",
                 mode=mode,
                 technical_entry=technical_entry,
-                verified_template_sha256=excel.get("verified_template_sha256"),
+                template_entry=excel_template_entry,
                 normative_validations=normative_validations,
                 calculation_date=calculation_date,
             )
@@ -1055,7 +1168,7 @@ def run_pipeline(config_path: str | Path) -> PipelineRunResult:
                 release_blockers.append(
                     ReleaseBlocker(
                         BlockerCode.EXCEL_TEMPLATE_UNVERIFIED,
-                        "Excel template SHA-256 is not registered as verified",
+                        "Excel template registry identity, formula map or lookup-table fingerprint is not verified",
                     )
                 )
             for element_audit in audit["element_audits"]:
@@ -1085,51 +1198,38 @@ def run_pipeline(config_path: str | Path) -> PipelineRunResult:
                 "rx3_validation_statuses": validation_statuses,
                 "technical_data_status": technical_entry.status.value,
                 "excel_recalculation": "EXCEL_RECALCULATION_REQUIRED",
-                "production_gates": {
-                    "rx3_action_mapping": all(
-                        all(
-                            isinstance(getattr(element, name), Quantity)
-                            and getattr(element, name).si_value == 0
-                            for name in ("Mx", "My", "Qx", "Qy")
-                        )
-                        for _, _, element, _, _ in bundles
-                    ),
-                    "force_convention": all(
-                        context.force_convention is not None
-                        and context.force_convention.verified
-                        for _, _, _, context, _ in bundles
-                    ),
-                    "steel_compatibility": all(
-                        audit_item["steel"]["compatibility"]["status"]
-                        == "VERIFIED"
-                        for audit_item in audit["element_audits"]
-                    ),
-                    "rx3_template_profile": all(
-                        audit_item["rx3_template"]["profile"].get(
-                            "verified", False
-                        )
-                        for audit_item in audit["element_audits"]
-                    ),
-                    "normative_trace": len(normative_validations)
-                    == len(decisions)
-                    and all(
-                        validation.valid_for_production
-                        for validation in normative_validations
-                    ),
-                    "fireproofing_technical_data": technical_verified_for_run,
-                    "rx3_recalculation": all(
-                        audit_item["rx3_result"] is not None
-                        and audit_item["rx3_result"][
-                            "gui_recalculation_verified"
-                        ]
-                        for audit_item in audit["element_audits"]
-                    ),
-                    "excel_template": audit["excel"] is not None
-                    and audit["excel"]["template_verification_status"]
-                    == "VERIFIED",
-                    "excel_recalculation": False,
-                },
             },
+            production_evidence=ProductionEvidence(
+                action_elements=tuple(completed),
+                force_conventions=(
+                    tuple(
+                        context.force_convention
+                        for _, _, _, context, _ in bundles
+                        if context.force_convention is not None
+                    )
+                    if all(
+                        context.force_convention is not None
+                        for _, _, _, context, _ in bundles
+                    )
+                    else ()
+                ),
+                normative_validations=tuple(normative_validations),
+                steel_compatibility=tuple(steel_production_evidence),
+                rx3_template_profiles=tuple(template_production_evidence),
+                heating_exposures=tuple(heating_production_evidence),
+                technical_data=(
+                    (TechnicalProductionEvidence(technical_entry, calculation_date),)
+                    if calculation_date is not None
+                    else ()
+                ),
+                rx3_validations=tuple(rx3_validation_reports),
+                excel_templates=(
+                    (excel_report.template_evidence,)
+                    if excel_report is not None
+                    and excel_report.template_evidence is not None
+                    else ()
+                ),
+            ),
         )
         audit["status"] = (
             "RX3_RESULT_ANALYSED"

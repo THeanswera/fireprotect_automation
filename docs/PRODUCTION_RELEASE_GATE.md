@@ -1,5 +1,15 @@
 # Production release gate
 
+## Typed gate evidence hardening
+
+`evaluate_issue_readiness` derives mandatory gates only from typed
+`ProductionEvidence`. A caller-supplied `Mapping[str, bool]` is audit data and
+cannot produce `READY_FOR_ISSUE`.
+
+The gate set includes exact heating-exposure binding, steel temperature profile
+compatibility, trusted Excel template identity and lookup-table content. Excel
+verification is linked to the selected technical-data entry and version.
+
 ## Решение
 
 Центральный `IssueReadiness` содержит status, blockers, warnings и evidence.

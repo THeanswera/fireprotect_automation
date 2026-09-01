@@ -172,6 +172,18 @@ def test_pipeline_stops_for_rx3_and_resumes_after_calculated_file(tmp_path: Path
                             construction_records(read_rx38(template))[0]
                         ),
                     },
+                    "heating_exposure": {
+                        "project_element_id": "17",
+                        "heating_sides": 4,
+                        "template_record_sha256": rx38_record_fingerprint(
+                            construction_records(read_rx38(template))[0]
+                        ),
+                        "status": "VERIFIED",
+                        "source": "controlled heating exposure fixture",
+                        "confirmed_by": "test engineer",
+                        "confirmed_at": "2026-08-25",
+                        "version": "1",
+                    },
                     "force_convention": {
                         "source_system": "LIRA CSV",
                         "target_system": "RX3",

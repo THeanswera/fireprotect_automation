@@ -181,6 +181,23 @@ def test_empty_mapping_is_a_binary_copy(tmp_path: Path) -> None:
     assert result.written_cells == ()
 
 
+def test_no_overwrite_finalization_falls_back_when_hard_links_are_unsupported(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    source = tmp_path / "template.xlsx"
+    output = tmp_path / "result.xlsx"
+    _make_workbook(source)
+
+    def hard_link_unsupported(*args: object, **kwargs: object) -> None:
+        raise OSError("synthetic filesystem without hard links")
+
+    monkeypatch.setattr("fireprotect.files.os.link", hard_link_unsupported)
+    result = write_mapped_copy(source, output, WorkbookMapping())
+
+    assert output.exists()
+    assert file_sha256(output) == file_sha256(source) == result.source_sha256
+
+
 def test_rejects_source_as_output_and_existing_output(tmp_path: Path) -> None:
     source = tmp_path / "template.xlsx"
     existing = tmp_path / "existing.xlsx"

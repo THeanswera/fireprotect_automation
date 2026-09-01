@@ -1,5 +1,16 @@
 # Changelog
 
+Pre-experiment hardening in version 0.5.0:
+
+- typed release evidence replaces boolean gate self-certification; heating
+  exposure and steel temperature profiles fail closed in VALIDATION/PRODUCTION;
+- LIRA XLSX numeric cells are read from exact OOXML tokens;
+- Excel production templates are selected by trusted `template_id` and checked
+  against formula and lookup-table fingerprints linked to technical-data
+  versions;
+- RX38/XLSX no-overwrite finalization has an exclusive-create fallback for
+  filesystems without hard-link support.
+
 ## 0.5.0 — 2026-08-25
 
 - Добавлены execution modes `DRAFT`, `VALIDATION`, `PRODUCTION` и центральный

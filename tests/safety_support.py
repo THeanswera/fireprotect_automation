@@ -19,6 +19,7 @@ from fireprotect.rx3.safety import (
     ActionZeroTolerance,
     EvidenceStatus,
     ForceConventionStatus,
+    HeatingExposureEvidence,
     LiraRx3ForceConvention,
     Rx3SafetyContext,
     Rx3TemplateEvidence,
@@ -142,6 +143,7 @@ def safety_context(
     controlled_experiment: bool = False,
     allow_unverified_force_convention: bool = False,
     steel_properties: SteelCalculationProperties | None = None,
+    with_heating_evidence: bool = True,
 ) -> Rx3SafetyContext:
     return Rx3SafetyContext(
         mode,
@@ -153,6 +155,20 @@ def safety_context(
         steel_properties,
         controlled_experiment,
         allow_unverified_force_convention,
+        (
+            HeatingExposureEvidence(
+                project_element_id="E1",
+                heating_sides=4,
+                template_record_sha256=rx38_record_fingerprint(make_record()),
+                status=EvidenceStatus.VERIFIED,
+                source="controlled heating exposure fixture",
+                confirmed_by="test engineer",
+                confirmed_at=date(2026, 8, 25),
+                version="1",
+            )
+            if with_heating_evidence
+            else None
+        ),
     )
 
 
@@ -166,13 +182,19 @@ def verified_steel_properties() -> SteelCalculationProperties:
         thickness_max=None,
         elastic_modulus=Quantity.of("206", Unit.GIGAPASCAL),
         density=Quantity.of("7850", Unit.KILOGRAM_PER_CUBIC_METER),
-        temperature_model="EN 1993-1-2 test profile",
+        temperature_model="EN 1993-1-2",
         source_document="controlled steel mapping protocol",
         clause_or_table="RX3-STEEL-01",
         material_standard="test standard",
         confidence=EvidenceStatus.VERIFIED,
         provenance="controlled experiment",
         rx3_strength_mapping_verified=True,
+        temperature_model_code=1,
+        thermal_coefficients={
+            82: Decimal("25"),
+            83: Decimal("1"),
+            84: Decimal("1"),
+        },
     )
 
 

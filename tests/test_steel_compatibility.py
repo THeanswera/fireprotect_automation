@@ -52,7 +52,8 @@ def test_verified_steel_mapping_allows_coherent_write_values():
     )
     assert report.status is SteelCompatibilityStatus.VERIFIED
     assert report.write_values == {33: "245", 42: "S245"}
-    assert report.evidence["temperature_model"] == "EN 1993-1-2 test profile"
+    assert report.evidence["temperature_model"] == "EN 1993-1-2"
+    assert report.evidence["temperature_profile_verified"] is True
 
 
 def test_verified_profile_must_match_project_design_strength():
@@ -79,6 +80,31 @@ def test_verified_mapping_rejects_negative_stored_strength():
             verified_steel_properties(),
             rx3_stored_strength_parameter=Quantity.of("-1", Unit.MEGAPASCAL),
         )
+
+
+def test_production_blocks_when_steel_temperature_evidence_is_incomplete():
+    properties = replace(
+        verified_steel_properties(),
+        temperature_model_code=None,
+        thermal_coefficients=None,
+    )
+    with pytest.raises(SteelCompatibilityError, match="Production requires"):
+        project_element_to_rx38_record(
+            make_element(),
+            make_record(),
+            safety_context=safety_context(
+                ExecutionMode.PRODUCTION,
+                steel_properties=properties,
+            ),
+        )
+
+
+def test_verified_temperature_model_mismatch_is_blocked():
+    properties = replace(
+        verified_steel_properties(), temperature_model="different model"
+    )
+    with pytest.raises(SteelCompatibilityError, match="temperature model differs"):
+        evaluate_steel_compatibility(make_element(), make_record(), properties)
 
 
 def test_verified_mapping_flag_must_be_a_real_bool():

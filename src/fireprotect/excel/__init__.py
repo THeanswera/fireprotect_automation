@@ -8,6 +8,15 @@ from .mapping import (
     resolve_field,
 )
 from .project import write_project_elements_copy
+from .registry import (
+    ExcelTemplateEntry,
+    ExcelTemplateRegistry,
+    ExcelTemplateRegistryError,
+    ExcelTemplateStatus,
+    ExcelTemplateVerification,
+    formula_map_fingerprint,
+    verify_excel_template,
+)
 from .obm import (
     ExcelCellChange,
     ObmWorkbookExportError,
@@ -31,6 +40,11 @@ __all__ = [
     "CopyOnlyViolationError",
     "ExcelCopyResult",
     "ExcelExportError",
+    "ExcelTemplateEntry",
+    "ExcelTemplateRegistry",
+    "ExcelTemplateRegistryError",
+    "ExcelTemplateStatus",
+    "ExcelTemplateVerification",
     "FieldResolver",
     "ExcelCellChange",
     "FormulaOverwriteError",
@@ -40,8 +54,10 @@ __all__ = [
     "WorkbookMapping",
     "WorkbookMappingError",
     "file_sha256",
+    "formula_map_fingerprint",
     "export_obm_workbook",
     "resolve_field",
     "write_mapped_copy",
     "write_project_elements_copy",
+    "verify_excel_template",
 ]

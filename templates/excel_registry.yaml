@@ -1,0 +1,20 @@
+schema_version: 1
+policy: >-
+  A run selects only template_id. Approval, workbook identity, formula map and
+  lookup-table content are trusted only from this reviewed registry.
+templates:
+  - template_id: OBM_WORKBOOK_UNVERIFIED
+    sha256: 20e164da4d43d05510e76474fdc8c566dff9e585332b4032f6efca039a022360
+    workbook_identity: "01_Общая ОБМ — копия.xlsx"
+    workbook_version: "workspace-snapshot-2026-08-25"
+    expected_formula_count: 579
+    formula_map_sha256: a6d817ce1cf663c9aad2a35eb70bdad524b511656cbf7ee30d5ce57b375a15ae
+    status: UNVERIFIED
+    approved_by: null
+    approved_at: null
+    technical_data_entry_id: OBM_EXCEL_TABLES_UNVERIFIED
+    technical_data_version: "1"
+    lookup_sheets:
+      - "Толщина ОЗ"
+      - "Расход ОЗ"
+    lookup_table_sha256: 1e2f1bb9072ced6c4c07bd1a7840d348be7105c03a902541f0f51fab43d49a2a

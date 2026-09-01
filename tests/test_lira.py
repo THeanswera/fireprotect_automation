@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import builtins
 from decimal import Decimal
 from pathlib import Path
 
@@ -11,7 +10,6 @@ from fireprotect.lira import (
     ForceUnits,
     HtmlTableSource,
     LiraColumnMapping,
-    LiraDependencyError,
     LiraForceImporter,
     LiraFormatError,
     LiraMappingError,
@@ -131,20 +129,30 @@ def test_xlsx_import_is_optional_and_uses_selected_sheet(tmp_path: Path) -> None
         ).read_rows()
 
 
-def test_xlsx_reports_clear_error_when_openpyxl_is_unavailable(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+def test_xlsx_numeric_cells_are_imported_from_exact_ooxml_tokens(
+    tmp_path: Path,
 ) -> None:
-    original_import = builtins.__import__
+    openpyxl = pytest.importorskip("openpyxl")
+    source = tmp_path / "numeric-forces.xlsx"
+    workbook = openpyxl.Workbook()
+    worksheet = workbook.active
+    worksheet.title = "Bar forces"
+    worksheet.append(list(HEADERS.values()))
+    worksheet.append(
+        [17, "30K1", "LC-2", "ULS-7", -125.5, 12.25, -320, 750, 2]
+    )
+    workbook.save(source)
+    workbook.close()
 
-    def reject_openpyxl(name: str, *args: object, **kwargs: object) -> object:
-        if name == "openpyxl":
-            raise ImportError("synthetic missing dependency")
-        return original_import(name, *args, **kwargs)
+    raw_rows = XlsxTableSource(source, sheet_name="Bar forces").read_rows()
+    assert raw_rows[0].values["Axial"] == "-125.5"
+    assert raw_rows[0].values["Bending A"] == "12.25"
 
-    monkeypatch.setattr(builtins, "__import__", reject_openpyxl)
-
-    with pytest.raises(LiraDependencyError, match="pip install openpyxl"):
-        XlsxTableSource(tmp_path / "unused.xlsx").read_rows()
+    result = LiraForceImporter(mapping()).import_source(
+        XlsxTableSource(source, sheet_name="Bar forces")
+    )
+    assert result[0].source.N == Decimal("-125.5")
+    assert result[0].source.Mx == Decimal("12.25")
 
 
 def test_mapping_is_mandatory_complete_and_units_are_dimension_checked() -> None:

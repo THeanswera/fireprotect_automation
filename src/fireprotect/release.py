@@ -1,10 +1,24 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import date
 from enum import Enum
-from typing import Any, Mapping
+from typing import TYPE_CHECKING, Any, Mapping
 
 from .execution import ExecutionMode
+
+if TYPE_CHECKING:
+    from .excel.registry import ExcelTemplateVerification
+    from .model import ProjectElement
+    from .normative import NormativeValidation
+    from .rx3.gui_validation import Rx3ValidationReport
+    from .rx3.safety import (
+        HeatingExposureVerification,
+        LiraRx3ForceConvention,
+        Rx3CalculationProfile,
+        SteelCompatibilityReport,
+    )
+    from .technical import FireproofingTechnicalEntry
 
 
 class IssueReadinessStatus(str, Enum):
@@ -35,6 +49,9 @@ class BlockerCode(str, Enum):
     RX3_GUI_RECALCULATION_UNVERIFIED = "RX3_GUI_RECALCULATION_UNVERIFIED"
     EXCEL_RECALCULATION_REQUIRED = "EXCEL_RECALCULATION_REQUIRED"
     EXCEL_TEMPLATE_UNVERIFIED = "EXCEL_TEMPLATE_UNVERIFIED"
+    EXCEL_LOOKUP_TABLE_MISMATCH = "EXCEL_LOOKUP_TABLE_MISMATCH"
+    HEATING_EXPOSURE_UNVERIFIED = "HEATING_EXPOSURE_UNVERIFIED"
+    STEEL_TEMPERATURE_MODEL_UNVERIFIED = "STEEL_TEMPERATURE_MODEL_UNVERIFIED"
     PRODUCTION_GATE_EVIDENCE_MISSING = "PRODUCTION_GATE_EVIDENCE_MISSING"
 
 
@@ -44,6 +61,7 @@ REQUIRED_PRODUCTION_GATES = frozenset(
         "force_convention",
         "steel_compatibility",
         "rx3_template_profile",
+        "heating_exposure",
         "normative_trace",
         "fireproofing_technical_data",
         "rx3_recalculation",
@@ -64,6 +82,100 @@ class ReleaseBlocker:
             "code": self.code.value,
             "message": self.message,
             "element_id": self.element_id,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class TechnicalProductionEvidence:
+    entry: "FireproofingTechnicalEntry"
+    calculation_date: date
+
+
+@dataclass(frozen=True, slots=True)
+class ProductionEvidence:
+    """Typed artifacts from which release gates are derived fail-closed."""
+
+    action_elements: tuple["ProjectElement", ...] = ()
+    force_conventions: tuple["LiraRx3ForceConvention", ...] = ()
+    steel_compatibility: tuple["SteelCompatibilityReport", ...] = ()
+    rx3_template_profiles: tuple["Rx3CalculationProfile", ...] = ()
+    heating_exposures: tuple["HeatingExposureVerification", ...] = ()
+    normative_validations: tuple["NormativeValidation", ...] = ()
+    technical_data: tuple[TechnicalProductionEvidence, ...] = ()
+    rx3_validations: tuple["Rx3ValidationReport", ...] = ()
+    excel_templates: tuple["ExcelTemplateVerification", ...] = ()
+
+    def verified_gates(self) -> dict[str, bool]:
+        from .excel.registry import ExcelTemplateVerification
+        from .model import ProjectElement, Quantity
+        from .normative import NormativeValidation
+        from .rx3.gui_validation import Rx3ValidationReport
+        from .rx3.safety import (
+            HeatingExposureVerification,
+            LiraRx3ForceConvention,
+            Rx3CalculationProfile,
+            SteelCompatibilityReport,
+        )
+        from .technical import FireproofingTechnicalEntry
+
+        def complete(items: tuple[object, ...], kind: type[object]) -> bool:
+            return bool(items) and all(isinstance(item, kind) for item in items)
+
+        element_count = len(self.action_elements)
+
+        def complete_for_elements(
+            items: tuple[object, ...], kind: type[object]
+        ) -> bool:
+            return len(items) == element_count and complete(items, kind)
+
+        actions_valid = complete(self.action_elements, ProjectElement) and all(
+            all(
+                isinstance(getattr(element, component), Quantity)
+                and getattr(element, component).si_value == 0
+                for component in ("Mx", "My", "Qx", "Qy")
+            )
+            for element in self.action_elements
+        )
+        force_valid = complete_for_elements(
+            self.force_conventions, LiraRx3ForceConvention
+        ) and all(item.verified for item in self.force_conventions)
+        steel_valid = complete_for_elements(
+            self.steel_compatibility, SteelCompatibilityReport
+        ) and all(item.verified for item in self.steel_compatibility)
+        profiles_valid = complete_for_elements(
+            self.rx3_template_profiles, Rx3CalculationProfile
+        ) and all(item.production_verified for item in self.rx3_template_profiles)
+        heating_valid = complete_for_elements(
+            self.heating_exposures, HeatingExposureVerification
+        ) and all(item.verified for item in self.heating_exposures)
+        normative_valid = complete_for_elements(
+            self.normative_validations, NormativeValidation
+        ) and all(item.valid_for_production for item in self.normative_validations)
+        technical_valid = bool(self.technical_data) and all(
+            isinstance(item, TechnicalProductionEvidence)
+            and isinstance(item.entry, FireproofingTechnicalEntry)
+            and item.entry.verified_for_production_on(item.calculation_date)
+            for item in self.technical_data
+        )
+        rx3_valid = complete_for_elements(
+            self.rx3_validations, Rx3ValidationReport
+        ) and all(item.verified_for_production for item in self.rx3_validations)
+        excel_template_valid = complete(
+            self.excel_templates, ExcelTemplateVerification
+        ) and all(item.verified for item in self.excel_templates)
+        return {
+            "rx3_action_mapping": actions_valid,
+            "force_convention": force_valid,
+            "steel_compatibility": steel_valid,
+            "rx3_template_profile": profiles_valid,
+            "heating_exposure": heating_valid,
+            "normative_trace": normative_valid,
+            "fireproofing_technical_data": technical_valid,
+            "rx3_recalculation": rx3_valid,
+            "excel_template": excel_template_valid,
+            # Excel recalculation remains an explicitly open production blocker;
+            # no run-config or hash-only evidence type is accepted yet.
+            "excel_recalculation": False,
         }
 
 
@@ -89,6 +201,7 @@ def evaluate_issue_readiness(
     blockers: tuple[ReleaseBlocker, ...] = (),
     warnings: tuple[str, ...] = (),
     evidence: Mapping[str, Any] | None = None,
+    production_evidence: ProductionEvidence | None = None,
 ) -> IssueReadiness:
     """Return the issue status without converting missing proof to a warning."""
 
@@ -105,16 +218,15 @@ def evaluate_issue_readiness(
             ),
         )
     else:
-        raw_gates = evidence_payload.get("production_gates")
-        verified_gates = (
-            {
-                str(name)
-                for name, value in raw_gates.items()
-                if value is True
-            }
-            if isinstance(raw_gates, Mapping)
-            else set()
+        verified_state = (
+            production_evidence.verified_gates()
+            if isinstance(production_evidence, ProductionEvidence)
+            else {gate: False for gate in REQUIRED_PRODUCTION_GATES}
         )
+        evidence_payload["production_gate_evidence"] = verified_state
+        verified_gates = {
+            gate for gate, verified in verified_state.items() if verified
+        }
         missing_gates = sorted(REQUIRED_PRODUCTION_GATES - verified_gates)
         if missing_gates:
             collected.append(
@@ -122,6 +234,28 @@ def evaluate_issue_readiness(
                     BlockerCode.PRODUCTION_GATE_EVIDENCE_MISSING,
                     "Required production gates lack positive evidence: "
                     + ", ".join(missing_gates),
+                )
+            )
+        existing_codes = {blocker.code for blocker in collected}
+        if (
+            "heating_exposure" in missing_gates
+            and BlockerCode.HEATING_EXPOSURE_UNVERIFIED not in existing_codes
+        ):
+            collected.append(
+                ReleaseBlocker(
+                    BlockerCode.HEATING_EXPOSURE_UNVERIFIED,
+                    "Heating exposure is not bound to each ProjectElement and exact RX38 template record",
+                )
+            )
+        if (
+            "steel_compatibility" in missing_gates
+            and BlockerCode.STEEL_TEMPERATURE_MODEL_UNVERIFIED
+            not in existing_codes
+        ):
+            collected.append(
+                ReleaseBlocker(
+                    BlockerCode.STEEL_TEMPERATURE_MODEL_UNVERIFIED,
+                    "Steel temperature model and thermal coefficients lack verified template compatibility",
                 )
             )
     status = (

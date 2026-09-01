@@ -8,7 +8,8 @@ from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any, Sequence
 
-from .errors import LiraDependencyError, LiraFormatError
+from ..excel.ooxml import OoxmlReadError, worksheet_matrix
+from .errors import LiraFormatError
 from .types import RawTableRow
 
 
@@ -156,13 +157,6 @@ class XlsxTableSource:
             raise LiraFormatError("XLSX header_row must be one-based")
         if not isinstance(self.data_only, bool):
             raise LiraFormatError("XLSX data_only must be bool")
-        try:
-            from openpyxl import load_workbook
-        except ImportError as exc:  # pragma: no cover - depends on test environment
-            raise LiraDependencyError(
-                "XLSX import requires the optional dependency 'openpyxl'; "
-                "install it with: pip install openpyxl"
-            ) from exc
         if (
             self.sheet_name is None
             or not isinstance(self.sheet_name, str)
@@ -170,25 +164,17 @@ class XlsxTableSource:
         ):
             raise LiraFormatError("XLSX import requires an explicit sheet_name")
 
-        workbook = load_workbook(
-            filename=Path(self.path), read_only=True, data_only=self.data_only
-        )
         try:
-            if self.sheet_name in workbook.sheetnames:
-                worksheet = workbook[self.sheet_name]
-            else:
-                raise LiraFormatError(
-                    f"{self.path}: worksheet {self.sheet_name!r} does not exist"
-                )
-            if worksheet is None:
-                raise LiraFormatError(f"{self.path}: workbook has no active worksheet")
-            matrix = [list(row) for row in worksheet.iter_rows(values_only=True)]
-            worksheet_title = worksheet.title
-        finally:
-            workbook.close()
+            matrix = worksheet_matrix(
+                self.path,
+                self.sheet_name,
+                data_only=self.data_only,
+            )
+        except OoxmlReadError as exc:
+            raise LiraFormatError(f"{self.path}: {exc}") from exc
         return _rows_from_matrix(
             matrix,
             header_index=self.header_row - 1,
-            source=f"{self.path}:{worksheet_title}",
-            sheet=worksheet_title,
+            source=f"{self.path}:{self.sheet_name}",
+            sheet=self.sheet_name,
         )

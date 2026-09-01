@@ -17,6 +17,7 @@ from ..project_io import read_project_element_json
 from .diff import diff_records
 from .parser import construction_records, read_rx38
 from .project_adapter import create_rx38_from_project_element
+from .project_adapter import Rx38CreationReport
 from .result import rx38_record_to_rx3_result
 from .safety import GuiExecutionEvidence, Rx3SafetyContext
 from .schema import field_spec
@@ -37,6 +38,7 @@ class Rx3ValidationBundle:
     diff_json: Path
     diff_markdown: Path
     instructions: Path
+    creation: Rx38CreationReport
 
 
 @dataclass(frozen=True, slots=True)
@@ -44,6 +46,24 @@ class Rx3ValidationReport:
     data: dict[str, Any]
     json_path: Path
     markdown_path: Path
+
+    @property
+    def verified_for_production(self) -> bool:
+        after = self.data.get("after")
+        if not isinstance(after, dict):
+            return False
+        path_value = after.get("path")
+        expected_hash = after.get("sha256")
+        if not isinstance(path_value, str) or not isinstance(expected_hash, str):
+            return False
+        path = Path(path_value)
+        return (
+            self.data.get("execution_mode") == ExecutionMode.PRODUCTION.value
+            and self.data.get("status") == "RX3_RESULT_ANALYSED"
+            and self.data.get("gui_recalculation_verified") is True
+            and path.is_file()
+            and _sha256(path) == expected_hash
+        )
 
 
 def _sha256(path: Path) -> str:
@@ -169,6 +189,7 @@ def prepare_rx3_validation(
         "safety_mode": creation.safety_mode,
         "steel_compatibility": creation.steel_compatibility,
         "template_profile": creation.template_profile,
+        "heating_exposure": creation.heating_exposure,
         "stale_template_result_indices": list(
             creation.stale_template_result_indices
         ),
@@ -202,6 +223,11 @@ def prepare_rx3_validation(
    `python -m fireprotect.cli validate-rx3-result generated.rx38 calculated.rx38 --gui-evidence ENGINEER_CONFIRMED --evidence-reference EVIDENCE-ID`
 
 9. Передайте `calculated.rx38`, evidence, `rx3_result.json`, `rx3_validation_report.json` и `rx3_validation_report.md` обратно в проект.
+10. Before any VALIDATION/PRODUCTION generation, verify that typed
+    `heating_exposure` evidence names this ProjectElement, records the same
+    `heating_sides`, and is bound to the SHA-256 of the exact template Tconstr.
+    `heated_perimeter` alone is not RX3 heating-side evidence; RX38 heating-side
+    indices remain unmapped.
 """,
     )
     return Rx3ValidationBundle(
@@ -214,6 +240,7 @@ def prepare_rx3_validation(
         diff_json,
         diff_markdown,
         instructions,
+        creation,
     )
 
 

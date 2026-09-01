@@ -25,6 +25,7 @@ class TechnicalDataStatus(str, Enum):
 @dataclass(frozen=True, slots=True)
 class FireproofingTechnicalEntry:
     entry_id: str
+    version: str
     manufacturer: str | None
     system_name: str | None
     product_name: str | None
@@ -64,6 +65,7 @@ class FireproofingTechnicalEntry:
             self.applicability_document,
         )
         required = (
+            self.version,
             self.manufacturer,
             self.product_name or self.system_name,
             self.source_document,
@@ -164,6 +166,7 @@ class FireproofingTechnicalRegistry:
 
             entries[entry_id] = FireproofingTechnicalEntry(
                 entry_id,
+                optional("version") or "",
                 optional("manufacturer"),
                 optional("system_name"),
                 optional("product_name"),

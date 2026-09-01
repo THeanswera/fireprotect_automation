@@ -28,6 +28,7 @@ def write_technical_registry(
         f"""schema_version: 1
 solutions:
   - id: TEST_SYSTEM
+    version: "1"
     manufacturer: Test Manufacturer
     system_name: Test System
     product_name: Test Product

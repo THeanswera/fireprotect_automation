@@ -63,6 +63,18 @@ python -m mypy src
 
 ## CLI
 
+Safety-hardening notes:
+
+- numeric LIRA XLSX cells are read from exact OOXML decimal tokens before any
+  binary-float conversion;
+- VALIDATION/PRODUCTION require typed heating exposure bound to the exact
+  ProjectElement and template Tconstr fingerprint;
+- steel production compatibility covers RX38 fields 82/83/84/188/189;
+- Excel production runs select only `template_id`; approval, formula-map and
+  lookup-table fingerprints come from `templates/excel_registry.yaml`;
+- RX38/XLSX no-overwrite finalization falls back to exclusive-create copying on
+  filesystems without hard-link support.
+
 ```powershell
 python tools/rx38_diff.py diff FILE_A.rx38 FILE_B.rx38 --left-mark "К1" --right-mark "К1"
 python tools/rx38_diff.py group-by-profile ..\rx3\*.rx38 --profile "30 К1"
@@ -92,7 +104,8 @@ JSON для `rx38-create` обязан явно перечислять все п
 - [нормативная прослеживаемость](normative/traceability.md);
 - [модель безопасности](docs/SAFETY_MODEL.md);
 - [controlled experiments RX3](docs/RX3_CONTROLLED_EXPERIMENTS.md);
-- [production release gate](docs/PRODUCTION_RELEASE_GATE.md).
+- [production release gate](docs/PRODUCTION_RELEASE_GATE.md);
+- [RX3 validation evidence](README_VALIDATION.md).
 
 ## Непубликуемые исходные данные
 

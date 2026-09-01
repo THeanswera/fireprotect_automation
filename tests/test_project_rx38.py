@@ -224,3 +224,21 @@ def test_creation_never_overwrites_template_or_existing_output(template_rx38, tm
             _element(), template_rx38, existing, template_mark="К1"
         )
     assert existing.read_text(encoding="utf-8") == "do not replace"
+
+
+def test_rx38_finalization_falls_back_when_hard_links_are_unsupported(
+    monkeypatch, template_rx38, tmp_path
+):
+    def hard_link_unsupported(*args, **kwargs):
+        raise OSError("synthetic filesystem without hard links")
+
+    monkeypatch.setattr("fireprotect.files.os.link", hard_link_unsupported)
+    output = tmp_path / "fallback.rx38"
+    report = create_rx38_from_project_element(
+        _element(),
+        template_rx38,
+        output,
+        safety_context=_safety_context(),
+    )
+    assert output.exists()
+    assert report.round_trip_valid

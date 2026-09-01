@@ -35,6 +35,10 @@ class TemplateProfileError(Rx3SafetyError):
     pass
 
 
+class HeatingExposureError(Rx3SafetyError):
+    pass
+
+
 class EvidenceStatus(str, Enum):
     UNVERIFIED = "UNVERIFIED"
     ENGINEER_CONFIRMED = "ENGINEER_CONFIRMED"
@@ -52,6 +56,9 @@ class ForceConventionStatus(str, Enum):
 
 class SteelCompatibilityStatus(str, Enum):
     VERIFIED = "VERIFIED"
+    STRENGTH_VERIFIED_TEMPERATURE_UNVERIFIED = (
+        "STRENGTH_VERIFIED_TEMPERATURE_UNVERIFIED"
+    )
     LEGACY_NUMERIC_MATCH = "LEGACY_NUMERIC_MATCH"
     INCOMPATIBLE = "INCOMPATIBLE"
 
@@ -209,6 +216,135 @@ class Rx3TemplateEvidence:
 
 
 @dataclass(frozen=True, slots=True)
+class HeatingExposureEvidence:
+    project_element_id: str
+    heating_sides: int
+    template_record_sha256: str
+    status: EvidenceStatus
+    source: str
+    confirmed_by: str | None
+    confirmed_at: date | None
+    version: str | None
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.project_element_id, str) or not self.project_element_id.strip():
+            raise ValueError("project_element_id must not be empty")
+        if isinstance(self.heating_sides, bool) or not isinstance(self.heating_sides, int):
+            raise TypeError("heating_sides must be int")
+        if self.heating_sides < 1 or self.heating_sides > 4:
+            raise ValueError("heating_sides must be between 1 and 4")
+        if not isinstance(self.status, EvidenceStatus):
+            object.__setattr__(self, "status", EvidenceStatus(self.status))
+        if not isinstance(self.source, str) or not self.source.strip():
+            raise ValueError("HeatingExposureEvidence.source must not be empty")
+        if not isinstance(self.template_record_sha256, str):
+            raise TypeError("template_record_sha256 must be str")
+        fingerprint = self.template_record_sha256.lower()
+        if len(fingerprint) != 64 or any(
+            char not in "0123456789abcdef" for char in fingerprint
+        ):
+            raise ValueError("template_record_sha256 must be a SHA-256 hex digest")
+        object.__setattr__(self, "template_record_sha256", fingerprint)
+        if self.confirmed_at is not None and not isinstance(self.confirmed_at, date):
+            raise TypeError("confirmed_at must be date or None")
+        if self.status is EvidenceStatus.VERIFIED and (
+            not isinstance(self.confirmed_by, str)
+            or not self.confirmed_by.strip()
+            or self.confirmed_at is None
+            or not isinstance(self.version, str)
+            or not self.version.strip()
+        ):
+            raise ValueError(
+                "VERIFIED heating exposure requires engineer, date and version"
+            )
+
+    def verified_for(self, element: ProjectElement, template: Rx38Record) -> bool:
+        return (
+            self.status is EvidenceStatus.VERIFIED
+            and element.element_id == self.project_element_id
+            and element.heating_sides == self.heating_sides
+            and self.template_record_sha256 == rx38_record_fingerprint(template)
+        )
+
+    def as_dict(
+        self, *, element: ProjectElement | None = None, template: Rx38Record | None = None
+    ) -> dict[str, Any]:
+        return {
+            "status": self.status.value,
+            "source": self.source,
+            "project_element_id": self.project_element_id,
+            "heating_sides": self.heating_sides,
+            "template_record_sha256": self.template_record_sha256,
+            "confirmed_by": self.confirmed_by,
+            "confirmed_at": self.confirmed_at.isoformat() if self.confirmed_at else None,
+            "version": self.version,
+            "verified_for_generation": (
+                self.verified_for(element, template)
+                if element is not None and template is not None
+                else False
+            ),
+            "rx38_heating_side_indices": "UNMAPPED",
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class HeatingExposureVerification:
+    evidence: HeatingExposureEvidence | None
+    project_element_id: str
+    actual_heating_sides: int | None
+    actual_template_record_sha256: str
+
+    @classmethod
+    def evaluate(
+        cls,
+        evidence: HeatingExposureEvidence | None,
+        element: ProjectElement,
+        template: Rx38Record,
+    ) -> "HeatingExposureVerification":
+        return cls(
+            evidence,
+            element.element_id,
+            element.heating_sides,
+            rx38_record_fingerprint(template),
+        )
+
+    @property
+    def verified(self) -> bool:
+        evidence = self.evidence
+        return (
+            evidence is not None
+            and evidence.status is EvidenceStatus.VERIFIED
+            and evidence.project_element_id == self.project_element_id
+            and evidence.heating_sides == self.actual_heating_sides
+            and evidence.template_record_sha256
+            == self.actual_template_record_sha256
+        )
+
+    def as_dict(self) -> dict[str, Any]:
+        payload: dict[str, Any] = (
+            {
+                "status": "NOT_PROVIDED",
+                "source": None,
+                "confirmed_by": None,
+                "confirmed_at": None,
+                "version": None,
+            }
+            if self.evidence is None
+            else self.evidence.as_dict()
+        )
+        payload.update(
+            {
+                "project_element_id": self.project_element_id,
+                "actual_heating_sides": self.actual_heating_sides,
+                "actual_template_record_sha256": self.actual_template_record_sha256,
+                "verified_for_generation": self.verified,
+                "rx38_heating_side_indices": "UNMAPPED",
+            }
+        )
+        return payload
+
+
+@dataclass(frozen=True, slots=True)
 class LiraRx3ForceConvention:
     source_system: str
     target_system: str
@@ -312,6 +448,8 @@ class SteelCalculationProperties:
     confidence: EvidenceStatus
     provenance: str
     rx3_strength_mapping_verified: bool
+    temperature_model_code: int | None = None
+    thermal_coefficients: Mapping[int, Decimal] | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.steel_grade, str) or not self.steel_grade.strip():
@@ -365,6 +503,24 @@ class SteelCalculationProperties:
             or not self.temperature_model.strip()
         ):
             raise ValueError("temperature_model must be non-empty when provided")
+        if self.temperature_model_code is not None and (
+            isinstance(self.temperature_model_code, bool)
+            or not isinstance(self.temperature_model_code, int)
+        ):
+            raise TypeError("temperature_model_code must be int or None")
+        if self.thermal_coefficients is not None:
+            raw_coefficients = dict(self.thermal_coefficients)
+            if set(raw_coefficients) != {82, 83, 84}:
+                raise ValueError(
+                    "thermal_coefficients must contain exact RX38 indices 82, 83 and 84"
+                )
+            coefficients = {
+                index: _decimal(value, name=f"thermal_coefficients[{index}]")
+                for index, value in raw_coefficients.items()
+            }
+            object.__setattr__(
+                self, "thermal_coefficients", MappingProxyType(coefficients)
+            )
         if self.rx3_strength_mapping_verified and (
             self.confidence is not EvidenceStatus.VERIFIED
             or self.rx3_stored_strength_parameter is None
@@ -490,12 +646,59 @@ def evaluate_steel_compatibility(
             33: format(stored.to(Unit.MEGAPASCAL).value, "f").replace(".", ","),
             42: project_grade,
         }
+        expected_temperature_model = properties.temperature_model
+        expected_temperature_model_code = properties.temperature_model_code
+        expected_thermal_coefficients = properties.thermal_coefficients
+        temperature_evidence_complete = (
+            expected_temperature_model is not None
+            and expected_temperature_model_code is not None
+            and expected_thermal_coefficients is not None
+        )
+        temperature_profile_verified = False
+        if temperature_evidence_complete:
+            expected_coefficients = expected_thermal_coefficients
+            if (
+                expected_coefficients is None
+                or expected_temperature_model is None
+                or expected_temperature_model_code is None
+            ):  # pragma: no cover - narrowed above
+                raise AssertionError("thermal coefficient narrowing failed")
+            if template.fields[188] != expected_temperature_model:
+                blockers.append(
+                    "RX38 steel temperature model differs from verified steel evidence"
+                )
+            if _record_decimal(template, 189) != Decimal(
+                expected_temperature_model_code
+            ):
+                blockers.append(
+                    "RX38 steel temperature model code differs from verified steel evidence"
+                )
+            for index, expected in expected_coefficients.items():
+                if _record_decimal(template, index) != expected:
+                    blockers.append(
+                        f"RX38 thermal coefficient field {index} differs from verified steel evidence"
+                    )
+            temperature_profile_verified = not blockers
+        else:
+            warnings.append(
+                "STEEL_TEMPERATURE_MODEL_UNVERIFIED: evidence does not bind RX38 fields 82/83/84/188/189"
+            )
         evidence = {
             "mapping": "VERIFIED_TYPED_STEEL_PROPERTIES",
             "source_document": properties.source_document,
             "clause_or_table": properties.clause_or_table,
             "material_standard": properties.material_standard,
             "temperature_model": properties.temperature_model,
+            "temperature_model_code": properties.temperature_model_code,
+            "thermal_coefficients": (
+                None
+                if properties.thermal_coefficients is None
+                else {
+                    str(index): str(value)
+                    for index, value in properties.thermal_coefficients.items()
+                }
+            ),
+            "temperature_profile_verified": temperature_profile_verified,
             "confidence": properties.confidence.value,
             "provenance": properties.provenance,
         }
@@ -503,6 +706,8 @@ def evaluate_steel_compatibility(
             SteelCompatibilityStatus.INCOMPATIBLE
             if blockers
             else SteelCompatibilityStatus.VERIFIED
+            if temperature_profile_verified
+            else SteelCompatibilityStatus.STRENGTH_VERIFIED_TEMPERATURE_UNVERIFIED
         )
 
     if blockers:
@@ -554,6 +759,7 @@ class Rx3SafetyContext:
     steel_properties: SteelCalculationProperties | None
     controlled_experiment: bool = False
     allow_unverified_force_convention: bool = False
+    heating_exposure: HeatingExposureEvidence | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.mode, ExecutionMode):
@@ -576,6 +782,12 @@ class Rx3SafetyContext:
             raise TypeError("controlled_experiment must be bool")
         if not isinstance(self.allow_unverified_force_convention, bool):
             raise TypeError("allow_unverified_force_convention must be bool")
+        if self.heating_exposure is not None and not isinstance(
+            self.heating_exposure, HeatingExposureEvidence
+        ):
+            raise TypeError(
+                "heating_exposure must be HeatingExposureEvidence or None"
+            )
         if self.mode is ExecutionMode.PRODUCTION and (
             self.action_zero_tolerance.force.si_value != 0
             or self.action_zero_tolerance.moment.si_value != 0
@@ -712,6 +924,7 @@ class Rx3CalculationProfile:
     unknown_fingerprint: str
     unverified_calculation_settings: tuple[int, ...]
     evidence: Rx3TemplateEvidence | None
+    steel_temperature_profile_verified: bool = False
 
     @property
     def verified(self) -> bool:
@@ -723,6 +936,10 @@ class Rx3CalculationProfile:
             and self.evidence.status is EvidenceStatus.VERIFIED
         )
 
+    @property
+    def production_verified(self) -> bool:
+        return self.verified and self.steel_temperature_profile_verified
+
     def as_dict(self) -> dict[str, Any]:
         return {
             "confirmed_match": list(self.confirmed_matches),
@@ -732,6 +949,8 @@ class Rx3CalculationProfile:
             "unknown_fingerprint": self.unknown_fingerprint,
             "unverified_calculation_setting": list(self.unverified_calculation_settings),
             "verified": self.verified,
+            "production_verified": self.production_verified,
+            "steel_temperature_profile_verified": self.steel_temperature_profile_verified,
             "evidence": None if self.evidence is None else self.evidence.as_dict(),
         }
 
@@ -747,6 +966,7 @@ def evaluate_calculation_profile(
     evidence: Rx3TemplateEvidence | None,
     *,
     evidence_template: Rx38Record | None = None,
+    steel_compatibility: SteelCompatibilityReport | None = None,
 ) -> Rx3CalculationProfile:
     matches: list[int] = []
     mismatches: list[ProfileDifference] = []
@@ -789,4 +1009,5 @@ def evaluate_calculation_profile(
         fingerprint,
         unverified,
         evidence,
+        steel_compatibility is not None and steel_compatibility.verified,
     )
