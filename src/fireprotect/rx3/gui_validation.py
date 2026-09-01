@@ -54,6 +54,16 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _read_stable_construction_records(path: Path):
+    checksum = _sha256(path)
+    records = construction_records(read_rx38(path))
+    if _sha256(path) != checksum:
+        raise Rx3GuiValidationError(
+            f"RX38 changed while it was being validated: {path}"
+        )
+    return records, checksum
+
+
 def _write_new(path: Path, content: str) -> None:
     if path.exists():
         raise Rx3GuiValidationError(f"Refusing to overwrite validation artifact: {path}")
@@ -251,8 +261,8 @@ def validate_rx3_result_files(
         gui_execution_evidence = GuiExecutionEvidence(gui_execution_evidence)
     if not isinstance(mode, ExecutionMode):
         raise TypeError("mode must be ExecutionMode")
-    before = construction_records(read_rx38(before_path))
-    after = construction_records(read_rx38(after_path))
+    before, before_hash = _read_stable_construction_records(before_path)
+    after, after_hash = _read_stable_construction_records(after_path)
     if len(before) != len(after):
         raise Rx3GuiValidationError(
             f"Tconstr count changed: before={len(before)}, after={len(after)}"
@@ -304,8 +314,6 @@ def validate_rx3_result_files(
             }
         )
 
-    before_hash = _sha256(before_path)
-    after_hash = _sha256(after_path)
     byte_identical = before_hash == after_hash
     result_fields_changed = all(
         expected_output_fields.issubset(indices)

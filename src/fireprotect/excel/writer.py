@@ -150,7 +150,16 @@ def write_mapped_copy(
             )
         if output.exists() and not overwrite:
             raise CopyOnlyViolationError(f"Output workbook already exists: {output}")
-        os.replace(temp_path, output)
+        if overwrite:
+            os.replace(temp_path, output)
+        else:
+            try:
+                os.link(temp_path, output)
+            except FileExistsError as exc:
+                raise CopyOnlyViolationError(
+                    f"Output workbook already exists: {output}"
+                ) from exc
+            temp_path.unlink()
     finally:
         if temp_path.exists():
             temp_path.unlink()

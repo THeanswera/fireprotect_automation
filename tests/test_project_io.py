@@ -47,6 +47,13 @@ def test_json_boundary_rejects_bare_number():
         project_element_from_dict(payload)
 
 
+def test_json_boundary_rejects_binary_float_inside_quantity():
+    payload = _payload()
+    payload["length"] = {"value": 3.5, "unit": "m"}
+    with pytest.raises(ProjectDataError, match="binary float"):
+        project_element_from_dict(payload)
+
+
 def test_project_element_json_round_trip_preserves_units_and_provenance():
     element = project_element_from_dict(_payload())
     reparsed = project_element_from_dict(project_element_to_dict(element))

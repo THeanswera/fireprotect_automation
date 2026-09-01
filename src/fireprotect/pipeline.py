@@ -967,7 +967,18 @@ def run_pipeline(config_path: str | Path) -> PipelineRunResult:
                     raise PipelineError(
                         f"Element {element.element_id}: production requires verified GUI execution evidence"
                     )
+            validated_calculated_sha256 = str(
+                validation.data["after"]["sha256"]
+            )
+            if _hash(calculated) != validated_calculated_sha256:
+                raise PipelineError(
+                    f"Element {element.element_id}: calculated RX38 changed after GUI validation"
+                )
             result = read_rx3_result(calculated, mark=element.mark)
+            if _hash(calculated) != validated_calculated_sha256:
+                raise PipelineError(
+                    f"Element {element.element_id}: calculated RX38 changed during result import"
+                )
             completed_element = apply_rx3_result(element, result)
             completed.append(completed_element)
             rx3_results.append(result)
@@ -977,7 +988,11 @@ def run_pipeline(config_path: str | Path) -> PipelineRunResult:
                 overwrite=True,
             )
             audit["source_files"].append(
-                {"role": "calculated_rx38", "path": str(calculated), "sha256": _hash(calculated)}
+                {
+                    "role": "calculated_rx38",
+                    "path": str(calculated),
+                    "sha256": validated_calculated_sha256,
+                }
             )
             audit["rx3_results"].append(
                 {
@@ -987,7 +1002,7 @@ def run_pipeline(config_path: str | Path) -> PipelineRunResult:
             )
             element_audit["rx3_result"] = {
                 "path": str(calculated),
-                "sha256": _hash(calculated),
+                "sha256": validated_calculated_sha256,
                 "validation_status": validation.data["status"],
                 "gui_execution_evidence": validation.data[
                     "gui_execution_evidence"

@@ -3,6 +3,8 @@ from pathlib import Path
 
 import pytest
 
+import fireprotect.rx3.gui_validation as gui_validation
+
 from fireprotect.execution import ExecutionMode
 from fireprotect.rx3.gui_validation import (
     Rx3GuiValidationError,
@@ -198,6 +200,39 @@ def test_low_level_writer_cannot_overwrite_its_source(tmp_path: Path):
     with pytest.raises(UnsafeRx38WriteError, match="source RX38"):
         write_rx38(Rx38Document(document.records), source)
     assert source.read_bytes() == before
+
+
+def test_low_level_writer_cannot_overwrite_another_existing_rx38(tmp_path: Path):
+    source = tmp_path / "source.rx38"
+    destination = tmp_path / "another_source.rx38"
+    write_template(source)
+    write_template(destination)
+    document = read_rx38_document(source)
+    before = destination.read_bytes()
+
+    with pytest.raises(UnsafeRx38WriteError, match="existing RX38"):
+        write_rx38(document, destination)
+    assert destination.read_bytes() == before
+
+
+def test_validation_rejects_rx38_changed_while_reading(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    generated = tmp_path / "generated.rx38"
+    calculated = tmp_path / "calculated.rx38"
+    write_template(generated)
+    calculated.write_bytes(generated.read_bytes())
+    real_read = gui_validation.read_rx38
+
+    def changing_read(path):
+        records = real_read(path)
+        if Path(path).resolve() == calculated.resolve():
+            calculated.write_bytes(calculated.read_bytes() + b"\r\n")
+        return records
+
+    monkeypatch.setattr(gui_validation, "read_rx38", changing_read)
+    with pytest.raises(Rx3GuiValidationError, match="changed while"):
+        validate_rx3_result_files(generated, calculated)
 
 
 def test_safe_write_preserves_unknown_field_value():

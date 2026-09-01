@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from fireprotect.rx3.diff import diff_records, group_by_profile
+from fireprotect.rx3.diff import group_by_profile
 from fireprotect.rx3.parser import (
     Rx38Construction,
     UnsafeRx38WriteError,
@@ -78,22 +78,21 @@ def test_unchanged_round_trip_is_binary_identical(rx38_file, tmp_path):
     assert output.read_bytes() == rx38_file.read_bytes()
 
 
-def test_safe_writer_changes_only_selected_confirmed_position(rx38_file, tmp_path):
+def test_safe_writer_rejects_unowned_compatibility_claim(rx38_file, tmp_path):
     document = read_rx38_document(rx38_file)
     record_index = next(i for i, record in enumerate(document.records) if record.record_type == "Tconstr")
     original = document.records[record_index]
-    changed = original.with_typed_field(14, "6,25", compatibility_verified=True)
-    output = tmp_path / "changed.rx38"
-    write_rx38(document.replace_record(record_index, changed), output)
+    with pytest.raises(UnsafeRx38WriteError, match="boolean claim"):
+        original.with_typed_field(14, "6,25", compatibility_verified=True)
 
-    reparsed = read_rx38_document(output).records[record_index]
-    differences = diff_records(original, reparsed)
-    assert [(difference.index, difference.old_value, difference.new_value) for difference in differences] == [
-        (14, "3,3", "6,25")
-    ]
-    assert reparsed.fields[:14] == original.fields[:14]
-    assert reparsed.fields[15:] == original.fields[15:]
-    assert len(reparsed.fields) == 200
+    fields = list(original.fields)
+    fields[14] = "6,25"
+    changed = replace(original, fields=tuple(fields))
+    with pytest.raises(UnsafeRx38WriteError, match="14:length_m"):
+        write_rx38(
+            document.replace_record(record_index, changed),
+            tmp_path / "changed.rx38",
+        )
 
 
 def test_writer_preserves_original_quotes_and_quotes_new_text(rx38_file, tmp_path):

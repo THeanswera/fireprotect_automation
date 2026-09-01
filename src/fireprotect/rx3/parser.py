@@ -67,6 +67,11 @@ class Rx38Record:
     line_number: int | None = None
     _origin_token: object | None = field(default=None, repr=False, compare=False)
     _source_path: Path | None = field(default=None, repr=False, compare=False)
+    _authorized_compatibility_changes: frozenset[tuple[int, str]] = field(
+        default_factory=frozenset,
+        repr=False,
+        compare=False,
+    )
 
     def field(self, index: int) -> str:
         return self.fields[index]
@@ -107,10 +112,10 @@ class Rx38Record:
             )
         if (
             spec.write_policy is WritePolicy.SAFE_WITH_COMPATIBILITY_CHECK
-            and not compatibility_verified
         ):
             raise UnsafeRx38WriteError(
-                f"Field {index} ({spec.name}) requires a compatibility check"
+                f"Field {index} ({spec.name}) requires adapter-owned compatibility authorization; "
+                "a boolean claim is not accepted"
             )
         updated = list(self.fields)
         updated[index] = str(value)
@@ -147,6 +152,35 @@ class Rx38Record:
     @property
     def section_factor_1_per_m(self) -> Decimal | None:
         return _decimal(self.fields[23]) if len(self.fields) > 23 and self.record_type == "Tconstr" else None
+
+
+def _with_compatibility_checked_field(
+    record: Rx38Record,
+    index: int,
+    value: str,
+) -> Rx38Record:
+    """Apply one field after the owning adapter has completed its checks."""
+
+    if record.record_type != "Tconstr":
+        raise UnsafeRx38WriteError("Only Tconstr records may be edited")
+    spec = field_spec(index)
+    if (
+        index not in CONFIRMED_INDICES
+        or spec.write_policy is not WritePolicy.SAFE_WITH_COMPATIBILITY_CHECK
+    ):
+        raise UnsafeRx38WriteError(
+            f"Field {index} ({spec.name}) is not compatibility-authorized"
+        )
+    serialized = str(value)
+    updated = list(record.fields)
+    updated[index] = serialized
+    authorized = set(record._authorized_compatibility_changes)
+    authorized.add((index, serialized))
+    return replace(
+        record,
+        fields=tuple(updated),
+        _authorized_compatibility_changes=frozenset(authorized),
+    )
 
 
 @dataclass(frozen=True)
@@ -305,6 +339,10 @@ def write_rx38(document: Rx38Document, path: str | Path) -> None:
         source_paths.add(document.source.resolve(strict=False))
     if destination in source_paths:
         raise UnsafeRx38WriteError("Writer refuses to overwrite the source RX38")
+    if destination.exists():
+        raise UnsafeRx38WriteError(
+            f"Writer refuses to overwrite an existing RX38: {destination}"
+        )
     lines: list[str] = []
     for record in document.records:
         if record.record_type == "Tconstr" and (
@@ -331,6 +369,12 @@ def write_rx38(document: Rx38Document, path: str | Path) -> None:
                 WritePolicy.EXPERIMENTAL,
                 WritePolicy.FORBIDDEN,
             }
+            or (
+                field_spec(index).write_policy
+                is WritePolicy.SAFE_WITH_COMPATIBILITY_CHECK
+                and (index, record.fields[index])
+                not in record._authorized_compatibility_changes
+            )
         }
         if unsafe:
             names = ", ".join(
@@ -348,7 +392,13 @@ def write_rx38(document: Rx38Document, path: str | Path) -> None:
     payload = text.encode(document.encoding)
     if document.has_bom and document.encoding == "utf-8":
         payload = b"\xef\xbb\xbf" + payload
-    destination.write_bytes(payload)
+    try:
+        with destination.open("xb") as stream:
+            stream.write(payload)
+    except FileExistsError as exc:
+        raise UnsafeRx38WriteError(
+            f"Writer refuses to overwrite an existing RX38: {destination}"
+        ) from exc
 
 
 def construction_records(records: Iterable[Rx38Record]) -> list[Rx38Record]:

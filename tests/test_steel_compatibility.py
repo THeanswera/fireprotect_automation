@@ -1,4 +1,5 @@
 from dataclasses import replace
+from pathlib import Path
 
 import pytest
 
@@ -10,11 +11,17 @@ from fireprotect.rx3.safety import (
     evaluate_steel_compatibility,
 )
 from fireprotect.rx3.project_adapter import project_element_to_rx38_record
+from fireprotect.rx3.parser import (
+    UnsafeRx38WriteError,
+    read_rx38_document,
+    write_rx38,
+)
 from tests.safety_support import (
     make_element,
     make_record,
     safety_context,
     verified_steel_properties,
+    write_template,
 )
 
 
@@ -116,4 +123,27 @@ def test_template_evidence_must_match_exact_record():
             make_element(),
             make_record(),
             safety_context=replace(context, template_evidence=mismatched),
+        )
+
+
+def test_public_writer_cannot_claim_steel_grade_compatibility(tmp_path: Path):
+    template = tmp_path / "template.rx38"
+    write_template(template)
+    document = read_rx38_document(template)
+    record_index = next(
+        index
+        for index, item in enumerate(document.records)
+        if item.record_type == "Tconstr"
+    )
+    record = document.records[record_index]
+    with pytest.raises(UnsafeRx38WriteError, match="boolean claim"):
+        record.with_typed_field(42, "S355", compatibility_verified=True)
+
+    fields = list(record.fields)
+    fields[42] = "S355"
+    changed = replace(record, fields=tuple(fields))
+    with pytest.raises(UnsafeRx38WriteError, match="42:steel_grade"):
+        write_rx38(
+            document.replace_record(record_index, changed),
+            tmp_path / "unsafe.rx38",
         )

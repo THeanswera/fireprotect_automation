@@ -118,9 +118,11 @@ _SI_UNIT: Mapping[Dimension, Unit] = {
 }
 
 
-def _decimal(value: Decimal | int | float | str, *, name: str) -> Decimal:
-    if isinstance(value, bool):
-        raise TypeError(f"{name} must be numeric, not bool")
+def _decimal(value: Decimal | int | str, *, name: str) -> Decimal:
+    if isinstance(value, bool) or isinstance(value, float):
+        raise TypeError(
+            f"{name} must be Decimal, int or str, not bool or binary float"
+        )
     try:
         converted = value if isinstance(value, Decimal) else Decimal(str(value))
     except (InvalidOperation, ValueError) as exc:
@@ -146,7 +148,7 @@ class Quantity:
                 raise ValueError(f"Unknown unit: {self.unit!r}") from exc
 
     @classmethod
-    def of(cls, value: Decimal | int | float | str, unit: Unit | str) -> Quantity:
+    def of(cls, value: Decimal | int | str, unit: Unit | str) -> Quantity:
         """Explicit adapter-boundary constructor."""
 
         return cls(value=_decimal(value, name="value"), unit=Unit(unit))
@@ -512,7 +514,7 @@ class ProjectElement:
         return tuple(field.name for field in fields(cls) if field.name != "provenance")
 
 
-def quantity(value: Decimal | int | float | str, unit: Unit | str) -> Quantity:
+def quantity(value: Decimal | int | str, unit: Unit | str) -> Quantity:
     """Small explicit-unit helper useful in import adapters."""
 
     return Quantity.of(value, unit)

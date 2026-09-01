@@ -134,6 +134,8 @@ def test_project_element_carries_all_groups_and_per_value_provenance() -> None:
 def test_bare_float_is_rejected_for_physical_quantity() -> None:
     with pytest.raises(TypeError, match="explicit unit"):
         _element(area=46.52)
+    with pytest.raises(TypeError, match="binary float"):
+        Quantity.of(46.52, Unit.SQUARE_CENTIMETER)  # type: ignore[arg-type]
 
 
 def test_wrong_dimension_and_impossible_geometry_are_rejected() -> None:

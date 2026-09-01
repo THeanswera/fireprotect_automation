@@ -14,11 +14,12 @@ from .parser import (
     Rx38Construction,
     Rx38Document,
     Rx38Record,
+    _with_compatibility_checked_field,
     read_rx38_document,
     write_rx38,
 )
 from .profiles import normalize_profile_name, normalize_standard
-from .schema import TCONSTR_FIELD_COUNT, field_spec
+from .schema import TCONSTR_FIELD_COUNT, WritePolicy, field_spec
 from .safety import (
     Rx3SafetyContext,
     SteelCompatibilityError,
@@ -311,11 +312,10 @@ def _prepare_rx38_record(
 
     updated = template
     for index, value in values.items():
-        updated = updated.with_typed_field(
-            index,
-            value,
-            compatibility_verified=True,
-        )
+        if field_spec(index).write_policy is WritePolicy.SAFE_DIRECT:
+            updated = updated.with_typed_field(index, value)
+        else:
+            updated = _with_compatibility_checked_field(updated, index, value)
     profile = evaluate_calculation_profile(
         updated,
         values,
@@ -385,6 +385,7 @@ def create_rx38_from_project_element(
     )
     temporary_path = Path(handle.name)
     handle.close()
+    temporary_path.unlink()
     try:
         write_rx38(output_document, temporary_path)
         reparsed_document = read_rx38_document(temporary_path)
@@ -398,7 +399,13 @@ def create_rx38_from_project_element(
             raise Rx38ProjectAdapterError(
                 f"Output RX38 appeared during creation; refusing to overwrite it: {output_path}"
             )
-        os.replace(temporary_path, output_path)
+        try:
+            os.link(temporary_path, output_path)
+        except FileExistsError as exc:
+            raise Rx38ProjectAdapterError(
+                f"Output RX38 appeared during creation; refusing to overwrite it: {output_path}"
+            ) from exc
+        temporary_path.unlink()
     finally:
         if temporary_path.exists():
             temporary_path.unlink()
