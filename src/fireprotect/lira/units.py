@@ -1,10 +1,11 @@
-"""Explicit force and moment conversion to SI."""
+"""Explicit force and moment conversion to SI and native review units."""
 
 from __future__ import annotations
 
 from decimal import Decimal
 
 from .errors import LiraMappingError
+from .types import LIRA_NATIVE_FORCE_COMPONENTS
 
 
 _FORCE_FACTORS = {
@@ -31,8 +32,11 @@ def _normalize_unit(unit: str) -> str:
     return (
         unit.strip()
         .lower()
-        .replace("·", "*")
-        .replace("×", "*")
+        .replace("\u00b7", "*")
+        .replace("\u00d7", "*")
+        .replace("\u0442\u0441", "tf")
+        .replace("\u0442", "tf")
+        .replace("\u043c", "m")
         .replace(" ", "")
     )
 
@@ -54,3 +58,20 @@ def to_si(field: str, value: Decimal, unit: str) -> Decimal:
     normalized = _normalize_unit(unit)
     factors = _MOMENT_FACTORS if field in {"Mx", "My"} else _FORCE_FACTORS
     return value * factors[normalized]
+
+
+def validate_native_force_unit(component: str, unit: str) -> None:
+    if component not in LIRA_NATIVE_FORCE_COMPONENTS:
+        raise LiraMappingError(f"unsupported native LIRA component: {component!r}")
+    semantic_dimension = "Mx" if component in {"Mk", "My", "Mz"} else "N"
+    validate_force_unit(semantic_dimension, unit)
+
+
+def to_review_unit(component: str, value: Decimal, unit: str) -> tuple[Decimal, str]:
+    """Normalize a native LIRA force to kN or kN*m without binary floats."""
+
+    validate_native_force_unit(component, unit)
+    semantic_dimension = "Mx" if component in {"Mk", "My", "Mz"} else "N"
+    normalized = to_si(semantic_dimension, value, unit) / Decimal("1000")
+    target_unit = "kN*m" if component in {"Mk", "My", "Mz"} else "kN"
+    return normalized, target_unit

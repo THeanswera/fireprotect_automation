@@ -174,7 +174,7 @@ class XlsxTableSource:
         if (
             self.sheet_name is None
             or not isinstance(self.sheet_name, str)
-            or not self.sheet_name.strip()
+            or self.sheet_name == ""
         ):
             raise LiraFormatError("XLSX import requires an explicit sheet_name")
 

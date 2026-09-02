@@ -1,10 +1,11 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
 from decimal import Decimal
 from hashlib import sha256
+from html import escape
 import json
 from pathlib import Path
+from zipfile import ZIP_DEFLATED, ZipFile
 
 import pytest
 
@@ -19,10 +20,56 @@ from fireprotect.lira import (
     import_lira_batch,
     prepare_lira_review_bundle,
 )
-from fireprotect.model import ProjectElement, ProvenanceType, ValueProvenance
 
 
 FIXTURES = Path(__file__).parent / "fixtures" / "lira_review"
+HEADERS = (
+    "№ элем",
+    "№ сечен",
+    "N\n(т)",
+    "Mk\n(т*м)",
+    "My\n(т*м)",
+    "Qz\n(т)",
+    "Mz\n(т*м)",
+    "Qy\n(т)",
+    "Ry\n(т/м)",
+    "Rz\n(т/м)",
+    "Тип элем",
+    "№ загруж",
+    "Составл",
+)
+DEFAULT_ROWS = (
+    (
+        "56",
+        "1",
+        "-1.0617399999999999",
+        "-1.5E-5",
+        "-9.5680000000000001E-3",
+        "0.25",
+        "-0.1",
+        "0",
+        "0",
+        "0",
+        "10",
+        "1",
+        "-",
+    ),
+    (
+        "56",
+        "2",
+        "0.14346700000000001",
+        "0.008319",
+        "3.1211730000000002",
+        "-0.5",
+        "0.170706",
+        "0",
+        "0",
+        "0",
+        "10",
+        "1",
+        "-",
+    ),
+)
 
 
 def _payload() -> dict[str, object]:
@@ -33,195 +80,256 @@ def _mapping() -> LiraBatchMapping:
     return LiraBatchMapping.from_dict(_payload())
 
 
-def _write_csv(path: Path, row: str, *, header: str | None = None) -> None:
-    path.write_text(
-        (header or "Element;Mark;Section;Load case;Combination;N;Mx;My;Qx;Qy")
-        + "\n"
-        + row
-        + "\n",
-        encoding="utf-8",
-    )
+def _column_name(number: int) -> str:
+    result = ""
+    while number:
+        number, remainder = divmod(number - 1, 26)
+        result = chr(65 + remainder) + result
+    return result
 
 
-def _existing_element(profile: str = "30К1") -> ProjectElement:
-    values = {name: None for name in ProjectElement.field_names()}
-    values.update(
-        {
-            "project_id": "P",
-            "element_id": "E-17",
-            "mark": "К1",
-            "element_type": "column",
-            "source_file": "project.json",
-            "source_type": "PROJECT",
-            "source_element_id": "E-17",
-            "source_row": None,
-            "timestamp": datetime(2026, 9, 2, tzinfo=timezone.utc),
-            "profile_name": profile,
-        }
+def _write_native_xlsx(
+    path: Path,
+    *,
+    rows: tuple[tuple[str, ...], ...] = DEFAULT_ROWS,
+    headers: tuple[str, ...] = HEADERS,
+) -> None:
+    header_cells = "".join(
+        f'<c r="{_column_name(index)}3" t="inlineStr"><is><t>{escape(value)}</t></is></c>'
+        for index, value in enumerate(headers, 1)
     )
-    values["provenance"] = {
-        name: ValueProvenance(ProvenanceType.SOURCE, file="project.json", field=name)
-        for name in ("project_id", "element_id", "mark", "element_type", "profile_name")
+    data_rows: list[str] = []
+    for row_number, values in enumerate(rows, 4):
+        cells = "".join(
+            f'<c r="{_column_name(index)}{row_number}"><v>{escape(value)}</v></c>'
+            for index, value in enumerate(values, 1)
+        )
+        data_rows.append(f'<row r="{row_number}">{cells}</row>')
+    worksheet = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">'
+        f'<sheetData><row r="3">{header_cells}</row>{"".join(data_rows)}</sheetData>'
+        '</worksheet>'
+    )
+    workbook = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" '
+        'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">'
+        '<sheets><sheet name=" " sheetId="1" r:id="rId1"/></sheets></workbook>'
+    )
+    relationships = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+        '<Relationship Id="rId1" '
+        'Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" '
+        'Target="worksheets/sheet1.xml"/></Relationships>'
+    )
+    with ZipFile(path, "w", ZIP_DEFLATED) as archive:
+        archive.writestr("xl/workbook.xml", workbook)
+        archive.writestr("xl/_rels/workbook.xml.rels", relationships)
+        archive.writestr("xl/worksheets/sheet1.xml", worksheet)
+
+
+def test_mapping_models_native_lira_source_without_canonical_aliases() -> None:
+    mapping = _mapping()
+
+    assert tuple(mapping.native_forces) == ("N", "Mk", "My", "Mz", "Qy", "Qz")
+    assert mapping.columns["section_station"] == "№ сечен"
+    assert mapping.columns["profile"] is None
+    assert mapping.worksheet_or_table == " "
+    assert "Mx" not in mapping.native_forces
+    assert "Qx" not in mapping.native_forces
+
+    old_payload = _payload()
+    old_payload["native_forces"] = {
+        "N": "N",
+        "Mx": "Mx",
+        "My": "My",
+        "Qx": "Qx",
+        "Qy": "Qy",
+        "Mz": "Mz",
     }
-    return ProjectElement(**values)
+    with pytest.raises(LiraMappingError, match="native_forces"):
+        LiraBatchMapping.from_dict(old_payload)
 
 
-def test_batch_mapping_is_configurable_and_keeps_explicitly_missing_concepts() -> None:
-    payload = _payload()
-    columns = payload["columns"]
-    assert isinstance(columns, dict)
-    columns["section"] = None
-    units = payload["units"]
-    assert isinstance(units, dict)
-    columns["Qy"] = None
-    units["Qy"] = None
+def test_native_import_preserves_raw_ooxml_tokens_and_exact_decimal_units(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "native.xlsx"
+    _write_native_xlsx(source)
 
-    mapping = LiraBatchMapping.from_dict(payload)
+    result = import_lira_batch(source, _mapping())
+    record = result.records[0]
 
-    assert mapping.columns["section"] is None
-    assert mapping.columns["Qy"] is None
-    assert mapping.units["Qy"] is None
-
-    identifier_payload = _payload()
-    identifier_columns = identifier_payload["columns"]
-    assert isinstance(identifier_columns, dict)
-    identifier_columns["element_id"] = None
-    identifier_columns["node_id"] = "Element"
-    node_mapping = LiraBatchMapping.from_dict(identifier_payload)
-    assert node_mapping.columns["node_id"] == "Element"
-
-
-def test_ambiguous_unit_and_missing_mapped_column_fail_closed(tmp_path: Path) -> None:
-    payload = _payload()
-    units = payload["units"]
-    assert isinstance(units, dict)
-    units["N"] = None
-    with pytest.raises(LiraMappingError, match="ambiguous unit"):
-        LiraBatchMapping.from_dict(payload)
-
-    source = tmp_path / "missing.csv"
-    _write_csv(
-        source,
-        "E-17;К1;30К1;LC-2;ULS-7;-125,5;12,25;-0,32;0,75",
-        header="Element;Mark;Section;Load case;Combination;N;Mx;My;Qx",
+    assert result.rows_parsed == 2
+    assert result.rows_accepted == 2
+    assert result.rows_rejected == 0
+    assert result.worksheet_or_table == " "
+    assert record.section_station == "1"
+    assert record.metadata["profile"] is None
+    assert not hasattr(record, "profile")
+    assert not hasattr(record, "Mx")
+    axial = record.native_forces["N"]
+    assert axial.raw_token == "-1.0617399999999999"
+    assert axial.parsed_decimal == Decimal("-1.0617399999999999")
+    assert isinstance(axial.parsed_decimal, Decimal)
+    assert axial.normalized_value == (
+        Decimal("-1.0617399999999999") * Decimal("9.80665")
     )
-    before = source.read_bytes()
-    with pytest.raises(LiraMappingError, match="Qy"):
-        import_lira_batch(source, _mapping())
-    assert source.read_bytes() == before
+    assert axial.normalized_unit == "kN"
+    assert record.native_forces["Mk"].normalized_value == (
+        Decimal("-1.5E-5") * Decimal("9.80665")
+    )
+    assert record.native_forces["Mk"].normalized_unit == "kN*m"
+    assert record.native_results["Ry"].normalized_value is None
+    assert record.metadata_provenance["section_station"]["source_cell"] == "B4"
 
 
-def test_non_finite_value_is_rejected_with_row_audit(tmp_path: Path) -> None:
-    source = tmp_path / "nonfinite.csv"
-    _write_csv(source, "E-17;К1;30К1;LC-2;ULS-7;NaN;12;3;4;5")
+def test_native_ascii_tf_units_convert_exactly_without_float(tmp_path: Path) -> None:
+    source = tmp_path / "native.xlsx"
+    _write_native_xlsx(source, rows=(DEFAULT_ROWS[0],))
+    payload = _payload()
+    payload["native_force_units"] = {
+        "N": "tf",
+        "Mk": "tf*m",
+        "My": "tf*m",
+        "Mz": "tf*m",
+        "Qy": "tf",
+        "Qz": "tf",
+    }
+
+    record = import_lira_batch(
+        source,
+        LiraBatchMapping.from_dict(payload),
+    ).records[0]
+
+    assert record.native_forces["N"].normalized_value == (
+        Decimal("-1.0617399999999999") * Decimal("9.80665")
+    )
+    assert record.native_forces["Mk"].normalized_value == (
+        Decimal("-1.5E-5") * Decimal("9.80665")
+    )
+
+
+def test_profile_identity_and_unknown_convention_block_project_elements(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "native.xlsx"
+    _write_native_xlsx(source)
+
+    result = import_lira_batch(source, _mapping())
+    codes = {issue.code for issue in result.engineering_blockers}
+
+    assert "LIRA_MEMBER_PROFILE_IDENTITY_MISSING" in codes
+    assert "LIRA_LOAD_COMBINATION_IDENTITY_MISSING" in codes
+    assert "LIRA_RX3_FORCE_CONVENTION" in codes
+    assert result.project_elements == ()
+    assert result.rx38_force_generation_allowed is False
+    assert all(
+        item.verification_status is ConventionStatus.UNKNOWN
+        for item in result.convention.components.values()
+    )
+
+
+def test_statistics_zero_warnings_and_candidates_are_nonsemantic(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "native.xlsx"
+    _write_native_xlsx(source)
 
     result = import_lira_batch(source, _mapping())
 
-    assert result.rows_parsed == 1
+    assert result.unique_elements == 1
+    assert result.distributions["section_station"] == {"1": 1, "2": 1}
+    assert result.native_component_statistics["Qy"]["all_zero"] is True
+    assert result.native_component_statistics["N"]["nonzero_count"] == 2
+    zero_fields = {warning.field for warning in result.warnings}
+    assert {"Qy", "Ry", "Rz"} <= zero_fields
+    candidate = result.convention_candidates[0]
+    assert candidate.element_id == "56"
+    assert candidate.classification == "CANDIDATE_ONLY"
+    assert {"N", "Mk", "My", "Mz", "Qz"} <= set(
+        candidate.nonzero_native_components
+    )
+    assert "N" in candidate.sign_changing_native_components
+
+
+def test_two_stations_are_not_duplicates_but_repeated_station_and_load_is(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "stations.xlsx"
+    _write_native_xlsx(source)
+    result = import_lira_batch(source, _mapping())
+    assert not any(
+        issue.code == "DUPLICATE_AMBIGUOUS_NATIVE_ROW"
+        for issue in result.engineering_blockers
+    )
+
+    duplicate = tmp_path / "duplicate.xlsx"
+    _write_native_xlsx(duplicate, rows=(DEFAULT_ROWS[0], DEFAULT_ROWS[0]))
+    duplicate_result = import_lira_batch(duplicate, _mapping())
+    assert any(
+        issue.code == "DUPLICATE_AMBIGUOUS_NATIVE_ROW"
+        for issue in duplicate_result.engineering_blockers
+    )
+
+
+def test_nonfinite_and_missing_mapped_header_fail_closed(tmp_path: Path) -> None:
+    nonfinite = tmp_path / "nonfinite.xlsx"
+    bad_row = list(DEFAULT_ROWS[0])
+    bad_row[2] = "NaN"
+    _write_native_xlsx(nonfinite, rows=(tuple(bad_row),))
+
+    result = import_lira_batch(nonfinite, _mapping())
     assert result.rows_accepted == 0
     assert result.rows_rejected == 1
     assert "finite" in result.rejected_rows[0].reason
-    assert result.engineering_blockers[0].code == "INVALID_SOURCE_ROW"
-
-
-def test_default_convention_is_unknown_and_blocks_rx38_generation() -> None:
-    registry = LiraRx3ConventionRegistry.unresolved()
-    available = {name: Decimal("1") for name in ("N", "Mx", "My", "Qx", "Qy")}
-
-    assert all(
-        item.verification_status is ConventionStatus.UNKNOWN
-        for item in registry.components.values()
+    assert any(
+        issue.code == "INVALID_SOURCE_ROW"
+        for issue in result.engineering_blockers
     )
+
+    missing = tmp_path / "missing.xlsx"
+    _write_native_xlsx(
+        missing,
+        headers=HEADERS[:-1],
+        rows=(DEFAULT_ROWS[0][:-1],),
+    )
+    with pytest.raises(LiraMappingError, match="Составл"):
+        import_lira_batch(missing, _mapping())
+
+
+def test_default_registry_rejects_old_aliases_and_blocks_rx38() -> None:
+    registry = LiraRx3ConventionRegistry.unresolved()
+    available = {
+        name: Decimal("1") for name in ("N", "Mk", "My", "Mz", "Qy", "Qz")
+    }
+
+    with pytest.raises(LiraMappingError, match="Unknown LIRA force component"):
+        LiraRx3ComponentConvention(
+            source_component="Mx",
+            target_rx3_component=None,
+            sign_multiplier=None,
+            axis_interpretation=None,
+            verification_status=ConventionStatus.UNKNOWN,
+            evidence_reference=None,
+        )
     with pytest.raises(LiraConventionError, match="LIRA_RX3_FORCE_CONVENTION"):
         registry.require_rx38_generation_ready(available)
 
 
-def test_explicit_engineer_convention_can_be_represented_but_is_not_validated() -> None:
-    registry = LiraRx3ConventionRegistry(
-        {
-            name: LiraRx3ComponentConvention(
-                source_component=name,
-                target_rx3_component=name,
-                sign_multiplier=Decimal("1"),
-                axis_interpretation=f"explicit engineering interpretation for {name}",
-                verification_status=ConventionStatus.ENGINEER_CONFIRMED,
-                evidence_reference="engineering review note",
-            )
-            for name in ("N", "Mx", "My", "Qx", "Qy")
-        }
-    )
-
-    assert registry.as_dict()["N"]["sign_multiplier"] == "1"
-    with pytest.raises(LiraConventionError, match="unresolved components"):
-        registry.require_rx38_generation_ready(
-            {name: Decimal("1") for name in registry.components}
-        )
-
-
-def test_duplicate_and_profile_mismatch_are_engineering_blockers(tmp_path: Path) -> None:
-    duplicate = tmp_path / "duplicate.csv"
-    duplicate.write_text(
-        "Element;Mark;Section;Load case;Combination;N;Mx;My;Qx;Qy\n"
-        "E-17;К1;30К1;LC-1;C1;1;2;3;4;5\n"
-        "E-17;К1;35К1;LC-2;C2;1;2;3;4;5\n",
-        encoding="utf-8",
-    )
-
-    result = import_lira_batch(duplicate, _mapping())
-
-    assert result.project_elements == ()
-    assert any(issue.code == "PROFILE_MISMATCH" for issue in result.engineering_blockers)
-
-    same_profile = tmp_path / "same-profile-duplicate.csv"
-    same_profile.write_text(
-        "Element;Mark;Section;Load case;Combination;N;Mx;My;Qx;Qy\n"
-        "E-17;К1;30К1;LC-1;C1;1;2;3;4;5\n"
-        "E-17;К1;30К1;LC-2;C2;1;2;3;4;5\n",
-        encoding="utf-8",
-    )
-    same_profile_result = import_lira_batch(same_profile, _mapping())
-    assert any(
-        issue.code == "DUPLICATE_AMBIGUOUS_ELEMENT_MAPPING"
-        for issue in same_profile_result.engineering_blockers
-    )
-
-    single = tmp_path / "single.csv"
-    _write_csv(single, "E-17;К1;30К1;LC-2;ULS-7;1;2;3;4;5")
-    mismatch = import_lira_batch(
-        single,
-        _mapping(),
-        existing_elements=(_existing_element("40К1"),),
-    )
-    assert any(issue.code == "PROFILE_MISMATCH" for issue in mismatch.engineering_blockers)
-    assert mismatch.project_elements == ()
-
-
-def test_missing_required_combination_is_preserved_as_none_and_blocks(
-    tmp_path: Path,
-) -> None:
-    source = tmp_path / "missing-combination.csv"
-    _write_csv(source, "E-17;К1;30К1;LC-2;;1;2;3;4;5")
-
-    result = import_lira_batch(source, _mapping())
-
-    assert result.records[0].combination is None
-    assert any(
-        issue.code == "MISSING_REQUIRED_COMBINATION"
-        for issue in result.engineering_blockers
-    )
-
-
-def test_review_bundle_is_decimal_safe_complete_and_never_overwrites_source(
-    tmp_path: Path,
-) -> None:
-    source = tmp_path / "forces.csv"
-    mapping = tmp_path / "mapping.json"
-    source.write_bytes((FIXTURES / "forces.csv").read_bytes())
-    mapping.write_bytes((FIXTURES / "mapping.json").read_bytes())
+def test_review_bundle_is_complete_decimal_safe_and_exclusive(tmp_path: Path) -> None:
+    source = tmp_path / "native.xlsx"
+    _write_native_xlsx(source)
     before = source.read_bytes()
     output = tmp_path / "review"
 
-    bundle = prepare_lira_review_bundle(source, mapping, output)
+    bundle = prepare_lira_review_bundle(
+        source,
+        FIXTURES / "mapping.json",
+        output,
+    )
 
     expected = {
         "source_manifest.json",
@@ -236,31 +344,18 @@ def test_review_bundle_is_decimal_safe_complete_and_never_overwrites_source(
     }
     assert {path.name for path in bundle.files} == expected
     assert source.read_bytes() == before
-    assert bundle.result.rows_accepted == 1
-    assert len(bundle.result.project_elements) == 1
-    assert bundle.result.rx38_force_generation_allowed is False
-    forces = json.loads((output / "forces.json").read_text(encoding="utf-8"))
-    axial = forces["accepted_records"][0]["forces"]["N"]
-    assert axial["raw_token"] == "-125,5000"
-    assert axial["parsed_decimal"] == "-125.5000"
-    assert axial["si_value"] == "-125500.0000"
-    assert axial["source_cell"] == "F2"
-    assert forces["accepted_records"][0]["convention"]["N"][
-        "verification_status"
-    ] == "UNKNOWN"
-    expected_source_sha = sha256(source.read_bytes()).hexdigest()
-    assert bundle.result.source_sha256 == expected_source_sha
-    assert len(bundle.result.mapping_fingerprint) == 64
-    assert bundle.result.audit_trail[0]["sha256"] == expected_source_sha
-    assert bundle.result.audit_trail[1]["fingerprint"] == (
-        bundle.result.mapping_fingerprint
-    )
+    assert bundle.result.source_sha256 == sha256(before).hexdigest()
+    assert bundle.result.project_elements == ()
+    payload = json.loads((output / "forces.json").read_text(encoding="utf-8"))
+    axial = payload["accepted_native_records"][0]["native_forces"]["N"]
+    assert axial["raw_token"] == "-1.0617399999999999"
+    assert axial["parsed_decimal"] == "-1.0617399999999999"
+    assert "Mx" not in payload["accepted_native_records"][0]["native_forces"]
+    blockers = json.loads((output / "blockers.json").read_text(encoding="utf-8"))
     assert any(
-        item["code"] == "LIRA_RX3_FORCE_CONVENTION"
-        for item in json.loads((output / "blockers.json").read_text(encoding="utf-8"))
+        item["code"] == "LIRA_MEMBER_PROFILE_IDENTITY_MISSING"
+        for item in blockers["engineering_blockers"]
     )
 
-    with pytest.raises(LiraMappingError):
-        LiraBatchMapping.from_dict({**_payload(), "unexpected": True})
     with pytest.raises(LiraFormatError, match="refusing to overwrite"):
-        prepare_lira_review_bundle(source, mapping, output)
+        prepare_lira_review_bundle(source, FIXTURES / "mapping.json", output)

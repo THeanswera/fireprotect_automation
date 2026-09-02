@@ -25,6 +25,8 @@ CANONICAL_FIELDS = (
     "Qy",
 )
 FORCE_FIELDS = ("N", "Mx", "My", "Qx", "Qy")
+LIRA_NATIVE_FORCE_COMPONENTS = ("N", "Mk", "My", "Mz", "Qy", "Qz")
+LIRA_NATIVE_RESULT_COMPONENTS = ("Ry", "Rz")
 
 
 def _decimal_force(value: object, *, field: str) -> Decimal:

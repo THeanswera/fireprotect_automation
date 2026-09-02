@@ -12,9 +12,19 @@ python -m fireprotect.cli prepare-lira-review `
   --output-dir <new-directory>
 ```
 
-Она использует существующие CSV/HTML/XLSX adapters и `ProjectElement`, сохраняет
-raw numeric token + Decimal + source unit + SI conversion + row/cell provenance,
-создаёт hashes, audit, blockers и human-readable CSV, но никогда не пишет RX38.
+Она использует существующие CSV/HTML/XLSX adapters и сохраняет native source
+records отдельно от `ProjectElement`: `N/Mk/My/Mz/Qy/Qz` как усилия,
+`Ry/Rz` как отдельные source results, `№ сечен` как `section_station`, но не
+как профиль. Raw OOXML token, exact Decimal, source/review units и row/cell
+provenance сохраняются без промежуточного binary float. При отсутствии profile/
+mark identity accepted rows остаются review records, а создание `ProjectElement`
+блокируется кодом `LIRA_MEMBER_PROFILE_IDENTITY_MISSING`.
+
+Native LIRA labels не являются RX3 semantics. Никакое соответствие
+`Mk/My/Mz/Qy/Qz` полям RX3, локальным осям или знакам не выводится автоматически.
+Summary содержит distributions, component statistics и только
+`CANDIDATE_ONLY` строки для будущей контролируемой проверки; ranking не является
+доказательством mapping.
 Default component convention — `UNKNOWN`; `ENGINEER_CONFIRMED` можно явно
 зафиксировать, но только `VALIDATED` считается разрешённым convention state.
 В этой итерации даже `VALIDATED` state не открывает writer: review result всегда

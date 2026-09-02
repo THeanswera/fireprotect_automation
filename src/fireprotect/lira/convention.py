@@ -9,7 +9,7 @@ from types import MappingProxyType
 from typing import Any, Mapping
 
 from .errors import LiraMappingError
-from .types import FORCE_FIELDS
+from .types import LIRA_NATIVE_FORCE_COMPONENTS
 
 
 class ConventionStatus(str, Enum):
@@ -32,7 +32,7 @@ class LiraRx3ComponentConvention:
     evidence_reference: str | None
 
     def __post_init__(self) -> None:
-        if self.source_component not in FORCE_FIELDS:
+        if self.source_component not in LIRA_NATIVE_FORCE_COMPONENTS:
             raise LiraMappingError(
                 f"Unknown LIRA force component: {self.source_component!r}"
             )
@@ -118,10 +118,11 @@ class LiraRx3ConventionRegistry:
     def __post_init__(self) -> None:
         if not isinstance(self.components, Mapping):
             raise LiraMappingError("convention registry must be a mapping")
-        expected = set(FORCE_FIELDS)
+        expected = set(LIRA_NATIVE_FORCE_COMPONENTS)
         if set(self.components) != expected:
             raise LiraMappingError(
-                "convention registry must explicitly contain N/Mx/My/Qx/Qy"
+                "convention registry must explicitly contain native "
+                "N/Mk/My/Mz/Qy/Qz components"
             )
         normalized: dict[str, LiraRx3ComponentConvention] = {}
         for name, convention in self.components.items():
@@ -149,7 +150,7 @@ class LiraRx3ConventionRegistry:
                     verification_status=ConventionStatus.UNKNOWN,
                     evidence_reference=None,
                 )
-                for name in FORCE_FIELDS
+                for name in LIRA_NATIVE_FORCE_COMPONENTS
             }
         )
 
@@ -159,11 +160,11 @@ class LiraRx3ConventionRegistry:
             return cls.unresolved()
         if not isinstance(payload, Mapping):
             raise LiraMappingError("convention must be an object or null")
-        unknown = set(payload) - set(FORCE_FIELDS)
+        unknown = set(payload) - set(LIRA_NATIVE_FORCE_COMPONENTS)
         if unknown:
             raise LiraMappingError(f"unknown convention components: {sorted(unknown)}")
         components: dict[str, LiraRx3ComponentConvention] = {}
-        for name in FORCE_FIELDS:
+        for name in LIRA_NATIVE_FORCE_COMPONENTS:
             raw = payload.get(name)
             if raw is None:
                 components[name] = cls.unresolved().components[name]
@@ -198,7 +199,7 @@ class LiraRx3ConventionRegistry:
     def unresolved_components(self, available: Mapping[str, object]) -> tuple[str, ...]:
         return tuple(
             name
-            for name in FORCE_FIELDS
+            for name in LIRA_NATIVE_FORCE_COMPONENTS
             if available.get(name) is not None and not self.components[name].resolved
         )
 
@@ -211,7 +212,10 @@ class LiraRx3ConventionRegistry:
             )
 
     def as_dict(self) -> dict[str, dict[str, str | None]]:
-        return {name: self.components[name].as_dict() for name in FORCE_FIELDS}
+        return {
+            name: self.components[name].as_dict()
+            for name in LIRA_NATIVE_FORCE_COMPONENTS
+        }
 
 
 def _optional_text(value: Any) -> str | None:

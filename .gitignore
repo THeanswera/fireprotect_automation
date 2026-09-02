@@ -15,7 +15,6 @@
 /tests/fixtures/*
 !/tests/fixtures/lira_review/
 /tests/fixtures/lira_review/*
-!/tests/fixtures/lira_review/forces.csv
 !/tests/fixtures/lira_review/mapping.json
 /validation/
 /pipeline_runs/

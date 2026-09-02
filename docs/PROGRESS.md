@@ -23,12 +23,20 @@
 - **CONFIRMED:** `NormativeTrace` и `NormativeResult` блокируют подтверждение
   нормативного результата без ссылки в production-режиме.
 - **CONFIRMED:** LIRA-архитектура импортирует CSV, HTML и XLSX через полностью
-  настраиваемое сопоставление колонок и явные единицы усилий; будущий
-  LiraAPI подключается через тот же `LiraRowSource`.
+  настраиваемое сопоставление колонок и явные единицы; будущий LiraAPI
+  подключается через тот же `LiraRowSource`.
 - **CONFIRMED:** `prepare-lira-review` создаёт batch review bundle без RX38:
-  source/mapping hashes, raw tokens, exact Decimal/SI values, cell provenance,
-  accepted/rejected rows, ProjectElement candidates, blockers and audit. Output
-  directory создаётся только новым; source не перезаписывается.
+  source/mapping hashes, raw OOXML tokens, exact Decimal/review-unit values,
+  cell provenance, accepted/rejected native rows, statistics, candidate-only
+  selections, blockers and audit. Output directory создаётся только новым;
+  source не перезаписывается, `ProjectElement` не создаётся.
+- **CONFIRMED:** проверенный native bar-force layout содержит
+  `N/Mk/My/Mz/Qy/Qz`, отдельные `Ry/Rz`, section/station, element/load/type и
+  composition. `section_station` не является profile identity. Старое
+  review-сопоставление `N/Mx/My/Qx/Qy` признано непригодным для native source.
+- **CONFIRMED:** при отсутствующем profile/mark identity действует blocker
+  `LIRA_MEMBER_PROFILE_IDENTITY_MISSING`; native-to-RX3 convention остаётся
+  `UNKNOWN`, а ranked elements имеют только статус `CANDIDATE_ONLY`.
 - **CONFIRMED:** изучены все 5 листов исходной Excel-книги и 579 формул;
   `fireprotect.excel` создаёт только копию OOXML, защищает формулы и стили и
   проверяет SHA-256 исходника.
@@ -41,8 +49,9 @@
   не перезаписываются.
 - **PROBABLE:** единица толщины слоя в колонке `Y` Excel — мм по контексту, но
   в основном заголовке она не указана.
-- **UNKNOWN:** реальный формат будущего экспорта ЛИРА и назначение нескольких
-  служебных блоков Excel пока отсутствуют в исходных данных.
+- **UNKNOWN:** семантика `Ry/Rz`, native-to-RX3 axis/sign convention, member
+  profile/mark identity и назначение нескольких служебных блоков Excel всё ещё
+  отсутствуют в доказательствах.
 - **BLOCKED:** запись Mx/My/Qx/Qy, материала и сторон обогрева в RX38 до
   доказательства индексов; ненулевые Mx/My/Qx/Qy теперь останавливают
   генерацию, а не остаются из шаблона с warning.
@@ -116,7 +125,8 @@
   верифицированного осевого шаблона. Это не закрывает LIRA sign
   convention, другие профили/закрепления/обогрев и нормативную
   эквивалентность.
-- **BLOCKED:** реальные mappings Mx/My/Qx/Qy, sign convention, steel field 33,
+- **BLOCKED:** реальные mappings native `N/Mk/My/Mz/Qy/Qz` в RX3, sign/axis
+  convention, member profile identity, steel field 33,
   GUI smoke-test, Excel recalculation и primary manufacturer data всё ещё
   требуют внешних доказательств.
 
@@ -133,6 +143,8 @@
 является прямым контрпримером универсальности field50: в biaxial Кс1 field50=`0`,
 field78=`0,507` до save при GUI Mx=`0,51`, затем field78=`0,51` после save.
 Поэтому field78 остаётся `PROBABLE` persisted/display copy, а глобальные Mx/X/Y
-семантики не установлены. Следующий validation использует одну реальную строку
-экспорта ЛИРА и соответствующий элемент RX3; новых широких RX38 экспериментов
-для MVP не планируется.
+семантики не установлены. Native LIRA export теперь структурно проверен, но не
+сопоставлен с RX3. Следующий минимальный validation должен независимо установить
+profile/mark identity для одного выбранного элемента и получить инженерно
+зафиксированные local-axis/sign evidence; новых широких RX38 экспериментов для
+MVP не планируется.

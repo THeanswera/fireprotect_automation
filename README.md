@@ -218,7 +218,7 @@ production writer or any LIRA axis/sign mapping.
 
 ## LIRA batch review (no RX38 force writing)
 
-The current MVP entrypoint imports a configurable CSV/HTML/XLSX force table and
+The current MVP entrypoint imports a configurable CSV/HTML/XLSX source table and
 creates a local review bundle only:
 
 ```powershell
@@ -228,13 +228,22 @@ python -m fireprotect.cli prepare-lira-review `
   --output-dir <new-review-directory>
 ```
 
-`tests/fixtures/lira_review/mapping.json` is a synthetic configuration example.
-Every supported concept is explicit: arbitrary source headers, unavailable
-columns as `null`, source units, parsing options, and a per-component convention
-registry. The default convention is `UNKNOWN`; therefore the bundle reports
-`LIRA_RX3_FORCE_CONVENTION` and never writes RX38 forces. JSON retains raw source
-tokens, exact `Decimal` values, SI conversions, source cells, SHA-256 and the
-mapping fingerprint. `forces_review.csv` is human-readable only.
+`tests/fixtures/lira_review/mapping.json` is a synthetic configuration matching
+the verified native LIRA-SAPR bar-force layout. Native source components are
+`N/Mk/My/Mz/Qy/Qz`; `Ry/Rz` are retained separately as source results. The
+calculation-section value (`section_station`) is not treated as a member profile.
+Unavailable profile/mark identity is explicit `null` and raises
+`LIRA_MEMBER_PROFILE_IDENTITY_MISSING`, so accepted native rows never become
+`ProjectElement` records.
+
+Every source concept is explicit: exact headers (including embedded newlines),
+unavailable columns as `null`, source units, parsing options, and a native-to-RX3
+convention registry. The default convention is `UNKNOWN`; no `Mk→Mx`, `My→My`,
+`Qy/Qz→Qx/Qy`, axis, or sign mapping is inferred. The bundle therefore reports
+`LIRA_RX3_FORCE_CONVENTION` and never writes RX38 forces. JSON retains exact
+OOXML numeric tokens, `Decimal` values, review-unit conversions, source cells,
+SHA-256, distributions, component statistics, and candidate-only rows. Candidate
+ranking is not semantic evidence. `forces_review.csv` is human-readable only.
 
 Post-calc validation always requires an explicit target. Prefer the exact
 BEFORE-record fingerprint or a 1-based `Tconstr` position; `--target-mark` is

@@ -1,36 +1,48 @@
 {
-  "format": "csv",
+  "source_model": "LIRA_NATIVE_BAR_FORCES",
+  "format": "xlsx",
   "options": {
-    "encoding": "utf-8",
-    "delimiter": ";",
-    "header_row": 1
+    "sheet_name": " ",
+    "header_row": 3,
+    "data_only": true
   },
   "columns": {
-    "element_id": "Element",
+    "element_id": "\u2116 \u044d\u043b\u0435\u043c",
     "node_id": null,
     "member_id": null,
-    "mark": "Mark",
-    "section": "Section",
-    "load_case": "Load case",
-    "combination": "Combination",
-    "N": "N",
-    "Mx": "Mx",
-    "My": "My",
-    "Qx": "Qx",
-    "Qy": "Qy"
+    "section_station": "\u2116 \u0441\u0435\u0447\u0435\u043d",
+    "mark": null,
+    "profile": null,
+    "load_case": "\u2116 \u0437\u0430\u0433\u0440\u0443\u0436",
+    "element_type": "\u0422\u0438\u043f \u044d\u043b\u0435\u043c",
+    "composition": "\u0421\u043e\u0441\u0442\u0430\u0432\u043b",
+    "combination": null
   },
-  "units": {
-    "N": "kN",
-    "Mx": "kN*m",
-    "My": "kN*m",
-    "Qx": "kN",
-    "Qy": "kN"
+  "native_forces": {
+    "N": "N\n(\u0442)",
+    "Mk": "Mk\n(\u0442*\u043c)",
+    "My": "My\n(\u0442*\u043c)",
+    "Mz": "Mz\n(\u0442*\u043c)",
+    "Qy": "Qy\n(\u0442)",
+    "Qz": "Qz\n(\u0442)"
   },
-  "decimal_separator": ",",
+  "native_force_units": {
+    "N": "\u0442",
+    "Mk": "\u0442*\u043c",
+    "My": "\u0442*\u043c",
+    "Mz": "\u0442*\u043c",
+    "Qy": "\u0442",
+    "Qz": "\u0442"
+  },
+  "native_results": {
+    "Ry": "Ry\n(\u0442/\u043c)",
+    "Rz": "Rz\n(\u0442/\u043c)"
+  },
+  "native_result_units": {
+    "Ry": "\u0442/\u043c",
+    "Rz": "\u0442/\u043c"
+  },
+  "decimal_separator": ".",
   "thousands_separator": null,
-  "project": {
-    "project_id": "SYNTHETIC-LIRA-REVIEW",
-    "element_type": "column"
-  },
   "convention": null
 }
