@@ -198,7 +198,21 @@ Against external screenshot/report references Mx≈`0.51`, My≈`4.34`, Q=`0`:
   first only because of its separate one-plane evidence, which is not
   transferred to biaxial semantics.
 
-Heating status is `GUI_CONFIRMATION_REQUIRED`. The next and only current user
-checkpoint is to open the copied template, select Кс1, open the calculation
-dialog, capture one full screenshot, and close without editing, Calculate,
-Save to table or Save As.
+The externally reviewed Phase A screenshot passed for exact Кс1 / 20П / C245,
+biaxial bending, displayed selector X-X, Mx=`0.51`, My=`4.34`, three-side
+LEFT/RIGHT/BOTTOM heating, R60 and the recorded thermal coefficients. Existing
+gamma_tem, theta_cr and R0 remain stale template results, not experiment output.
+
+## RX3-EXP-04B — controlled My perturbation before Calculate
+
+`prepare-rx3-my5` is a validation-only, fingerprint-bound exception. It checks
+the Phase A observation, source SHA, target fingerprint, position 7, mark Кс1,
+profile/stress state, field79 baseline `4,3414`, heating and R60. It creates
+`generated_MY5.rx38` with the sole raw-token change field79 `4,3414 → 5,00`.
+All other target fields and every non-target Tconstr must remain token-identical.
+
+Field79 remains `UNKNOWN` with `FORBIDDEN` generic write policy. DRAFT,
+PRODUCTION, the ordinary typed writer, schema promotion and post-calc preparation
+remain blocked. The only next checkpoint is to open `generated_MY5.rx38`, select
+Кс1, open the calculation dialog and return one complete screenshot without
+Calculate, Save to table or Save As.

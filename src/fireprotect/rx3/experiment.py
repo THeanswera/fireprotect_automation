@@ -32,6 +32,16 @@ class Rx3ExperimentPreparationError(ValueError):
     """Raised when a fail-closed Phase A bundle cannot be prepared."""
 
 
+RX3_EXP_04_SOURCE_SHA256 = (
+    "81cb11901fcab586bbd47d4f6c66e77659183a5c1de8579e87643ff2ce3ae9c6"
+)
+RX3_EXP_04_TARGET_FINGERPRINT = (
+    "2283c2d01f09ec0477e38d6d113fe395dd1182fa2aa3769158ff480e4347146b"
+)
+RX3_EXP_04_TARGET_POSITION = 7
+RX3_EXP_04_TARGET_MARK = "Кс1"
+
+
 @dataclass(frozen=True, slots=True)
 class Rx3TemplateCandidate:
     path: Path
@@ -186,6 +196,24 @@ class Rx3MyBiaxialPhaseABundle:
     source_sha256: str
     target_fingerprint: str
     target_position: int
+
+
+@dataclass(frozen=True, slots=True)
+class Rx3MyBiaxialValidationBundle:
+    directory: Path
+    template: Path
+    generated: Path
+    project_element: Path
+    template_profile: Path
+    heating_evidence: Path
+    compatibility_evidence: Path
+    diff_json: Path
+    diff_markdown: Path
+    expected_gui: Path
+    checklist: Path
+    instructions: Path
+    audit: Path
+    generated_sha256: str
 
 
 def _decimal(value: str) -> Decimal | None:
@@ -3351,4 +3379,543 @@ def prepare_rx3_my_biaxial_phase_a(
         source_sha,
         target_fingerprint,
         target_position,
+    )
+
+
+def _my_biaxial_project_payload(
+    source: Path,
+    record: Rx38Record,
+    *,
+    target_my: Decimal,
+    experiment_id: str,
+) -> dict[str, Any]:
+    payload = _bending_project_payload(
+        source,
+        record,
+        target_mx=Decimal("0.51"),
+        heating_sides=3,
+        experiment_id=experiment_id,
+        combination="RX3-EXP-04B_MY5",
+    )
+    payload["element_id"] = f"{experiment_id}-Ks1"
+    payload["My"] = {"value": str(target_my), "unit": "kN*m"}
+    provenance = _require_mapping(payload.get("provenance"), "project provenance")
+    payload["provenance"] = {
+        **provenance,
+        "My": {
+            "kind": "ENGINEER_INPUT",
+            "file": f"{experiment_id} controlled validation protocol",
+            "field": "My",
+        },
+    }
+    return project_element_to_dict(project_element_from_dict(payload))
+
+
+def prepare_rx3_my5_validation(
+    phase_a_directory: str | Path,
+    observation_path: str | Path,
+    output_directory: str | Path,
+    *,
+    mode: ExecutionMode | str = ExecutionMode.VALIDATION,
+    experiment_id: str = "RX3-EXP-04B",
+) -> Rx3MyBiaxialValidationBundle:
+    """Prepare the exact field79-only RX3-EXP-04B pre-calc artifact.
+
+    This validation-only exception is separate from every typed or production
+    writer. Field79 remains unknown/forbidden in the generic schema.
+    """
+
+    execution_mode = ExecutionMode.parse(mode)
+    if execution_mode is not ExecutionMode.VALIDATION:
+        raise Rx3ExperimentPreparationError(
+            "RX3-EXP-04B field79 mutation requires VALIDATION mode"
+        )
+    if experiment_id != "RX3-EXP-04B":
+        raise Rx3ExperimentPreparationError(
+            "Only the controlled RX3-EXP-04B My=5 protocol is supported"
+        )
+    expected_source_sha256 = RX3_EXP_04_SOURCE_SHA256
+    expected_target_fingerprint = RX3_EXP_04_TARGET_FINGERPRINT
+    expected_target_position = RX3_EXP_04_TARGET_POSITION
+    expected_mark = RX3_EXP_04_TARGET_MARK
+    phase_a = Path(phase_a_directory).resolve(strict=True)
+    observation_file = Path(observation_path).resolve(strict=True)
+    summary = _read_json_mapping(phase_a / "template_summary.json", "Phase A summary")
+    observation = _read_json_mapping(observation_file, "Phase A GUI observation")
+    if summary.get("experiment_id") != "RX3-EXP-04":
+        raise Rx3ExperimentPreparationError("Phase A summary is not RX3-EXP-04")
+    if observation.get("experiment_id") != "RX3-EXP-04":
+        raise Rx3ExperimentPreparationError("GUI observation is not RX3-EXP-04")
+    if observation.get("result") != "PASS":
+        raise Rx3ExperimentPreparationError("Phase A GUI observation must be PASS")
+    if observation.get("calculation_pressed") is not False:
+        raise Rx3ExperimentPreparationError(
+            "Phase A evidence must confirm that calculation was not pressed"
+        )
+    if observation.get("stale_template_results_are_new_evidence") is not False:
+        raise Rx3ExperimentPreparationError(
+            "Phase A must reject stale template results as new evidence"
+        )
+
+    summary_template = _require_mapping(summary.get("template"), "summary.template")
+    summary_selection = _require_mapping(summary.get("selection"), "summary.selection")
+    observed_template = _require_mapping(
+        observation.get("template"), "observation.template"
+    )
+    observed_selection = _require_mapping(
+        observation.get("selection"), "observation.selection"
+    )
+    observed_actions = _require_mapping(
+        observation.get("actions"), "observation.actions"
+    )
+    observed_heating = _require_mapping(
+        observation.get("heating"), "observation.heating"
+    )
+    observed_fire = _require_mapping(observation.get("fire"), "observation.fire")
+
+    template_source = phase_a / _require_observation_text(
+        summary_template.get("working_copy"), "summary.template.working_copy"
+    )
+    template_source = template_source.resolve(strict=True)
+    source_sha = _sha256(template_source)
+    if source_sha != expected_source_sha256:
+        raise Rx3ExperimentPreparationError("Exact Phase A source SHA-256 mismatch")
+    if (
+        summary_template.get("sha256") != source_sha
+        or observed_template.get("sha256") != source_sha
+    ):
+        raise Rx3ExperimentPreparationError(
+            "Phase A GUI evidence is not bound to the exact source SHA-256"
+        )
+
+    records = construction_records(read_rx38(template_source))
+    if expected_target_position > len(records):
+        raise Rx3ExperimentPreparationError("Exact target position is outside Tconstr records")
+    target = records[expected_target_position - 1]
+    fingerprint = rx38_record_fingerprint(target)
+    if target.mark != expected_mark:
+        raise Rx3ExperimentPreparationError("Exact target mark/position mismatch")
+    if fingerprint != expected_target_fingerprint:
+        raise Rx3ExperimentPreparationError("Exact target fingerprint mismatch")
+    if (
+        summary_template.get("record_fingerprint") != fingerprint
+        or summary_template.get("position_1_based") != expected_target_position
+        or observed_template.get("record_fingerprint") != fingerprint
+        or observed_template.get("position_1_based") != expected_target_position
+    ):
+        raise Rx3ExperimentPreparationError(
+            "Phase A summary/GUI evidence target binding mismatch"
+        )
+    if summary_selection.get("mark") != expected_mark:
+        raise Rx3ExperimentPreparationError("Phase A summary mark mismatch")
+
+    expected_identity = {
+        "mark": expected_mark,
+        "profile": "20П",
+        "profile_standard": "ГОСТ 8240-97",
+        "stress_state": "Изгибаемый стержень в двух главных плоскостях",
+    }
+    for name, expected in expected_identity.items():
+        if observed_selection.get(name) != expected:
+            raise Rx3ExperimentPreparationError(f"Observed {name} mismatch")
+    if _normal_text(str(observed_selection.get("steel", ""))) != _normal_text("С245"):
+        raise Rx3ExperimentPreparationError("Observed steel mismatch")
+    if _decimal(str(observed_selection.get("length_m", ""))) != Decimal("3.87"):
+        raise Rx3ExperimentPreparationError("Observed length mismatch")
+    if _normal_axis(str(observed_selection.get("axis", ""))) != "ОТН. X-X":
+        raise Rx3ExperimentPreparationError("Observed axis selector mismatch")
+    if (
+        target.fields[19] != "20П"
+        or target.fields[17] != "ГОСТ 8240-97"
+        or target.fields[45] != expected_identity["stress_state"]
+        or _normal_text(target.fields[42]) != _normal_text("С245")
+        or _decimal(target.fields[14]) != Decimal("3.87")
+    ):
+        raise Rx3ExperimentPreparationError("Exact source identity/settings mismatch")
+    if not _biaxial_bending_label(target.fields[45]):
+        raise Rx3ExperimentPreparationError("Exact target is not biaxial bending")
+    if _decimal(target.fields[79]) != Decimal("4.3414"):
+        raise Rx3ExperimentPreparationError("Field79 baseline My must be 4.3414")
+
+    if _decimal(str(observed_actions.get("Mx_knm", ""))) != Decimal("0.51"):
+        raise Rx3ExperimentPreparationError("Phase A GUI Mx must be 0.51 kN*m")
+    if _decimal(str(observed_actions.get("My_knm", ""))) != Decimal("4.34"):
+        raise Rx3ExperimentPreparationError("Phase A GUI My must be 4.34 kN*m")
+    if observed_actions.get("plastic_region_enabled") is not True:
+        raise Rx3ExperimentPreparationError("Plastic-region GUI evidence is required")
+    if observed_actions.get("en_classification_enabled") is not False:
+        raise Rx3ExperimentPreparationError("EN classification must be observed disabled")
+    active_sides = observed_heating.get("active_sides")
+    inactive_sides = observed_heating.get("inactive_sides")
+    if (
+        observed_heating.get("heating_sides") != 3
+        or not isinstance(active_sides, list)
+        or set(active_sides) != {"LEFT", "RIGHT", "BOTTOM"}
+        or inactive_sides != ["TOP"]
+        or observed_heating.get("rx38_indices_mapped") is not False
+    ):
+        raise Rx3ExperimentPreparationError("Exact three-side GUI heating evidence is required")
+    if _decimal(str(observed_fire.get("required_R_min", ""))) != Decimal("60"):
+        raise Rx3ExperimentPreparationError("Phase A GUI evidence must confirm R60")
+    if _normal_text(str(observed_fire.get("regime", ""))) != _normal_text(
+        "Стандартный температурный режим"
+    ):
+        raise Rx3ExperimentPreparationError("Standard fire regime evidence is required")
+    coefficients = {
+        "epsilon0": Decimal("0.800"),
+        "epsilon": Decimal("1.000"),
+        "Phi": Decimal("1.000"),
+        "alpha_c": Decimal("25.00"),
+        "kf": Decimal("1.000"),
+    }
+    for name, expected_coefficient in coefficients.items():
+        if _decimal(str(observed_fire.get(name, ""))) != expected_coefficient:
+            raise Rx3ExperimentPreparationError(
+                f"Phase A thermal coefficient {name} mismatch"
+            )
+    if _decimal(target.fields[55]) != Decimal("60"):
+        raise Rx3ExperimentPreparationError("Exact source required R is not 60")
+    if _normal_text(target.fields[104]) != _normal_text(
+        "Стандартный температурный режим"
+    ):
+        raise Rx3ExperimentPreparationError("Exact source fire regime mismatch")
+
+    spec79 = field_spec(79)
+    if (
+        spec79.confidence != "unknown"
+        or spec79.name != "unknown_079"
+        or spec79.write_policy is not WritePolicy.FORBIDDEN
+    ):
+        raise Rx3ExperimentPreparationError(
+            "Field79 schema state changed; explicit re-review is required"
+        )
+
+    directory = Path(output_directory).resolve(strict=False)
+    if directory.exists() and any(directory.iterdir()):
+        raise Rx3ExperimentPreparationError(
+            f"RX3-EXP-04B directory must be new or empty: {directory}"
+        )
+    directory.mkdir(parents=True, exist_ok=True)
+    template = directory / "template.rx38"
+    generated = directory / "generated_MY5.rx38"
+    project_path = directory / "project_element_MY5.json"
+    profile_path = directory / "template_profile.json"
+    heating_path = directory / "heating_evidence.json"
+    compatibility_path = directory / "compatibility_evidence.json"
+    diff_json_path = directory / "precalc_diff.json"
+    diff_markdown_path = directory / "precalc_diff.md"
+    expected_path = directory / "EXPECTED_RX3_GUI_VALUES.md"
+    checklist_path = directory / "CHECKLIST_PRECALC.md"
+    instructions_path = directory / "README_RUN_RX3.md"
+    audit_path = directory / "audit.json"
+
+    _copy_new(template_source, template)
+    if template.read_bytes() != template_source.read_bytes() or _sha256(template) != source_sha:
+        raise Rx3ExperimentPreparationError("Copied template is not byte-identical")
+    document = read_rx38_document(template)
+    if _render_experimental_field_change(
+        document, target_line=None, field_index=None, new_raw_token=None
+    ) != template.read_bytes():
+        raise Rx3ExperimentPreparationError("Parser rendering changed the source bytes")
+    copied_records = construction_records(document.records)
+    copied_target = copied_records[expected_target_position - 1]
+    if (
+        copied_target.mark != expected_mark
+        or rx38_record_fingerprint(copied_target) != fingerprint
+    ):
+        raise Rx3ExperimentPreparationError("Copied experimental target binding changed")
+    generated_payload = _render_experimental_field_change(
+        document,
+        target_line=copied_target.line_number,
+        field_index=79,
+        new_raw_token="5,00",
+    )
+    try:
+        with generated.open("xb") as stream:
+            stream.write(generated_payload)
+    except FileExistsError as exc:
+        raise Rx3ExperimentPreparationError(
+            f"Refusing to overwrite RX3-EXP-04B artifact: {generated}"
+        ) from exc
+
+    after_records = construction_records(read_rx38(generated))
+    if len(copied_records) != len(after_records):
+        raise Rx3ExperimentPreparationError("Generated RX38 changed Tconstr count")
+    changed_records: list[tuple[int, Rx38Record, Rx38Record, list[Any]]] = []
+    for position, (before, after) in enumerate(zip(copied_records, after_records), 1):
+        differences = diff_records(before, after)
+        if differences:
+            changed_records.append((position, before, after, differences))
+    if len(changed_records) != 1:
+        raise Rx3ExperimentPreparationError("Generated RX38 must change one Tconstr only")
+    changed_position, before_target, after_target, differences = changed_records[0]
+    if (
+        changed_position != expected_target_position
+        or before_target.mark != expected_mark
+        or len(differences) != 1
+        or differences[0].index != 79
+        or before_target.raw_tokens[79] != "4,3414"
+        or after_target.raw_tokens[79] != "5,00"
+        or _decimal(after_target.fields[79]) != Decimal("5.00")
+    ):
+        raise Rx3ExperimentPreparationError("Generated RX38 is not the exact field79-only change")
+    if any(
+        before_target.raw_tokens[index] != after_target.raw_tokens[index]
+        for index in range(200)
+        if index != 79
+    ):
+        raise Rx3ExperimentPreparationError("Another target field changed; fail closed")
+    for position, (before, after) in enumerate(zip(copied_records, after_records), 1):
+        if position != expected_target_position and before.raw_tokens != after.raw_tokens:
+            raise Rx3ExperimentPreparationError("A non-target Tconstr changed; fail closed")
+
+    protected_groups = {
+        "explicit_load_fields": [49, 50, 78, 92, 122],
+        "required_R": [55],
+        "stress_axis_service": [45, 61, 77],
+        "geometry_profile": [
+            5, 8, 9, 11, 13, 14, 15, 17, 19, 20, 21, 22, 23, 24, 25,
+            32, 33, 34, 42,
+        ],
+        "thermal_fire": [72, 80, 81, 82, 83, 84, 85, 104, 141, 188],
+    }
+    protected_checks = {
+        group: {
+            str(index): {
+                "raw_before": before_target.raw_tokens[index],
+                "raw_after": after_target.raw_tokens[index],
+                "token_identical": before_target.raw_tokens[index]
+                == after_target.raw_tokens[index],
+            }
+            for index in indices
+        }
+        for group, indices in protected_groups.items()
+    }
+    if not all(
+        item["token_identical"]
+        for group in protected_checks.values()
+        for item in group.values()
+    ):
+        raise Rx3ExperimentPreparationError("A protected target field changed; fail closed")
+
+    generated_sha = _sha256(generated)
+    generated_fingerprint = rx38_record_fingerprint(after_target)
+    diff_payload = {
+        "experiment_id": experiment_id,
+        "status": "PASS",
+        "execution_mode": execution_mode.value,
+        "template_sha256": source_sha,
+        "generated_sha256": generated_sha,
+        "target_mark": expected_mark,
+        "target_position_1_based": expected_target_position,
+        "template_record_sha256": fingerprint,
+        "generated_record_sha256": generated_fingerprint,
+        "changed_record_count": 1,
+        "changed_field_count": 1,
+        "changed_fields": [
+            {
+                "index": 79,
+                "schema_name": spec79.name,
+                "semantic_intent": "My perturbation candidate for validation only",
+                "old_raw_token": before_target.raw_tokens[79],
+                "new_raw_token": after_target.raw_tokens[79],
+                "old_decimal_knm": "4.3414",
+                "new_decimal_knm": "5.00",
+            }
+        ],
+        "all_other_target_fields_token_identical": True,
+        "all_non_target_records_token_identical": True,
+        "protected_target_fields": protected_checks,
+    }
+    project_payload = _my_biaxial_project_payload(
+        template,
+        before_target,
+        target_my=Decimal("5.00"),
+        experiment_id=experiment_id,
+    )
+    profile_payload = {
+        "experiment_id": experiment_id,
+        "template_sha256": source_sha,
+        "template_record_sha256": fingerprint,
+        "target_position_1_based": expected_target_position,
+        "mark": expected_mark,
+        "section": before_target.fields[5],
+        "standard": before_target.fields[17],
+        "profile": before_target.fields[19],
+        "steel": before_target.fields[42],
+        "length_m": before_target.fields[14],
+        "stress_state": before_target.fields[45],
+        "axis": before_target.fields[61],
+        "required_R_min": before_target.fields[55],
+        "field78_Mx_candidate_raw": before_target.fields[78],
+        "field79_My_candidate_raw": before_target.fields[79],
+        "field92_Q_raw": before_target.fields[92],
+        "field122_raw": before_target.fields[122],
+    }
+    heating_payload = {
+        "experiment_id": experiment_id,
+        "status": "ENGINEER_CONFIRMED_GUI_OBSERVATION",
+        "scope": "exact template Tconstr only",
+        "template_record_sha256": fingerprint,
+        "mark": expected_mark,
+        "heating_sides": 3,
+        "active_sides": ["LEFT", "RIGHT", "BOTTOM"],
+        "inactive_sides": ["TOP"],
+        "required_R_min": "60",
+        "fire_regime": "Стандартный температурный режим",
+        "thermal_coefficients": {
+            name: str(value) for name, value in coefficients.items()
+        },
+        "rx38_heating_side_indices": None,
+        "mapping_status": "UNMAPPED",
+        "evidence_reference": str(observation_file),
+    }
+    compatibility_payload = {
+        "experiment_id": experiment_id,
+        "status": "VALIDATION_ONLY_EXACT_TEMPLATE_COMPATIBILITY",
+        "execution_mode": execution_mode.value,
+        "phase_a_observation": str(observation_file),
+        "source_sha256": source_sha,
+        "target_record_sha256": fingerprint,
+        "target_position_1_based": expected_target_position,
+        "mark": expected_mark,
+        "profile": "20П",
+        "stress_state": expected_identity["stress_state"],
+        "field79_schema_confidence": spec79.confidence,
+        "field79_write_policy": spec79.write_policy.value,
+        "experimental_exception": "RX3-EXP-04B_FIELD79_ONLY_MY5",
+        "production_writer_changed": False,
+        "generic_typed_writer_allowed": False,
+        "schema_mapping_promoted": False,
+    }
+    audit_payload = {
+        "experiment_id": experiment_id,
+        "phase": "CONTROLLED_MY_PERTURBATION_PRECALC",
+        "status": "WAITING_FOR_MY5_PRECALC_GUI_VERIFICATION",
+        "execution_mode": execution_mode.value,
+        "calculation_started": False,
+        "save_to_table_performed": False,
+        "save_as_performed": False,
+        "phase_a_observation": str(observation_file),
+        "template": {
+            "path": str(template),
+            "sha256": source_sha,
+            "record_sha256": fingerprint,
+            "position_1_based": expected_target_position,
+        },
+        "generated": {
+            "path": str(generated),
+            "sha256": generated_sha,
+            "record_sha256": generated_fingerprint,
+        },
+        "precalc_diff": diff_payload,
+        "field79_semantic_status": "ACTIVE_MY_GUI_INPUT_CANDIDATE_PENDING_SCREENSHOT",
+        "field79_schema_promoted": False,
+        "production_writer_changed": False,
+        "issue_readiness_changed": False,
+        "postcalc_artifact_prepared": False,
+    }
+    diff_markdown = "\n".join(
+        [
+            "# RX3-EXP-04B pre-calc diff",
+            "",
+            "- Status: `PASS`",
+            f"- Source SHA-256: `{source_sha}`",
+            f"- Generated SHA-256: `{generated_sha}`",
+            f"- Target: `{expected_mark}`, Tconstr position `{expected_target_position}`",
+            "- Exact change: field79 raw `4,3414` → `5,00`; numeric `4.3414` → `5.00` kN*m.",
+            "- Every other target field is token-identical.",
+            "- Every non-target Tconstr is token-identical.",
+            "- Protected load, R, stress/axis/service, profile/geometry and thermal/fire fields are unchanged.",
+            "",
+        ]
+    )
+    expected_gui = "\n".join(
+        [
+            "# RX3-EXP-04B expected GUI values before Calculate",
+            "",
+            "- Mark: `Кс1`",
+            "- Profile: `20П` / `ГОСТ 8240-97`",
+            "- Steel: `C245`; length: `3.87 m`",
+            "- Stress state: biaxial bending in two principal planes",
+            "- Displayed axis selector: `отн. X-X`",
+            "- Mx: `0.51 kN*m` unchanged",
+            "- My: `5.00 kN*m`",
+            "- Heating: LEFT + RIGHT + BOTTOM active; TOP inactive",
+            "- Required fire resistance: `R60`; standard fire regime",
+            "- Plastic region enabled; EN classification disabled",
+            "- epsilon0=0.800; epsilon=1.000; Phi=1.000; alpha_c=25.00; kf=1.000",
+            "",
+            "Do not interpret theta_cr, R0, gamma_tem, or other stale template results before Calculate.",
+            "",
+        ]
+    )
+    checklist = "\n".join(
+        [
+            "# RX3-EXP-04B pre-calc checklist",
+            "",
+            "- [ ] Кс1 / 20П / ГОСТ 8240-97 / C245 / L=3.87 m",
+            "- [ ] Biaxial bending; displayed selector отн. X-X",
+            "- [ ] Mx=0.51 kN*m unchanged; My=5.00 kN*m",
+            "- [ ] LEFT, RIGHT, BOTTOM active; TOP inactive; R60; standard fire",
+            "- [ ] Plastic region enabled; EN classification disabled",
+            "- [ ] One complete screenshot captured before Calculate",
+            "- [ ] Calculate, Save to table and Save As were not used",
+            "",
+            "STOP if My is not 5.00 or if Mx/another engineering input changes.",
+            "",
+        ]
+    )
+    instructions = "\n".join(
+        [
+            "# RX3-EXP-04B — manual pre-calc checkpoint only",
+            "",
+            "1. Open `generated_MY5.rx38` in RX3.",
+            "2. Select `Кс1`.",
+            "3. Open the calculation dialog.",
+            "4. Send one complete screenshot covering `CHECKLIST_PRECALC.md`.",
+            "",
+            "Do not press Calculate. Do not Save to table. Do not Save As.",
+            "",
+        ]
+    )
+
+    _write_new(
+        project_path, json.dumps(project_payload, ensure_ascii=False, indent=2) + "\n"
+    )
+    _write_new(
+        profile_path, json.dumps(profile_payload, ensure_ascii=False, indent=2) + "\n"
+    )
+    _write_new(
+        heating_path, json.dumps(heating_payload, ensure_ascii=False, indent=2) + "\n"
+    )
+    _write_new(
+        compatibility_path,
+        json.dumps(compatibility_payload, ensure_ascii=False, indent=2) + "\n",
+    )
+    _write_new(
+        diff_json_path, json.dumps(diff_payload, ensure_ascii=False, indent=2) + "\n"
+    )
+    _write_new(diff_markdown_path, diff_markdown)
+    _write_new(expected_path, expected_gui)
+    _write_new(checklist_path, checklist)
+    _write_new(instructions_path, instructions)
+    _write_new(
+        audit_path, json.dumps(audit_payload, ensure_ascii=False, indent=2) + "\n"
+    )
+    return Rx3MyBiaxialValidationBundle(
+        directory,
+        template,
+        generated,
+        project_path,
+        profile_path,
+        heating_path,
+        compatibility_path,
+        diff_json_path,
+        diff_markdown_path,
+        expected_path,
+        checklist_path,
+        instructions_path,
+        audit_path,
+        generated_sha,
     )

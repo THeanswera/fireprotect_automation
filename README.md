@@ -183,6 +183,22 @@ It selects exact mark Кс1, fingerprints the source record, ranks Mx/My/Q raw
 numeric candidates across the bending corpus, creates only a copied template
 and observation reports, and stops for a screenshot without Calculate or Save.
 
+After the externally reviewed Phase A screenshot passes, the validation-only
+My perturbation is prepared separately:
+
+```powershell
+python -m fireprotect.cli prepare-rx3-my5 `
+  --phase-a-dir validation/RX3-EXP-04_A_MY_BIAXIAL_OBSERVATION `
+  --observation validation/RX3-EXP-04_A_MY_BIAXIAL_OBSERVATION/phase_a_gui_observation.json `
+  --output-dir validation/RX3-EXP-04B_MY5 `
+  --mode VALIDATION
+```
+
+The command accepts only the exact Кс1 fingerprint at position 7 and changes
+only field79 `4,3414 → 5,00`. Field79 remains `UNKNOWN/FORBIDDEN`; DRAFT,
+PRODUCTION and the ordinary typed writer remain blocked. The generated file is
+for the pre-calc screenshot checkpoint only—no Calculate or Save action.
+
 Post-calc validation always requires an explicit target. Prefer the exact
 BEFORE-record fingerprint or a 1-based `Tconstr` position; `--target-mark` is
 accepted only when the mark resolves uniquely. Required result changes are

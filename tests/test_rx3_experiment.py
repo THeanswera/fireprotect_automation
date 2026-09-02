@@ -6,22 +6,30 @@ from pathlib import Path
 
 import pytest
 
+import fireprotect.rx3.experiment as rx3_experiment
 from fireprotect.execution import ExecutionMode
 from fireprotect.rx3.experiment import (
+    Rx3MyBiaxialPhaseABundle,
     Rx3ExperimentPreparationError,
     load_bending_report_references,
     prepare_rx3_bending_phase_a,
     prepare_rx3_bending_mx10_validation,
     prepare_rx3_bending_q3_validation,
     prepare_rx3_experiment_phase_a,
+    prepare_rx3_my5_validation,
     prepare_rx3_my_biaxial_phase_a,
     rank_rx3_bending_template_candidates,
     rank_rx3_template_candidates,
     validate_rx3_bending_q3_result,
 )
 from fireprotect.rx3.diff import diff_records
-from fireprotect.rx3.parser import construction_records, read_rx38
+from fireprotect.rx3.parser import (
+    UnsafeRx38WriteError,
+    construction_records,
+    read_rx38,
+)
 from fireprotect.rx3.safety import rx38_record_fingerprint
+from fireprotect.rx3.schema import WritePolicy, field_spec
 
 
 def _record(mark: str, stress_state: str, field50: str = "0") -> list[str]:
@@ -73,6 +81,92 @@ def _biaxial_record(mark: str, mx: str, my: str, q: str = "0") -> list[str]:
     record[92] = q
     record[122] = "0,5"
     return record
+
+
+def _my_phase_a_and_observation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    baseline_my: str = "4,3414",
+) -> tuple[Rx3MyBiaxialPhaseABundle, Path]:
+    source = tmp_path / "corpus.rx38"
+    target = _biaxial_record("Кс1", "0.507", baseline_my)
+    target[14] = "3,87"
+    target[17] = "ГОСТ 8240-97"
+    target[42] = "С245"
+    target[55] = "60"
+    target[61] = "отн. X-X"
+    target[104] = "Стандартный температурный режим"
+    records = [
+        _bending_record(f"Б{index}", str(index), str(index))
+        for index in range(1, 7)
+    ] + [target]
+    _rx38(source, records)
+    phase_a = prepare_rx3_my_biaxial_phase_a(
+        [source],
+        tmp_path / "phase_a",
+        reference_my_knm=baseline_my,
+    )
+    observation = tmp_path / "phase_a_gui_observation.json"
+    observation.write_text(
+        json.dumps(
+            {
+                "experiment_id": "RX3-EXP-04",
+                "phase": "A_MY_BIAXIAL_GUI_OBSERVATION",
+                "result": "PASS",
+                "calculation_pressed": False,
+                "stale_template_results_are_new_evidence": False,
+                "template": {
+                    "sha256": phase_a.source_sha256,
+                    "record_fingerprint": phase_a.target_fingerprint,
+                    "position_1_based": phase_a.target_position,
+                },
+                "selection": {
+                    "mark": "Кс1",
+                    "profile": "20П",
+                    "profile_standard": "ГОСТ 8240-97",
+                    "steel": "C245",
+                    "length_m": "3.87",
+                    "stress_state": (
+                        "Изгибаемый стержень в двух главных плоскостях"
+                    ),
+                    "axis": "отн. X-X",
+                },
+                "actions": {
+                    "Mx_knm": "0.51",
+                    "My_knm": "4.34",
+                    "plastic_region_enabled": True,
+                    "en_classification_enabled": False,
+                },
+                "heating": {
+                    "heating_sides": 3,
+                    "active_sides": ["LEFT", "RIGHT", "BOTTOM"],
+                    "inactive_sides": ["TOP"],
+                    "rx38_indices_mapped": False,
+                },
+                "fire": {
+                    "required_R_min": "60",
+                    "regime": "Стандартный температурный режим",
+                    "epsilon0": "0.800",
+                    "epsilon": "1.000",
+                    "Phi": "1.000",
+                    "alpha_c": "25.00",
+                    "kf": "1.000",
+                },
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        rx3_experiment, "RX3_EXP_04_SOURCE_SHA256", phase_a.source_sha256
+    )
+    monkeypatch.setattr(
+        rx3_experiment,
+        "RX3_EXP_04_TARGET_FINGERPRINT",
+        phase_a.target_fingerprint,
+    )
+    return phase_a, observation
 
 
 def _bending_references(path: Path, source: Path, *, second_q: str = "20") -> None:
@@ -841,3 +935,165 @@ def test_my_biaxial_phase_a_rejects_ambiguous_exact_mark(tmp_path: Path) -> None
         prepare_rx3_my_biaxial_phase_a(
             [first, second], tmp_path / "ambiguous_phase_a"
         )
+
+
+def test_my5_validation_changes_only_field79_and_preserves_protected_fields(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    phase_a, observation = _my_phase_a_and_observation(
+        tmp_path, monkeypatch
+    )
+
+    bundle = prepare_rx3_my5_validation(
+        phase_a.directory,
+        observation,
+        tmp_path / "my5",
+    )
+
+    before_records = construction_records(read_rx38(bundle.template))
+    after_records = construction_records(read_rx38(bundle.generated))
+    assert len(before_records) == len(after_records) == 7
+    for position, (before, after) in enumerate(
+        zip(before_records, after_records), 1
+    ):
+        differences = diff_records(before, after)
+        if position == 7:
+            assert [item.index for item in differences] == [79]
+            assert before.raw_tokens[79] == "4,3414"
+            assert after.raw_tokens[79] == "5,00"
+            assert all(
+                before.raw_tokens[index] == after.raw_tokens[index]
+                for index in range(200)
+                if index != 79
+            )
+        else:
+            assert differences == []
+            assert before.raw_tokens == after.raw_tokens
+    diff_payload = json.loads(bundle.diff_json.read_text(encoding="utf-8"))
+    assert diff_payload["status"] == "PASS"
+    assert diff_payload["all_other_target_fields_token_identical"] is True
+    assert diff_payload["all_non_target_records_token_identical"] is True
+    assert all(
+        item["token_identical"]
+        for group in diff_payload["protected_target_fields"].values()
+        for item in group.values()
+    )
+    assert {path.name for path in bundle.directory.iterdir()} == {
+        "template.rx38",
+        "generated_MY5.rx38",
+        "project_element_MY5.json",
+        "template_profile.json",
+        "heating_evidence.json",
+        "compatibility_evidence.json",
+        "precalc_diff.json",
+        "precalc_diff.md",
+        "EXPECTED_RX3_GUI_VALUES.md",
+        "CHECKLIST_PRECALC.md",
+        "README_RUN_RX3.md",
+        "audit.json",
+    }
+
+
+def test_my5_validation_refuses_fingerprint_mismatch(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    phase_a, observation = _my_phase_a_and_observation(
+        tmp_path, monkeypatch
+    )
+    monkeypatch.setattr(rx3_experiment, "RX3_EXP_04_TARGET_FINGERPRINT", "0" * 64)
+
+    with pytest.raises(Rx3ExperimentPreparationError, match="fingerprint"):
+        prepare_rx3_my5_validation(
+            phase_a.directory,
+            observation,
+            tmp_path / "my5",
+        )
+
+
+@pytest.mark.parametrize(
+    ("expected_mark", "expected_position"),
+    (("wrong", 7), ("Кс1", 6)),
+)
+def test_my5_validation_refuses_wrong_mark_or_position(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    expected_mark: str,
+    expected_position: int,
+) -> None:
+    phase_a, observation = _my_phase_a_and_observation(
+        tmp_path, monkeypatch
+    )
+    monkeypatch.setattr(rx3_experiment, "RX3_EXP_04_TARGET_MARK", expected_mark)
+    monkeypatch.setattr(
+        rx3_experiment, "RX3_EXP_04_TARGET_POSITION", expected_position
+    )
+
+    with pytest.raises(Rx3ExperimentPreparationError, match="mark|binding|fingerprint"):
+        prepare_rx3_my5_validation(
+            phase_a.directory,
+            observation,
+            tmp_path / "my5",
+        )
+
+
+def test_my5_validation_refuses_wrong_baseline_my(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    phase_a, observation = _my_phase_a_and_observation(
+        tmp_path,
+        monkeypatch,
+        baseline_my="4.2",
+    )
+
+    with pytest.raises(Rx3ExperimentPreparationError, match="baseline My"):
+        prepare_rx3_my5_validation(
+            phase_a.directory,
+            observation,
+            tmp_path / "my5",
+        )
+
+
+@pytest.mark.parametrize("mode", (ExecutionMode.DRAFT, ExecutionMode.PRODUCTION))
+def test_my5_validation_refuses_non_validation_modes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    mode: ExecutionMode,
+) -> None:
+    phase_a, observation = _my_phase_a_and_observation(
+        tmp_path, monkeypatch
+    )
+
+    with pytest.raises(Rx3ExperimentPreparationError, match="VALIDATION"):
+        prepare_rx3_my5_validation(
+            phase_a.directory,
+            observation,
+            tmp_path / "my5",
+            mode=mode,
+        )
+
+
+def test_my5_validation_does_not_promote_or_open_generic_field79_writer(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    phase_a, observation = _my_phase_a_and_observation(
+        tmp_path, monkeypatch
+    )
+    before_spec = field_spec(79)
+
+    prepare_rx3_my5_validation(
+        phase_a.directory,
+        observation,
+        tmp_path / "my5",
+    )
+
+    after_spec = field_spec(79)
+    assert before_spec == after_spec
+    assert after_spec.confidence == "unknown"
+    assert after_spec.write_policy is WritePolicy.FORBIDDEN
+    record = construction_records(read_rx38(phase_a.template))[6]
+    with pytest.raises(UnsafeRx38WriteError, match="not confirmed"):
+        record.with_typed_field(79, "5,00", compatibility_verified=True)

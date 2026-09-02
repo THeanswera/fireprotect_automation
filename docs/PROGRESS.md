@@ -76,9 +76,10 @@
   input только для Б1 / 14Б2 / one-plane X-X. GUI Q `2,32 → 3,00`, Q
   utilisation `0,028 → 0,037`; persisted field92=`3`, field50/78 и все
   non-target records неизменны. Write policy остаётся `EXPERIMENTAL`.
-- **PHASE A / WAITING FOR GUI SCREENSHOT:** RX3-EXP-04 выбрал exact Кс1 / 20П
-  biaxial record без mutation. Field79 — strongest My candidate, но semantics
-  не назначены; heating требует GUI confirmation.
+- **PRE-CALC / WAITING FOR MY5 GUI SCREENSHOT:** RX3-EXP-04 Phase A GUI
+  подтвердил exact Кс1 / 20П, Mx=0,51, My=4,34, три стороны обогрева и R60.
+  RX3-EXP-04B изменил только field79 `4,3414 → 5,00`; все прочие target fields
+  и non-target records token-identical. Field79 остаётся `UNKNOWN/FORBIDDEN`.
 - **UNKNOWN:** индекс толщины огнезащиты в RX38 не доказан, поэтому
   `fireproofing_thickness` остаётся `null`.
 - **BLOCKED:** production-расширение за пределы верифицированного
