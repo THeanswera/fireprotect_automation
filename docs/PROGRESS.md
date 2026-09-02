@@ -72,6 +72,10 @@
 - **CONFIRMED (узкая область):** RX3-EXP-02B подтвердил field50 как GUI Mx для
   one-plane X-X / Б1 и ручную цепочку до persisted RX38. Write policy остаётся
   `EXPERIMENTAL`; field78 только `PROBABLE`, field92 `UNKNOWN`.
+- **PREPARED / WAITING FOR MANUAL GUI:** RX3-EXP-03 привязан к exact
+  RX3-EXP-02B template/fingerprint и создаёт отдельный `generated_Q3.rx38` с
+  единственным изменением field92 `2,32 → 3,00`. RX3 не запускается;
+  field92 остаётся `UNKNOWN`, production write заблокирован.
 - **UNKNOWN:** индекс толщины огнезащиты в RX38 не доказан, поэтому
   `fireproofing_thickness` остаётся `null`.
 - **BLOCKED:** production-расширение за пределы верифицированного

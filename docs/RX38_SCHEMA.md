@@ -119,7 +119,7 @@ note. Наличие CONFIRMED-семантики само по себе не д
 | 89 | unknown_089 | Not established | unknown | — | unknown | unknown | No admissible evidence | unknown | Preserved verbatim; do not write through the typed API. |
 | 90 | plastic_modulus_x_m3 | Plastic section modulus Wpl,x | decimal | m³ | calculated | yes for steel Tconstr | RX38 values + RX3 report | probable | — |
 | 91 | plastic_modulus_y_m3 | Plastic section modulus Wpl,y | decimal | m³ | calculated | yes for steel Tconstr | RX38 values + RX3 report | probable | — |
-| 92 | unknown_092 | Not established | unknown | — | unknown | unknown | No admissible evidence | unknown | Preserved verbatim; do not write through the typed API. |
+| 92 | unknown_092 | Q candidate pending controlled GUI causality | unknown | — | unknown | unknown | Five-record correlation + RX3-EXP-03 pre-calc preparation only | unknown | Preserved verbatim and blocked in typed/production writers. A fingerprint-bound VALIDATION-only experimental function may prepare field92 `2,32 → 3,00`; no semantic promotion occurs before real GUI Calculate/Save evidence. |
 | 93 | unknown_093 | Not established | unknown | — | unknown | unknown | No admissible evidence | unknown | Preserved verbatim; do not write through the typed API. |
 | 94 | unknown_094 | Not established | unknown | — | unknown | unknown | No admissible evidence | unknown | Preserved verbatim; do not write through the typed API. |
 | 95 | unknown_095 | Not established | unknown | — | unknown | unknown | No admissible evidence | unknown | Preserved verbatim; do not write through the typed API. |

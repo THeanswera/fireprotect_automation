@@ -151,6 +151,24 @@ verified one-plane X-X / Б1 template family. Its schema write policy remains
 Field 78 is only a probable post-calc persisted copy, and field 92 remains an
 unknown observational Q candidate.
 
+`RX3-EXP-03` prepares the next single-variable check from the completed
+RX3-EXP-02B evidence directory:
+
+```powershell
+python -m fireprotect.cli prepare-rx3-bending-q3 `
+  --mx-validation-dir validation/RX3-EXP-02B_MX10 `
+  --output-dir validation/RX3-EXP-03_Q3
+```
+
+The command requires the exact baseline SHA/fingerprint, unique Б1 position,
+14Б2 profile, one-plane X-X state, heating evidence, and completed manual
+RX3-EXP-02B report. It changes only field92 from `2,32` to `3,00`, creates
+`generated_Q3.rx38` without overwrite, and stops before RX3. This is a
+VALIDATION-only experimental exception: field92 stays `UNKNOWN`, the generic
+and production writers remain blocked, and Qx/Qy/LIRA axis/sign mappings are
+not inferred. Manual GUI actions and the post-calc command are contained in
+the local bundle.
+
 Post-calc validation always requires an explicit target. Prefer the exact
 BEFORE-record fingerprint or a 1-based `Tconstr` position; `--target-mark` is
 accepted only when the mark resolves uniquely. Required result changes are

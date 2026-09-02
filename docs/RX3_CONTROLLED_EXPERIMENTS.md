@@ -144,3 +144,29 @@ target-aware validator for that narrow scope with Q fixed.
 The next experiment family is one controlled Q perturbation (`2,32 → 3,00
 kN`) on the same Б1 template with Mx explicitly frozen. It must be prepared
 only as a separate validation step; RX3 calculation remains manual.
+
+## RX3-EXP-03 — prepared controlled Q perturbation
+
+`prepare-rx3-bending-q3` accepts only the completed RX3-EXP-02B evidence
+directory. It rechecks the source SHA, exact 200-field fingerprint, unique
+1-based Б1 position, profile 14Б2, one-plane X-X state, Mx/Q baseline,
+three-side heating and the prior manual Calculate/Save report. Any mismatch
+blocks generation.
+
+The local bundle copies the exact baseline template and creates
+`generated_Q3.rx38` by changing only field92 `2,32 → 3,00`; field50 and
+field78 remain token-identical at `8,89`, all other target fields and all
+non-target records remain token-identical. Fields 44/54 are explicitly stale
+until the user manually calculates. The restricted write path accepts only
+`VALIDATION`; `PRODUCTION` and the ordinary typed writer remain blocked.
+
+After manual Calculate, Save to table and Save As `calculated_Q3.rx38`,
+`validate-rx3-bending-q3` checks the exact target and all non-target records,
+observes fields 44/52/53/54/76, requires field50 and field78 to remain
+semantically `8.89`, and determines whether persisted field92 remains
+semantically `3.00`. Raw token normalization such as `3,00 → 3` is reported
+separately from numeric change. The validator never promotes field92 in the
+schema automatically.
+
+Current status: `WAITING_FOR_Q3_GUI_CALCULATION`. No Q result or
+`Q_X_AXIS_PATH_MVP_STATUS = VALIDATED` claim exists yet.

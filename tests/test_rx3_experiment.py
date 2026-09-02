@@ -6,14 +6,17 @@ from pathlib import Path
 
 import pytest
 
+from fireprotect.execution import ExecutionMode
 from fireprotect.rx3.experiment import (
     Rx3ExperimentPreparationError,
     load_bending_report_references,
     prepare_rx3_bending_phase_a,
     prepare_rx3_bending_mx10_validation,
+    prepare_rx3_bending_q3_validation,
     prepare_rx3_experiment_phase_a,
     rank_rx3_bending_template_candidates,
     rank_rx3_template_candidates,
+    validate_rx3_bending_q3_result,
 )
 from fireprotect.rx3.diff import diff_records
 from fireprotect.rx3.parser import construction_records, read_rx38
@@ -78,6 +81,175 @@ def _bending_references(path: Path, source: Path, *, second_q: str = "20") -> No
         ],
     }
     path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+
+
+def _q3_previous_evidence(
+    tmp_path: Path, *, duplicate_mark: bool = False
+) -> Path:
+    directory = tmp_path / "mx_validation"
+    directory.mkdir()
+    values = (
+        ("Б3", "18.73", "28.49"),
+        ("Б4", "2.24", "24.39"),
+        ("Б5", "1.5647", "5.6898"),
+        ("Б2", "9.30", "2.32"),
+        ("Б1", "8.89", "2.32"),
+    )
+    records = [_bending_record(*item) for item in values]
+    target = records[-1]
+    target[5] = "Двутавр"
+    target[17] = "ГОСТ 26020-83"
+    target[19] = "14Б2"
+    target[104] = "Стандартный температурный режим"
+    if duplicate_mark:
+        records[0][1] = "Б1"
+        records[0][3] = "Б1"
+    template = directory / "template.rx38"
+    _rx38(template, records)
+    template_records = construction_records(read_rx38(template))
+    baseline_targets = [record for record in template_records if record.mark == "Б1"]
+    baseline_target = baseline_targets[-1]
+    template_sha = sha256(template.read_bytes()).hexdigest()
+    fingerprint = rx38_record_fingerprint(baseline_target)
+
+    generated_records = [list(item) for item in records]
+    generated_records[-1][50] = "10,00"
+    generated = directory / "generated_MX10.rx38"
+    _rx38(generated, generated_records)
+    generated_target = construction_records(read_rx38(generated))[-1]
+    calculated_records = [list(item) for item in generated_records]
+    calculated_records[-1][50] = "10"
+    calculated_records[-1][52] = "0,486623451719159"
+    calculated_records[-1][44] = "518,859368817757"
+    calculated_records[-1][54] = "7,11666666666667"
+    calculated_records[-1][76] = "119,222745671194"
+    calculated_records[-1][78] = "10"
+    calculated = directory / "calculated_MX10.rx38"
+    _rx38(calculated, calculated_records)
+
+    observation_path = tmp_path / "phase_a_gui_observation.json"
+    observation_path.write_text(
+        json.dumps(
+            {
+                "experiment_id": "RX3-EXP-02",
+                "result": "PASS",
+                "calculation_pressed": False,
+                "template": {
+                    "sha256": template_sha,
+                    "record_fingerprint": fingerprint,
+                },
+                "selection": {
+                    "mark": "Б1",
+                    "profile": "14Б2",
+                    "stress_state": baseline_target.fields[45],
+                    "axis": "отн. X-X",
+                },
+                "actions": {"Mx_knm": "8.89", "Q_kn": "2.32"},
+                "heating": {
+                    "heating_sides": 3,
+                    "active_sides": ["LEFT", "RIGHT", "BOTTOM"],
+                    "rx38_indices_mapped": False,
+                },
+                "fire": {"required_R_min": "60"},
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    (directory / "audit.json").write_text(
+        json.dumps(
+            {
+                "experiment_id": "RX3-EXP-02B",
+                "execution_mode": "VALIDATION",
+                "phase_a_observation": str(observation_path),
+                "template": {
+                    "sha256": template_sha,
+                    "record_sha256": fingerprint,
+                },
+                "generated": {
+                    "sha256": sha256(generated.read_bytes()).hexdigest(),
+                    "record_sha256": rx38_record_fingerprint(generated_target),
+                },
+                "precalc_diff": {
+                    "target_mark": "Б1",
+                    "template_record_sha256": fingerprint,
+                },
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    report_records = [
+        {
+            "position": position,
+            "is_target": position == len(template_records),
+            "before_mark": record.mark,
+            "after_mark": record.mark,
+            "confirmed_changes": (
+                [
+                    {
+                        "index": 50,
+                        "new_token": "10",
+                        "semantic_changed": False,
+                    }
+                ]
+                if position == len(template_records)
+                else []
+            ),
+            "probable_changes": (
+                [{"index": 78, "new_token": "10", "semantic_changed": None}]
+                if position == len(template_records)
+                else []
+            ),
+        }
+        for position, record in enumerate(template_records, 1)
+    ]
+    (directory / "rx3_validation_report.json").write_text(
+        json.dumps(
+            {
+                "status": "RX3_RESULT_ANALYSED",
+                "gui_recalculation_verified": True,
+                "non_target_records_text_unchanged": True,
+                "evidence_reference": "RX3-EXP-02B test evidence",
+                "before": {
+                    "path": str(generated),
+                    "sha256": sha256(generated.read_bytes()).hexdigest(),
+                },
+                "after": {
+                    "path": str(calculated),
+                    "sha256": sha256(calculated.read_bytes()).hexdigest(),
+                },
+                "records": report_records,
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    return directory
+
+
+def _complete_q3_observation(bundle_directory: Path) -> Path:
+    template = bundle_directory / "POSTCALC_OBSERVATION_TEMPLATE.json"
+    payload = json.loads(template.read_text(encoding="utf-8"))
+    payload["result"] = "PASS"
+    payload["calculation"].update(
+        {
+            "pressed": True,
+            "M_utilisation": "0.433",
+            "Q_utilisation": "0.036",
+            "governing_gamma_tem": "0.433",
+            "beta_tem": "0.000",
+            "beta_related_theta_C": "1200",
+            "governing_theta_cr_C": "542.34",
+            "R0_min": "7.62",
+            "displayed_stress_load_MPa": "105.99",
+        }
+    )
+    payload["persistence"].update({"save_to_table": True, "save_as": True})
+    payload["evidence_reference"] = "RX3-EXP-03 test GUI evidence"
+    path = bundle_directory / "POSTCALC_OBSERVATION.json"
+    path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+    return path
 
 
 def _database(path: Path) -> None:
@@ -355,3 +527,167 @@ def test_bending_mx10_bundle_is_fingerprint_bound_and_changes_only_field50(
     assert audit["production_writer_changed"] is False
     assert audit["candidate_analysis"]["B1_Mx_candidate_indices"] == [50, 78]
     assert audit["candidate_analysis"]["B1_Q_candidate_indices"] == [92]
+
+
+def test_bending_q3_bundle_is_exactly_bound_and_changes_only_field92(
+    tmp_path: Path,
+) -> None:
+    previous = _q3_previous_evidence(tmp_path)
+    bundle = prepare_rx3_bending_q3_validation(previous, tmp_path / "q3")
+
+    before = construction_records(read_rx38(bundle.template))
+    after = construction_records(read_rx38(bundle.generated))
+    changed = [
+        (left, right, diff_records(left, right))
+        for left, right in zip(before, after)
+        if diff_records(left, right)
+    ]
+    assert len(changed) == 1
+    assert changed[0][0].mark == "Б1"
+    assert [item.index for item in changed[0][2]] == [92]
+    assert changed[0][0].raw_tokens[50] == changed[0][1].raw_tokens[50]
+    assert changed[0][0].raw_tokens[78] == changed[0][1].raw_tokens[78]
+    assert changed[0][1].fields[92] == "3,00"
+    assert bundle.generated_sha256 == sha256(bundle.generated.read_bytes()).hexdigest()
+    assert bundle.template.read_bytes() == (previous / "template.rx38").read_bytes()
+
+    audit = json.loads(bundle.audit.read_text(encoding="utf-8"))
+    assert audit["source"]["target_position_1_based"] == 5
+    assert audit["precalc_diff"]["changed_fields"][0]["index"] == 92
+    assert audit["precalc_diff"]["all_other_target_fields_token_identical"] is True
+    assert audit["precalc_diff"]["all_non_target_records_token_identical"] is True
+    assert audit["field92_evidence_decision"].startswith("UNKNOWN_")
+    assert audit["schema_mapping_promoted"] is False
+    assert audit["production_writer_changed"] is False
+
+    project = json.loads(bundle.project_element.read_text(encoding="utf-8"))
+    assert project["Mx"] == {"value": "8.89", "unit": "kN*m"}
+    assert project["Qx"] is None and project["Qy"] is None
+    expected = bundle.expected_gui.read_text(encoding="utf-8")
+    assert "Q: `3.00 kN`" in expected
+    assert "Mx: `8.89 kN*m`" in expected
+
+
+def test_bending_q3_refuses_production_and_incomplete_compatibility(
+    tmp_path: Path,
+) -> None:
+    previous = _q3_previous_evidence(tmp_path)
+    with pytest.raises(Rx3ExperimentPreparationError, match="outside VALIDATION"):
+        prepare_rx3_bending_q3_validation(
+            previous,
+            tmp_path / "production",
+            mode=ExecutionMode.PRODUCTION,
+        )
+
+    audit_path = previous / "audit.json"
+    audit = json.loads(audit_path.read_text(encoding="utf-8"))
+    audit["template"]["sha256"] = "0" * 64
+    audit_path.write_text(json.dumps(audit), encoding="utf-8")
+    with pytest.raises(Rx3ExperimentPreparationError, match="SHA-256 mismatch"):
+        prepare_rx3_bending_q3_validation(previous, tmp_path / "wrong_sha")
+
+
+def test_bending_q3_refuses_mismatched_gui_observation_and_duplicate_mark(
+    tmp_path: Path,
+) -> None:
+    previous = _q3_previous_evidence(tmp_path)
+    audit = json.loads((previous / "audit.json").read_text(encoding="utf-8"))
+    observation_path = Path(audit["phase_a_observation"])
+    observation = json.loads(observation_path.read_text(encoding="utf-8"))
+    observation["selection"]["profile"] = "WRONG"
+    observation_path.write_text(json.dumps(observation), encoding="utf-8")
+    with pytest.raises(Rx3ExperimentPreparationError, match="profile"):
+        prepare_rx3_bending_q3_validation(previous, tmp_path / "wrong_gui")
+
+    duplicate_root = tmp_path / "duplicate"
+    duplicate_root.mkdir()
+    duplicate_previous = _q3_previous_evidence(duplicate_root, duplicate_mark=True)
+    with pytest.raises(Rx3ExperimentPreparationError, match="exactly one Tconstr"):
+        prepare_rx3_bending_q3_validation(
+            duplicate_previous, duplicate_root / "q3"
+        )
+
+
+def test_bending_q3_bundle_never_overwrites_existing_artifacts(tmp_path: Path) -> None:
+    previous = _q3_previous_evidence(tmp_path)
+    output = tmp_path / "q3"
+    output.mkdir()
+    (output / "keep.txt").write_text("keep", encoding="utf-8")
+    with pytest.raises(Rx3ExperimentPreparationError, match="new or empty"):
+        prepare_rx3_bending_q3_validation(previous, output)
+
+
+def test_bending_q3_postcalc_validator_classifies_token_normalization(
+    tmp_path: Path,
+) -> None:
+    previous = _q3_previous_evidence(tmp_path)
+    bundle = prepare_rx3_bending_q3_validation(previous, tmp_path / "q3")
+    generated_records = [
+        list(record.raw_tokens)
+        for record in construction_records(read_rx38(bundle.generated))
+    ]
+    generated_records[-1][92] = "3"
+    calculated = bundle.directory / "calculated_Q3.rx38"
+    _rx38(calculated, generated_records)
+    observation = _complete_q3_observation(bundle.directory)
+
+    report = validate_rx3_bending_q3_result(
+        bundle.directory, calculated, observation
+    )
+
+    field92 = report.data["field92_persistence"]
+    assert field92["old_token"] == "3,00"
+    assert field92["new_token"] == "3"
+    assert field92["semantic_changed"] is False
+    assert field92["classification"] == "RX3_TOKEN_NORMALIZATION"
+    assert field92["persisted_numeric_matches_Q3"] is True
+    assert report.data["field_observations"]["50"]["semantic_changed"] is False
+    assert report.data["field_observations"]["78"]["semantic_changed"] is False
+    assert report.data["stale_result_separation"]["before_status"] == (
+        "STALE_TEMPLATE_RESULT"
+    )
+    assert report.data["schema_mapping_promoted"] is False
+    assert report.data["production_write_allowed"] is False
+
+
+def test_bending_q3_postcalc_validator_fails_on_non_target_mutation(
+    tmp_path: Path,
+) -> None:
+    previous = _q3_previous_evidence(tmp_path)
+    bundle = prepare_rx3_bending_q3_validation(previous, tmp_path / "q3")
+    records = [
+        list(record.raw_tokens)
+        for record in construction_records(read_rx38(bundle.generated))
+    ]
+    records[0][44] = "999"
+    calculated = bundle.directory / "calculated_Q3.rx38"
+    _rx38(calculated, records)
+    observation = _complete_q3_observation(bundle.directory)
+
+    with pytest.raises(Rx3ExperimentPreparationError, match="non-target mutation"):
+        validate_rx3_bending_q3_result(bundle.directory, calculated, observation)
+
+
+def test_bending_q3_postcalc_validator_refuses_wrong_gui_or_persisted_values(
+    tmp_path: Path,
+) -> None:
+    previous = _q3_previous_evidence(tmp_path)
+    bundle = prepare_rx3_bending_q3_validation(previous, tmp_path / "q3")
+    records = [
+        list(record.raw_tokens)
+        for record in construction_records(read_rx38(bundle.generated))
+    ]
+    records[-1][78] = "10"
+    calculated = bundle.directory / "calculated_Q3.rx38"
+    _rx38(calculated, records)
+    observation = _complete_q3_observation(bundle.directory)
+    with pytest.raises(Rx3ExperimentPreparationError, match="persisted Mx/Q"):
+        validate_rx3_bending_q3_result(bundle.directory, calculated, observation)
+
+    records[-1][78] = "8,89"
+    _rx38(calculated, records)
+    payload = json.loads(observation.read_text(encoding="utf-8"))
+    payload["generated_sha256"] = "0" * 64
+    observation.write_text(json.dumps(payload), encoding="utf-8")
+    with pytest.raises(Rx3ExperimentPreparationError, match="not bound"):
+        validate_rx3_bending_q3_result(bundle.directory, calculated, observation)

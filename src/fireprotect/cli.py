@@ -16,7 +16,9 @@ from .rx3.experiment import (
     load_bending_report_references,
     prepare_rx3_bending_phase_a,
     prepare_rx3_bending_mx10_validation,
+    prepare_rx3_bending_q3_validation,
     prepare_rx3_experiment_phase_a,
+    validate_rx3_bending_q3_result,
 )
 from .rx3.parser import Rx38Construction, construction_records, read_rx38
 from .rx3.profiles import ProfileRepository, list_tables
@@ -228,6 +230,62 @@ def cmd_prepare_rx3_bending_mx10(args: argparse.Namespace) -> None:
     )
 
 
+def cmd_prepare_rx3_bending_q3(args: argparse.Namespace) -> None:
+    bundle = prepare_rx3_bending_q3_validation(
+        args.mx_validation_dir,
+        args.output_dir,
+        experiment_id=args.experiment_id,
+    )
+    print(
+        json.dumps(
+            {
+                "directory": str(bundle.directory),
+                "template": str(bundle.template),
+                "generated": str(bundle.generated),
+                "generated_sha256": bundle.generated_sha256,
+                "project_element": str(bundle.project_element),
+                "template_profile": str(bundle.template_profile),
+                "heating_evidence": str(bundle.heating_evidence),
+                "compatibility_evidence": str(bundle.compatibility_evidence),
+                "precalc_diff_json": str(bundle.diff_json),
+                "precalc_diff_markdown": str(bundle.diff_markdown),
+                "expected_gui": str(bundle.expected_gui),
+                "checklist": str(bundle.checklist),
+                "instructions": str(bundle.instructions),
+                "postcalc_observation_template": str(
+                    bundle.postcalc_observation_template
+                ),
+                "audit": str(bundle.audit),
+                "status": "WAITING_FOR_Q3_GUI_CALCULATION",
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+    )
+
+
+def cmd_validate_rx3_bending_q3(args: argparse.Namespace) -> None:
+    report = validate_rx3_bending_q3_result(
+        args.bundle_dir,
+        args.calculated,
+        args.observation,
+        json_report=args.json_report,
+        markdown_report=args.markdown_report,
+    )
+    print(
+        json.dumps(
+            {
+                "json_report": str(report.json_path),
+                "markdown_report": str(report.markdown_path),
+                "status": report.data["status"],
+                "schema_mapping_promoted": report.data["schema_mapping_promoted"],
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+    )
+
+
 def cmd_validate_rx3_result(args: argparse.Namespace) -> None:
     report = validate_rx3_result_files(
         args.before,
@@ -383,6 +441,30 @@ def main() -> None:
     )
     command.add_argument("--experiment-id", default="RX3-EXP-02B")
     command.set_defaults(func=cmd_prepare_rx3_bending_mx10)
+
+    command = subparsers.add_parser(
+        "prepare-rx3-bending-q3",
+        help="Prepare the exact RX3-EXP-03 field92 Q=3 validation bundle",
+    )
+    command.add_argument("--mx-validation-dir", type=Path, required=True)
+    command.add_argument(
+        "--output-dir",
+        type=Path,
+        default=Path("validation/RX3-EXP-03_Q3"),
+    )
+    command.add_argument("--experiment-id", default="RX3-EXP-03")
+    command.set_defaults(func=cmd_prepare_rx3_bending_q3)
+
+    command = subparsers.add_parser(
+        "validate-rx3-bending-q3",
+        help="Validate manual RX3-EXP-03 calculation and persisted Q behavior",
+    )
+    command.add_argument("--bundle-dir", type=Path, required=True)
+    command.add_argument("--calculated", type=Path, required=True)
+    command.add_argument("--observation", type=Path, required=True)
+    command.add_argument("--json-report", type=Path)
+    command.add_argument("--markdown-report", type=Path)
+    command.set_defaults(func=cmd_validate_rx3_bending_q3)
 
     command = subparsers.add_parser(
         "validate-rx3-result",

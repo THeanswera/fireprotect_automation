@@ -13,6 +13,7 @@ import re
 import shutil
 from typing import Any, Iterable, Mapping
 
+from ..execution import ExecutionMode
 from ..project_io import project_element_from_dict, project_element_to_dict
 from .diff import diff_records
 from .parser import (
@@ -141,6 +142,32 @@ class Rx3BendingMxValidationBundle:
     instructions: Path
     audit: Path
     generated_sha256: str
+
+
+@dataclass(frozen=True, slots=True)
+class Rx3BendingQValidationBundle:
+    directory: Path
+    template: Path
+    generated: Path
+    project_element: Path
+    template_profile: Path
+    heating_evidence: Path
+    compatibility_evidence: Path
+    diff_json: Path
+    diff_markdown: Path
+    expected_gui: Path
+    checklist: Path
+    instructions: Path
+    postcalc_observation_template: Path
+    audit: Path
+    generated_sha256: str
+
+
+@dataclass(frozen=True, slots=True)
+class Rx3BendingQResultReport:
+    data: dict[str, Any]
+    json_path: Path
+    markdown_path: Path
 
 
 def _decimal(value: str) -> Decimal | None:
@@ -1316,13 +1343,15 @@ def _bending_project_payload(
     *,
     target_mx: Decimal,
     heating_sides: int,
+    experiment_id: str = "RX3-EXP-02B",
+    combination: str = "RX3-EXP-02B_MX10",
 ) -> dict[str, Any]:
     def q(raw: str | Decimal, unit: str) -> dict[str, str]:
         return {"value": str(raw).replace(",", "."), "unit": unit}
 
     payload: dict[str, Any] = {
-        "project_id": "RX3-EXP-02B",
-        "element_id": "RX3-EXP-02B-B1",
+        "project_id": experiment_id,
+        "element_id": f"{experiment_id}-B1",
         "mark": record.fields[1],
         "element_type": "beam",
         "source_file": str(source),
@@ -1343,14 +1372,14 @@ def _bending_project_payload(
         "Ry": None,
         "E": q(record.fields[34], "MPa"),
         "density": q(record.fields[32], "kg/m3"),
-        "load_case": "RX3-EXP-02B",
-        "combination": "RX3-EXP-02B_MX10",
+        "load_case": experiment_id,
+        "combination": combination,
         "N": q(record.fields[49], "kN"),
         "Mx": q(target_mx, "kN*m"),
         "My": None,
         "Qx": None,
         "Qy": None,
-        "governing_combination": "RX3-EXP-02B_MX10",
+        "governing_combination": combination,
         "required_fire_resistance": q(record.fields[55], "min"),
         "stress_state": record.fields[45],
         "heating_sides": heating_sides,
@@ -1414,7 +1443,7 @@ def _bending_project_payload(
         elif name in experiment_fields:
             provenance[name] = {
                 "kind": "ENGINEER_INPUT",
-                "file": "RX3-EXP-02B controlled validation protocol",
+                "file": f"{experiment_id} controlled validation protocol",
                 "field": name,
             }
     payload["provenance"] = provenance
@@ -1863,3 +1892,874 @@ def prepare_rx3_bending_mx10_validation(
         audit_path,
         generated_sha,
     )
+
+
+def _require_file_sha(path: Path, expected: object, label: str) -> str:
+    expected_text = _require_observation_text(expected, label).lower()
+    actual = _sha256(path)
+    if actual != expected_text:
+        raise Rx3ExperimentPreparationError(
+            f"{label} mismatch: expected {expected_text}, got {actual}"
+        )
+    return actual
+
+
+def _report_change(
+    report_record: Mapping[str, Any], collection: str, index: int
+) -> Mapping[str, Any]:
+    changes = report_record.get(collection)
+    if not isinstance(changes, list):
+        raise Rx3ExperimentPreparationError(
+            f"RX3-EXP-02B report has no {collection} list"
+        )
+    matches = [
+        _require_mapping(item, f"{collection} item")
+        for item in changes
+        if isinstance(item, Mapping) and item.get("index") == index
+    ]
+    if len(matches) != 1:
+        raise Rx3ExperimentPreparationError(
+            f"RX3-EXP-02B report must contain exactly one field {index} change"
+        )
+    return matches[0]
+
+
+def prepare_rx3_bending_q3_validation(
+    mx_validation_directory: str | Path,
+    output_directory: str | Path,
+    *,
+    experiment_id: str = "RX3-EXP-03",
+    mode: ExecutionMode = ExecutionMode.VALIDATION,
+) -> Rx3BendingQValidationBundle:
+    """Prepare a field-92-only Q=3 validation bundle without starting RX3.
+
+    Field 92 remains UNKNOWN/FORBIDDEN in the shared schema. This narrow
+    function is the only experimental exception: it requires completed
+    RX3-EXP-02B evidence, exact template compatibility, and VALIDATION mode.
+    """
+
+    if experiment_id != "RX3-EXP-03":
+        raise Rx3ExperimentPreparationError(
+            "Only the controlled RX3-EXP-03 Q=3 protocol is supported"
+        )
+    if not isinstance(mode, ExecutionMode):
+        raise TypeError("mode must be ExecutionMode")
+    if mode is not ExecutionMode.VALIDATION:
+        raise Rx3ExperimentPreparationError(
+            "Field 92 experimental write is blocked outside VALIDATION"
+        )
+
+    previous = Path(mx_validation_directory).resolve(strict=True)
+    audit_path = previous / "audit.json"
+    report_path = previous / "rx3_validation_report.json"
+    audit = _read_json_mapping(audit_path, "RX3-EXP-02B audit")
+    previous_report = _read_json_mapping(
+        report_path, "RX3-EXP-02B validation report"
+    )
+    if audit.get("experiment_id") != "RX3-EXP-02B":
+        raise Rx3ExperimentPreparationError("Previous audit is not RX3-EXP-02B")
+    if audit.get("execution_mode") != ExecutionMode.VALIDATION.value:
+        raise Rx3ExperimentPreparationError(
+            "RX3-EXP-02B audit was not prepared in VALIDATION mode"
+        )
+    if (
+        previous_report.get("status") != "RX3_RESULT_ANALYSED"
+        or previous_report.get("gui_recalculation_verified") is not True
+        or previous_report.get("non_target_records_text_unchanged") is not True
+    ):
+        raise Rx3ExperimentPreparationError(
+            "RX3-EXP-02B GUI/calculation/save evidence is incomplete"
+        )
+    evidence_reference = previous_report.get("evidence_reference")
+    if not isinstance(evidence_reference, str) or not evidence_reference.strip():
+        raise Rx3ExperimentPreparationError(
+            "RX3-EXP-02B report has no evidence reference"
+        )
+
+    audit_template = _require_mapping(audit.get("template"), "audit.template")
+    audit_generated = _require_mapping(audit.get("generated"), "audit.generated")
+    precalc = _require_mapping(audit.get("precalc_diff"), "audit.precalc_diff")
+    template_source = (previous / "template.rx38").resolve(strict=True)
+    generated_mx = (previous / "generated_MX10.rx38").resolve(strict=True)
+    template_sha = _require_file_sha(
+        template_source, audit_template.get("sha256"), "RX3-EXP-02B template SHA-256"
+    )
+    generated_mx_sha = _require_file_sha(
+        generated_mx,
+        audit_generated.get("sha256"),
+        "RX3-EXP-02B generated SHA-256",
+    )
+    before_report = _require_mapping(
+        previous_report.get("before"), "RX3-EXP-02B report.before"
+    )
+    after_report = _require_mapping(
+        previous_report.get("after"), "RX3-EXP-02B report.after"
+    )
+    if before_report.get("sha256") != generated_mx_sha:
+        raise Rx3ExperimentPreparationError(
+            "RX3-EXP-02B report is not bound to generated_MX10.rx38"
+        )
+    calculated_mx = Path(
+        _require_observation_text(
+            after_report.get("path"), "RX3-EXP-02B report.after.path"
+        )
+    ).resolve(strict=True)
+    calculated_mx_sha = _require_file_sha(
+        calculated_mx,
+        after_report.get("sha256"),
+        "RX3-EXP-02B calculated SHA-256",
+    )
+
+    previous_records = previous_report.get("records")
+    if not isinstance(previous_records, list):
+        raise Rx3ExperimentPreparationError("RX3-EXP-02B report.records is invalid")
+    previous_targets = [
+        _require_mapping(item, "RX3-EXP-02B target report record")
+        for item in previous_records
+        if isinstance(item, Mapping) and item.get("is_target") is True
+    ]
+    if len(previous_targets) != 1 or previous_targets[0].get("after_mark") != "Б1":
+        raise Rx3ExperimentPreparationError(
+            "RX3-EXP-02B report must resolve exactly one Б1 target"
+        )
+    mx_change = _report_change(previous_targets[0], "confirmed_changes", 50)
+    persisted_mx_change = _report_change(previous_targets[0], "probable_changes", 78)
+    if (
+        _decimal(str(mx_change.get("new_token", ""))) != Decimal("10")
+        or mx_change.get("semantic_changed") is not False
+        or _decimal(str(persisted_mx_change.get("new_token", "")))
+        != Decimal("10")
+    ):
+        raise Rx3ExperimentPreparationError(
+            "RX3-EXP-02B report does not prove the controlled Mx persistence path"
+        )
+
+    mark = _require_observation_text(precalc.get("target_mark"), "target mark")
+    if mark != "Б1":
+        raise Rx3ExperimentPreparationError("RX3-EXP-03 requires exact mark Б1")
+    records = construction_records(read_rx38(template_source))
+    targets = [record for record in records if record.mark == mark]
+    if len(targets) != 1:
+        raise Rx3ExperimentPreparationError(
+            "RX3-EXP-03 target mark must resolve to exactly one Tconstr"
+        )
+    target = targets[0]
+    target_position = records.index(target) + 1
+    fingerprint = rx38_record_fingerprint(target)
+    expected_fingerprint = _require_observation_text(
+        audit_template.get("record_sha256"), "template record fingerprint"
+    )
+    if (
+        fingerprint != expected_fingerprint
+        or precalc.get("template_record_sha256") != fingerprint
+    ):
+        raise Rx3ExperimentPreparationError(
+            "RX3-EXP-03 template fingerprint differs from RX3-EXP-02B"
+        )
+
+    phase_a_observation_path = Path(
+        _require_observation_text(
+            audit.get("phase_a_observation"), "RX3-EXP-02 Phase A observation"
+        )
+    ).resolve(strict=True)
+    observation = _read_json_mapping(
+        phase_a_observation_path, "RX3-EXP-02 Phase A observation"
+    )
+    observed_template = _require_mapping(
+        observation.get("template"), "observation.template"
+    )
+    selection = _require_mapping(observation.get("selection"), "observation.selection")
+    actions = _require_mapping(observation.get("actions"), "observation.actions")
+    heating = _require_mapping(observation.get("heating"), "observation.heating")
+    fire = _require_mapping(observation.get("fire"), "observation.fire")
+    if (
+        observation.get("experiment_id") != "RX3-EXP-02"
+        or observation.get("result") != "PASS"
+        or observation.get("calculation_pressed") is not False
+        or observed_template.get("sha256") != template_sha
+        or observed_template.get("record_fingerprint") != fingerprint
+    ):
+        raise Rx3ExperimentPreparationError(
+            "GUI observation is not bound to the exact baseline template"
+        )
+    if (
+        selection.get("mark") != mark
+        or selection.get("profile") != target.fields[19]
+        or selection.get("stress_state") != target.fields[45]
+        or _normal_axis(str(selection.get("axis", "")))
+        not in {"X-X", "ОТН. X-X"}
+        or _normal_axis(target.fields[61]) != "ОТН. X-X"
+    ):
+        raise Rx3ExperimentPreparationError(
+            "GUI observation/template mark, profile, stress state, or axis mismatch"
+        )
+    active_sides = heating.get("active_sides")
+    if (
+        heating.get("heating_sides") != 3
+        or not isinstance(active_sides, list)
+        or set(active_sides) != {"LEFT", "RIGHT", "BOTTOM"}
+        or heating.get("rx38_indices_mapped") is not False
+    ):
+        raise Rx3ExperimentPreparationError(
+            "GUI heating evidence is not exact LEFT/RIGHT/BOTTOM evidence"
+        )
+    if (
+        _decimal(str(actions.get("Mx_knm", ""))) != Decimal("8.89")
+        or _decimal(str(actions.get("Q_kn", ""))) != Decimal("2.32")
+        or _decimal(str(fire.get("required_R_min", ""))) != Decimal("60")
+    ):
+        raise Rx3ExperimentPreparationError(
+            "GUI observation does not contain the required Mx/Q/R baseline"
+        )
+    if (
+        target.fields[19] != "14Б2"
+        or not _single_plane_bending_label(target.fields[45])
+        or _decimal(target.fields[49]) != Decimal("0")
+        or _decimal(target.fields[50]) != Decimal("8.89")
+        or _decimal(target.fields[78]) != Decimal("8.89")
+        or _decimal(target.fields[92]) != Decimal("2.32")
+        or _decimal(target.fields[55]) != Decimal("60")
+    ):
+        raise Rx3ExperimentPreparationError(
+            "Exact Б1 baseline is incompatible with RX3-EXP-03"
+        )
+    spec92 = field_spec(92)
+    if spec92.confidence != "unknown" or spec92.write_policy is not WritePolicy.FORBIDDEN:
+        raise Rx3ExperimentPreparationError(
+            "Field 92 schema state changed; experimental protocol requires re-review"
+        )
+
+    directory = Path(output_directory).resolve(strict=False)
+    if directory.exists() and any(directory.iterdir()):
+        raise Rx3ExperimentPreparationError(
+            f"RX3-EXP-03 directory must be new or empty: {directory}"
+        )
+    directory.mkdir(parents=True, exist_ok=True)
+    template = directory / "template.rx38"
+    generated = directory / "generated_Q3.rx38"
+    project_path = directory / "project_element_Q3.json"
+    profile_path = directory / "template_profile.json"
+    heating_path = directory / "heating_evidence.json"
+    compatibility_path = directory / "compatibility_evidence.json"
+    diff_json_path = directory / "precalc_diff.json"
+    diff_markdown_path = directory / "precalc_diff.md"
+    expected_path = directory / "EXPECTED_RX3_GUI_VALUES.md"
+    checklist_path = directory / "CHECKLIST_PRECALC.md"
+    instructions_path = directory / "README_RUN_RX3.md"
+    observation_template_path = directory / "POSTCALC_OBSERVATION_TEMPLATE.json"
+    output_audit_path = directory / "audit.json"
+
+    _copy_new(template_source, template)
+    if _sha256(template) != template_sha:
+        raise Rx3ExperimentPreparationError("Copied template SHA-256 changed")
+    document = read_rx38_document(template)
+    copied_targets = [
+        record
+        for record in construction_records(document.records)
+        if rx38_record_fingerprint(record) == fingerprint
+    ]
+    if len(copied_targets) != 1 or copied_targets[0].mark != mark:
+        raise Rx3ExperimentPreparationError("Copied Q target is not unique")
+    generated_payload = _render_experimental_field_change(
+        document,
+        target_line=copied_targets[0].line_number,
+        field_index=92,
+        new_raw_token="3,00",
+    )
+    try:
+        with generated.open("xb") as stream:
+            stream.write(generated_payload)
+    except FileExistsError as exc:
+        raise Rx3ExperimentPreparationError(
+            f"Refusing to overwrite RX3-EXP-03 artifact: {generated}"
+        ) from exc
+
+    before_records = construction_records(read_rx38(template))
+    after_records = construction_records(read_rx38(generated))
+    if len(before_records) != len(after_records):
+        raise Rx3ExperimentPreparationError("Generated RX38 changed Tconstr count")
+    changed_records: list[tuple[Rx38Record, Rx38Record, list[Any]]] = []
+    for before, after in zip(before_records, after_records):
+        differences = diff_records(before, after)
+        if differences:
+            changed_records.append((before, after, differences))
+    if len(changed_records) != 1:
+        raise Rx3ExperimentPreparationError("Generated RX38 must change one Tconstr only")
+    before_target, after_target, differences = changed_records[0]
+    if (
+        before_target.mark != mark
+        or len(differences) != 1
+        or differences[0].index != 92
+        or _decimal(after_target.fields[92]) != Decimal("3.00")
+    ):
+        raise Rx3ExperimentPreparationError(
+            "Generated RX38 is not an exact field-92-only Q change"
+        )
+    for protected_index in (49, 50, 55, 78):
+        if before_target.raw_tokens[protected_index] != after_target.raw_tokens[protected_index]:
+            raise Rx3ExperimentPreparationError(
+                f"Protected field {protected_index} changed during Q preparation"
+            )
+
+    generated_sha = _sha256(generated)
+    generated_fingerprint = rx38_record_fingerprint(after_target)
+    project_payload = _bending_project_payload(
+        template,
+        before_target,
+        target_mx=Decimal("8.89"),
+        heating_sides=3,
+        experiment_id=experiment_id,
+        combination="RX3-EXP-03_Q3",
+    )
+    profile_payload = {
+        "experiment_id": experiment_id,
+        "source_sha256": template_sha,
+        "target_fingerprint": fingerprint,
+        "target_position_1_based": target_position,
+        "mark": mark,
+        "profile": before_target.fields[19],
+        "standard": before_target.fields[17],
+        "stress_state": before_target.fields[45],
+        "axis": before_target.fields[61],
+        "field49_N_raw": before_target.raw_tokens[49],
+        "field50_Mx_raw": before_target.raw_tokens[50],
+        "field78_Mx_copy_raw": before_target.raw_tokens[78],
+        "field92_Q_candidate_raw": before_target.raw_tokens[92],
+    }
+    heating_payload = {
+        "experiment_id": experiment_id,
+        "status": "ENGINEER_CONFIRMED_GUI_OBSERVATION",
+        "scope": "exact RX3-EXP-02/02B Б1 template only",
+        "target_fingerprint": fingerprint,
+        "mark": mark,
+        "heating_sides": 3,
+        "active_sides": ["LEFT", "RIGHT", "BOTTOM"],
+        "inactive_sides": ["TOP"],
+        "rx38_heating_side_indices": None,
+        "mapping_status": "UNMAPPED",
+        "evidence_reference": str(phase_a_observation_path),
+    }
+    compatibility_payload = {
+        "experiment_id": experiment_id,
+        "status": "PASS",
+        "execution_mode": mode.value,
+        "source_sha256": template_sha,
+        "target_fingerprint": fingerprint,
+        "target_position_1_based": target_position,
+        "mark": mark,
+        "profile": before_target.fields[19],
+        "stress_state": before_target.fields[45],
+        "axis": before_target.fields[61],
+        "heating_evidence": heating_payload,
+        "rx3_exp_02b": {
+            "audit_path": str(audit_path),
+            "audit_sha256": _sha256(audit_path),
+            "validation_report_path": str(report_path),
+            "validation_report_sha256": _sha256(report_path),
+            "generated_sha256": generated_mx_sha,
+            "calculated_sha256": calculated_mx_sha,
+            "gui_recalculation_verified": True,
+            "evidence_reference": evidence_reference,
+        },
+    }
+    diff_payload = {
+        "experiment_id": experiment_id,
+        "status": "PASS",
+        "source_sha256": template_sha,
+        "generated_sha256": generated_sha,
+        "target_mark": mark,
+        "target_position_1_based": target_position,
+        "target_fingerprint": fingerprint,
+        "generated_target_fingerprint": generated_fingerprint,
+        "changed_record_count": 1,
+        "changed_field_count": 1,
+        "changed_fields": [
+            {
+                "index": 92,
+                "schema_confidence": spec92.confidence,
+                "write_path": "VALIDATION_EXPERIMENTAL_ONLY",
+                "old_raw_token": before_target.raw_tokens[92],
+                "new_raw_token": after_target.raw_tokens[92],
+                "old_decimal_kn": str(_decimal(before_target.fields[92])),
+                "new_decimal_kn": str(_decimal(after_target.fields[92])),
+            }
+        ],
+        "field50_token_identical": before_target.raw_tokens[50]
+        == after_target.raw_tokens[50],
+        "field78_token_identical": before_target.raw_tokens[78]
+        == after_target.raw_tokens[78],
+        "all_other_target_fields_token_identical": True,
+        "all_non_target_records_token_identical": True,
+    }
+    output_audit = {
+        "experiment_id": experiment_id,
+        "phase": "Q_PERTURBATION_PRECALC",
+        "status": "WAITING_FOR_Q3_GUI_CALCULATION",
+        "execution_mode": mode.value,
+        "calculation_started": False,
+        "source": {
+            "path": str(template_source),
+            "sha256": template_sha,
+            "target_fingerprint": fingerprint,
+            "target_position_1_based": target_position,
+        },
+        "generated": {
+            "path": str(generated),
+            "sha256": generated_sha,
+            "target_fingerprint": generated_fingerprint,
+        },
+        "compatibility_evidence": compatibility_payload,
+        "precalc_diff": diff_payload,
+        "field92_evidence_decision": (
+            "UNKNOWN_PENDING_RX3_EXP_03_GUI_CALCULATION_AND_PERSISTED_RX38"
+        ),
+        "field92_write_policy": "VALIDATION_EXPERIMENTAL_ONLY",
+        "production_writer_changed": False,
+        "schema_mapping_promoted": False,
+        "stale_template_results": [
+            {"index": 44, "raw_value": before_target.fields[44]},
+            {"index": 54, "raw_value": before_target.fields[54]},
+        ],
+    }
+    postcalc_observation = {
+        "experiment_id": experiment_id,
+        "result": "PENDING",
+        "generated_sha256": generated_sha,
+        "source_sha256": template_sha,
+        "target_generated_fingerprint": generated_fingerprint,
+        "selection": {
+            "mark": mark,
+            "profile": before_target.fields[19],
+            "stress_state": before_target.fields[45],
+            "axis": "X-X",
+            "heating_sides": 3,
+            "active_sides": ["LEFT", "RIGHT", "BOTTOM"],
+            "required_R_min": "60",
+        },
+        "actions": {"Mx_knm": "8.89", "Q_kn": "3.00"},
+        "calculation": {
+            "pressed": False,
+            "M_utilisation": None,
+            "Q_utilisation": None,
+            "governing_gamma_tem": None,
+            "beta_tem": None,
+            "beta_related_theta_C": None,
+            "governing_theta_cr_C": None,
+            "R0_min": None,
+            "displayed_stress_load_MPa": None,
+        },
+        "persistence": {
+            "save_to_table": False,
+            "save_as": False,
+            "filename": "calculated_Q3.rx38",
+        },
+        "evidence_reference": None,
+    }
+
+    diff_markdown = "\n".join(
+        [
+            "# RX3-EXP-03 pre-calc diff",
+            "",
+            "Result: `PASS` — exactly one Tconstr field changed.",
+            "",
+            "| Mark | Position | Field | Before | After | Policy |",
+            "|---|---:|---:|---:|---:|---|",
+            f"| {mark} | {target_position} | 92 | `{before_target.raw_tokens[92]}` | `3,00` | VALIDATION/EXPERIMENTAL only |",
+            "",
+            "Fields 50 and 78 and all other target fields are token-identical.",
+            "All non-target Tconstr records are token-identical.",
+            "Fields 44 and 54 are stale baseline results until manual Calculate.",
+            "Field 92 remains UNKNOWN; this diff is not production mapping evidence.",
+            "",
+        ]
+    )
+    expected_gui = "\n".join(
+        [
+            "# RX3-EXP-03 expected GUI values before Calculate",
+            "",
+            f"- Mark: `{mark}`",
+            f"- Profile: `{before_target.fields[19]}`",
+            f"- Stress state: `{before_target.fields[45]}`",
+            "- Axis: `X-X`",
+            "- Mx: `8.89 kN*m`",
+            "- Q: `3.00 kN`",
+            "- N: `0` / not displayed, as in the verified baseline",
+            "- Heating: LEFT + RIGHT + BOTTOM active; TOP inactive",
+            "- Required fire resistance: `R60`",
+            f"- Fire regime: `{before_target.fields[104]}`",
+            "- All other verified options must be unchanged.",
+            "",
+            "STOP if Q is not 3.00, Mx changed, or profile/stress state/axis/heating/R differs.",
+            "Pre-calc theta_cr/R0 are stale baseline values, not RX3-EXP-03 results.",
+            "",
+        ]
+    )
+    checklist = "\n".join(
+        [
+            "# RX3-EXP-03 CHECKLIST",
+            "",
+            f"- [ ] `generated_Q3.rx38` SHA-256 is `{generated_sha}`.",
+            f"- [ ] Mark `{mark}` at 1-based Tconstr position `{target_position}` is selected.",
+            "- [ ] Profile 14Б2, one-plane bending and axis X-X are unchanged.",
+            "- [ ] Mx is 8.89 kN*m and Q is 3.00 kN.",
+            "- [ ] Heating is LEFT + RIGHT + BOTTOM; TOP is inactive; R60 is unchanged.",
+            "- [ ] Copy `POSTCALC_OBSERVATION_TEMPLATE.json` to `POSTCALC_OBSERVATION.json` and record all calculation values in the copy.",
+            "- [ ] Save to table, then Save As `calculated_Q3.rx38`.",
+            "",
+            "STOP on any mismatch. Do not continue to Save/validation.",
+            "",
+        ]
+    )
+    instructions = "\n".join(
+        [
+            "# RX3-EXP-03 — manual RX3 checkpoint",
+            "",
+            "1. Verify the SHA in `CHECKLIST_PRECALC.md` and open only `generated_Q3.rx38`.",
+            "2. Open mark `Б1`; confirm Mx=8.89, Q=3.00 and every item in `EXPECTED_RX3_GUI_VALUES.md`.",
+            "3. If anything differs, stop. Otherwise press Calculate manually.",
+            "4. Copy `POSTCALC_OBSERVATION_TEMPLATE.json` to `POSTCALC_OBSERVATION.json`; record M/Q utilisation, gamma_tem, beta_tem, beta-related theta, theta_cr, R0 and stress/load in the copy.",
+            "5. Save to table, then Save As `calculated_Q3.rx38` in this directory.",
+            "6. Set the observation result/flags/evidence reference, then run:",
+            "",
+            "   `python -m fireprotect.cli validate-rx3-bending-q3 --bundle-dir . --calculated calculated_Q3.rx38 --observation POSTCALC_OBSERVATION.json`",
+            "",
+            "RX3 must not be started or controlled by this automation.",
+            "",
+        ]
+    )
+
+    _write_new(project_path, json.dumps(project_payload, ensure_ascii=False, indent=2) + "\n")
+    _write_new(profile_path, json.dumps(profile_payload, ensure_ascii=False, indent=2) + "\n")
+    _write_new(heating_path, json.dumps(heating_payload, ensure_ascii=False, indent=2) + "\n")
+    _write_new(
+        compatibility_path,
+        json.dumps(compatibility_payload, ensure_ascii=False, indent=2) + "\n",
+    )
+    _write_new(diff_json_path, json.dumps(diff_payload, ensure_ascii=False, indent=2) + "\n")
+    _write_new(diff_markdown_path, diff_markdown)
+    _write_new(expected_path, expected_gui)
+    _write_new(checklist_path, checklist)
+    _write_new(instructions_path, instructions)
+    _write_new(
+        observation_template_path,
+        json.dumps(postcalc_observation, ensure_ascii=False, indent=2) + "\n",
+    )
+    _write_new(output_audit_path, json.dumps(output_audit, ensure_ascii=False, indent=2) + "\n")
+    return Rx3BendingQValidationBundle(
+        directory,
+        template,
+        generated,
+        project_path,
+        profile_path,
+        heating_path,
+        compatibility_path,
+        diff_json_path,
+        diff_markdown_path,
+        expected_path,
+        checklist_path,
+        instructions_path,
+        observation_template_path,
+        output_audit_path,
+        generated_sha,
+    )
+
+
+def _required_observed_decimal(
+    payload: Mapping[str, Any], key: str, section: str
+) -> Decimal:
+    value = _decimal(str(payload.get(key, "")))
+    if value is None:
+        raise Rx3ExperimentPreparationError(
+            f"{section}.{key} must be a finite observed number"
+        )
+    return value
+
+
+def _numeric_field_observation(
+    before: Rx38Record, after: Rx38Record, index: int
+) -> dict[str, Any]:
+    old_token = before.raw_tokens[index]
+    new_token = after.raw_tokens[index]
+    old_numeric = _decimal(old_token)
+    new_numeric = _decimal(new_token)
+    semantic_changed = (
+        None
+        if old_numeric is None or new_numeric is None
+        else old_numeric != new_numeric
+    )
+    classification = (
+        "NO_TEXT_CHANGE"
+        if old_token == new_token
+        else "NUMERIC_PARSE_UNAVAILABLE"
+        if semantic_changed is None
+        else "SEMANTIC_NUMERIC_CHANGE"
+        if semantic_changed
+        else "RX3_TOKEN_NORMALIZATION"
+    )
+    return {
+        "index": index,
+        "name": field_spec(index).name,
+        "schema_confidence": field_spec(index).confidence,
+        "old_token": old_token,
+        "new_token": new_token,
+        "old_numeric": None if old_numeric is None else str(old_numeric),
+        "new_numeric": None if new_numeric is None else str(new_numeric),
+        "text_changed": old_token != new_token,
+        "semantic_changed": semantic_changed,
+        "classification": classification,
+    }
+
+
+def validate_rx3_bending_q3_result(
+    bundle_directory: str | Path,
+    calculated_rx38: str | Path,
+    observation_path: str | Path,
+    *,
+    json_report: str | Path | None = None,
+    markdown_report: str | Path | None = None,
+) -> Rx3BendingQResultReport:
+    """Validate the manual RX3-EXP-03 calculate/save result fail-closed."""
+
+    directory = Path(bundle_directory).resolve(strict=True)
+    generated = (directory / "generated_Q3.rx38").resolve(strict=True)
+    calculated = Path(calculated_rx38).resolve(strict=True)
+    observation_file = Path(observation_path).resolve(strict=True)
+    audit = _read_json_mapping(directory / "audit.json", "RX3-EXP-03 audit")
+    observation = _read_json_mapping(observation_file, "RX3-EXP-03 GUI observation")
+    if (
+        audit.get("experiment_id") != "RX3-EXP-03"
+        or audit.get("execution_mode") != ExecutionMode.VALIDATION.value
+        or audit.get("status") != "WAITING_FOR_Q3_GUI_CALCULATION"
+    ):
+        raise Rx3ExperimentPreparationError("Bundle is not a pending RX3-EXP-03 bundle")
+    audit_source = _require_mapping(audit.get("source"), "audit.source")
+    audit_generated = _require_mapping(audit.get("generated"), "audit.generated")
+    generated_sha = _require_file_sha(
+        generated, audit_generated.get("sha256"), "RX3-EXP-03 generated SHA-256"
+    )
+    generated_target_fingerprint = _require_observation_text(
+        audit_generated.get("target_fingerprint"), "generated target fingerprint"
+    )
+    source_sha = _require_observation_text(
+        audit_source.get("sha256"), "source SHA-256"
+    )
+    target_fingerprint = _require_observation_text(
+        audit_source.get("target_fingerprint"), "source target fingerprint"
+    )
+    target_position = audit_source.get("target_position_1_based")
+    if isinstance(target_position, bool) or not isinstance(target_position, int):
+        raise Rx3ExperimentPreparationError("Audit target position is invalid")
+    if calculated.name != "calculated_Q3.rx38":
+        raise Rx3ExperimentPreparationError(
+            "Post-calc file must be named calculated_Q3.rx38"
+        )
+    if (
+        observation.get("experiment_id") != "RX3-EXP-03"
+        or observation.get("result") != "PASS"
+        or observation.get("generated_sha256") != generated_sha
+        or observation.get("source_sha256") != source_sha
+        or observation.get("target_generated_fingerprint")
+        != generated_target_fingerprint
+    ):
+        raise Rx3ExperimentPreparationError(
+            "GUI observation is not bound to this exact RX3-EXP-03 bundle"
+        )
+    evidence_reference = observation.get("evidence_reference")
+    if not isinstance(evidence_reference, str) or not evidence_reference.strip():
+        raise Rx3ExperimentPreparationError("GUI evidence reference is required")
+
+    selection = _require_mapping(observation.get("selection"), "observation.selection")
+    actions = _require_mapping(observation.get("actions"), "observation.actions")
+    calculation = _require_mapping(
+        observation.get("calculation"), "observation.calculation"
+    )
+    persistence = _require_mapping(
+        observation.get("persistence"), "observation.persistence"
+    )
+    active_sides = selection.get("active_sides")
+    if (
+        selection.get("mark") != "Б1"
+        or selection.get("profile") != "14Б2"
+        or not _single_plane_bending_label(str(selection.get("stress_state", "")))
+        or _normal_axis(str(selection.get("axis", "")))
+        not in {"X-X", "ОТН. X-X"}
+        or selection.get("heating_sides") != 3
+        or not isinstance(active_sides, list)
+        or set(active_sides) != {"LEFT", "RIGHT", "BOTTOM"}
+        or _decimal(str(selection.get("required_R_min", ""))) != Decimal("60")
+        or _decimal(str(actions.get("Mx_knm", ""))) != Decimal("8.89")
+        or _decimal(str(actions.get("Q_kn", ""))) != Decimal("3.00")
+    ):
+        raise Rx3ExperimentPreparationError(
+            "Post-calc GUI observation differs from the exact Q3 protocol"
+        )
+    if (
+        calculation.get("pressed") is not True
+        or persistence.get("save_to_table") is not True
+        or persistence.get("save_as") is not True
+        or persistence.get("filename") != "calculated_Q3.rx38"
+    ):
+        raise Rx3ExperimentPreparationError(
+            "Manual Calculate / Save to table / Save As evidence is incomplete"
+        )
+    observed_values = {
+        key: _required_observed_decimal(calculation, key, "calculation")
+        for key in (
+            "M_utilisation",
+            "Q_utilisation",
+            "governing_gamma_tem",
+            "beta_tem",
+            "beta_related_theta_C",
+            "governing_theta_cr_C",
+            "R0_min",
+            "displayed_stress_load_MPa",
+        )
+    }
+    if observed_values["M_utilisation"] != Decimal("0.433"):
+        raise Rx3ExperimentPreparationError(
+            "Mx utilisation changed unexpectedly while Mx stayed fixed"
+        )
+    if observed_values["Q_utilisation"] <= Decimal("0.028"):
+        raise Rx3ExperimentPreparationError(
+            "Q utilisation did not react to the controlled Q increase"
+        )
+
+    before_records = construction_records(read_rx38(generated))
+    after_records = construction_records(read_rx38(calculated))
+    if len(before_records) != len(after_records):
+        raise Rx3ExperimentPreparationError("Post-calc Tconstr count changed")
+    if target_position < 1 or target_position > len(before_records):
+        raise Rx3ExperimentPreparationError("Post-calc target position is outside the file")
+    before_target = before_records[target_position - 1]
+    after_target = after_records[target_position - 1]
+    if (
+        before_target.mark != "Б1"
+        or after_target.mark != "Б1"
+        or rx38_record_fingerprint(before_target) != generated_target_fingerprint
+    ):
+        raise Rx3ExperimentPreparationError(
+            "Post-calc target mark/fingerprint/position mismatch"
+        )
+    non_target_changes: list[dict[str, Any]] = []
+    for position, (before, after) in enumerate(zip(before_records, after_records), 1):
+        changes = diff_records(before, after)
+        if position != target_position and changes:
+            non_target_changes.append(
+                {
+                    "position": position,
+                    "before_mark": before.mark,
+                    "after_mark": after.mark,
+                    "changed_indices": [item.index for item in changes],
+                }
+            )
+    if non_target_changes:
+        raise Rx3ExperimentPreparationError(
+            f"Unexpected non-target mutation: {non_target_changes}"
+        )
+    target_changes = diff_records(before_target, after_target)
+    allowed_target_indices = {44, 50, 52, 53, 54, 76, 78, 92}
+    unexpected_target_indices = sorted(
+        {item.index for item in target_changes} - allowed_target_indices
+    )
+    if unexpected_target_indices:
+        raise Rx3ExperimentPreparationError(
+            f"Unexpected target-field mutation: {unexpected_target_indices}"
+        )
+    if (
+        _decimal(after_target.fields[50]) != Decimal("8.89")
+        or _decimal(after_target.fields[78]) != Decimal("8.89")
+        or _decimal(after_target.fields[92]) != Decimal("3.00")
+    ):
+        raise Rx3ExperimentPreparationError(
+            "Post-calc persisted Mx/Q values violate the Q3 protocol"
+        )
+
+    observations = {
+        str(index): _numeric_field_observation(before_target, after_target, index)
+        for index in sorted(allowed_target_indices)
+    }
+    field92_observation = observations["92"]
+    calculated_sha = _sha256(calculated)
+    payload: dict[str, Any] = {
+        "experiment_id": "RX3-EXP-03",
+        "status": "RX3_EXP_03_ANALYSED",
+        "execution_mode": ExecutionMode.VALIDATION.value,
+        "source_sha256": source_sha,
+        "source_target_fingerprint": target_fingerprint,
+        "generated": {"path": str(generated), "sha256": generated_sha},
+        "calculated": {"path": str(calculated), "sha256": calculated_sha},
+        "target": {
+            "position_1_based": target_position,
+            "mark": "Б1",
+            "generated_fingerprint": generated_target_fingerprint,
+            "calculated_fingerprint": rx38_record_fingerprint(after_target),
+        },
+        "gui_observation": {
+            "path": str(observation_file),
+            "sha256": _sha256(observation_file),
+            "evidence_reference": evidence_reference,
+            "values": {key: str(value) for key, value in observed_values.items()},
+        },
+        "field_observations": observations,
+        "field92_persistence": {
+            **field92_observation,
+            "persisted_numeric_matches_Q3": True,
+        },
+        "non_target_records_semantically_unchanged": True,
+        "non_target_records_token_identical": True,
+        "unexpected_target_indices": [],
+        "stale_result_separation": {
+            "before_indices": [44, 54],
+            "before_status": "STALE_TEMPLATE_RESULT",
+            "after_status": "MANUAL_RX3_CALCULATED_OBSERVATION",
+        },
+        "field92_evidence_decision": (
+            "ELIGIBLE_FOR_SCOPED_MANUAL_REVIEW; no automatic schema promotion"
+        ),
+        "schema_mapping_promoted": False,
+        "production_write_allowed": False,
+        "unverified_claims": [
+            "Qx mapping",
+            "Qy mapping",
+            "LIRA local-axis mapping",
+            "sign convention",
+            "combined-stress global semantics",
+            "production compatibility",
+        ],
+    }
+    json_path = (
+        Path(json_report).resolve(strict=False)
+        if json_report is not None
+        else directory / "rx3_exp_03_validation_report.json"
+    )
+    markdown_path = (
+        Path(markdown_report).resolve(strict=False)
+        if markdown_report is not None
+        else directory / "rx3_exp_03_validation_report.md"
+    )
+    protected = {generated, calculated, observation_file}
+    if json_path in protected or markdown_path in protected or json_path == markdown_path:
+        raise Rx3ExperimentPreparationError(
+            "Post-calc reports must be distinct from each other and all inputs"
+        )
+    markdown = "\n".join(
+        [
+            "# RX3-EXP-03 post-calc validation",
+            "",
+            "Status: `RX3_EXP_03_ANALYSED`.",
+            "",
+            f"- Generated SHA-256: `{generated_sha}`",
+            f"- Calculated SHA-256: `{calculated_sha}`",
+            f"- Target: `Б1`, Tconstr position `{target_position}`",
+            "- Non-target records: token-identical",
+            f"- Field 50 persisted numeric: `{observations['50']['new_numeric']}`",
+            f"- Field 78 persisted numeric: `{observations['78']['new_numeric']}`",
+            f"- Field 92: `{field92_observation['old_token']}` -> `{field92_observation['new_token']}`; classification `{field92_observation['classification']}`",
+            "- Field 92 remains outside production write paths.",
+            "- No automatic schema promotion was performed.",
+            "",
+        ]
+    )
+    _write_new(json_path, json.dumps(payload, ensure_ascii=False, indent=2) + "\n")
+    _write_new(markdown_path, markdown)
+    return Rx3BendingQResultReport(payload, json_path, markdown_path)
