@@ -387,9 +387,10 @@ def test_result_only_fields_cannot_be_written_as_input(index: int):
         )
 
 
-def test_experimental_field_cannot_be_written_through_typed_api():
+@pytest.mark.parametrize("index", (50, 92))
+def test_experimental_field_cannot_be_written_through_typed_api(index: int):
     with pytest.raises(UnsafeRx38WriteError, match="EXPERIMENTAL"):
-        make_record().with_typed_field(50, "12,5", compatibility_verified=True)
+        make_record().with_typed_field(index, "12,5", compatibility_verified=True)
 
 
 def test_legacy_confirmed_helper_cannot_claim_compatibility():

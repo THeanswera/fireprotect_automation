@@ -18,6 +18,7 @@ from .rx3.experiment import (
     prepare_rx3_bending_mx10_validation,
     prepare_rx3_bending_q3_validation,
     prepare_rx3_experiment_phase_a,
+    prepare_rx3_my_biaxial_phase_a,
     validate_rx3_bending_q3_result,
 )
 from .rx3.parser import Rx38Construction, construction_records, read_rx38
@@ -286,6 +287,45 @@ def cmd_validate_rx3_bending_q3(args: argparse.Namespace) -> None:
     )
 
 
+def cmd_prepare_rx3_my_biaxial_phase_a(args: argparse.Namespace) -> None:
+    bundle = prepare_rx3_my_biaxial_phase_a(
+        sorted(args.templates_dir.rglob("*.rx38")),
+        args.output_dir,
+        experiment_id=args.experiment_id,
+        mark=args.mark,
+        reference_mx_knm=args.mx_reference,
+        reference_my_knm=args.my_reference,
+        reference_q_kn=args.q_reference,
+        tolerance=args.tolerance,
+        evidence_reference=args.evidence_reference,
+    )
+    print(
+        json.dumps(
+            {
+                "directory": str(bundle.directory),
+                "selected_source": str(bundle.selected_source),
+                "selected_mark": bundle.selected_mark,
+                "source_sha256": bundle.source_sha256,
+                "target_fingerprint": bundle.target_fingerprint,
+                "target_position_1_based": bundle.target_position,
+                "template": str(bundle.template),
+                "template_summary": str(bundle.template_summary),
+                "candidate_analysis_json": str(bundle.candidate_analysis_json),
+                "candidate_analysis_markdown": str(
+                    bundle.candidate_analysis_markdown
+                ),
+                "expected_gui": str(bundle.expected_gui),
+                "checklist": str(bundle.checklist),
+                "gui_instructions": str(bundle.gui_instructions),
+                "audit": str(bundle.audit),
+                "status": "WAITING_FOR_MY_BIAXIAL_GUI_SCREENSHOT",
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+    )
+
+
 def cmd_validate_rx3_result(args: argparse.Namespace) -> None:
     report = validate_rx3_result_files(
         args.before,
@@ -465,6 +505,30 @@ def main() -> None:
     command.add_argument("--json-report", type=Path)
     command.add_argument("--markdown-report", type=Path)
     command.set_defaults(func=cmd_validate_rx3_bending_q3)
+
+    command = subparsers.add_parser(
+        "prepare-rx3-my-biaxial-phase-a",
+        help="Prepare non-mutating RX3-EXP-04 My/biaxial GUI observation bundle",
+    )
+    command.add_argument("--templates-dir", type=Path, required=True)
+    command.add_argument(
+        "--output-dir",
+        type=Path,
+        default=Path("validation/RX3-EXP-04_A_MY_BIAXIAL_OBSERVATION"),
+    )
+    command.add_argument("--experiment-id", default="RX3-EXP-04")
+    command.add_argument("--mark", default="Кс1")
+    command.add_argument("--mx-reference", default="0.51")
+    command.add_argument("--my-reference", default="4.34")
+    command.add_argument("--q-reference", default="0")
+    command.add_argument("--tolerance", default="0.02")
+    command.add_argument(
+        "--evidence-reference",
+        default=(
+            "User-provided existing RX3 GUI/report reference for RX3-EXP-04 Phase A"
+        ),
+    )
+    command.set_defaults(func=cmd_prepare_rx3_my_biaxial_phase_a)
 
     command = subparsers.add_parser(
         "validate-rx3-result",

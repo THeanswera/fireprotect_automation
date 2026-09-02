@@ -12,7 +12,7 @@
   1 и 3 марки подтверждена на всех 46 записях корпуса.
 - **PROBABLE:** 14 полей имеют сильное, но пока не однозначное сопоставление и
   остаются недоступными для записи.
-- **UNKNOWN:** 129 полей сохраняются как raw и не интерпретируются.
+- **UNKNOWN:** 128 полей сохраняются как raw и не интерпретируются.
 
 ## Этап 2 — обмен через ProjectElement
 
@@ -50,7 +50,7 @@
 ## Этап 3 — сквозной инженерный MVP
 
 - **CONFIRMED:** `Rx3Result` извлекает из RX38 доказанные поля, сохраняет
-  PROBABLE отдельно и не приписывает семантику 129 UNKNOWN-индексам.
+  PROBABLE отдельно и не приписывает семантику 128 UNKNOWN-индексам.
 - **CONFIRMED:** каждое типизированное значение RX3 имеет provenance
   `RX3_RESULT`; при обратном переносе с ProjectElement сверяются марка,
   профиль, геометрия, N, сталь и R.
@@ -71,11 +71,14 @@
   зависимостей; один прогон не доказывает семантику или причинность.
 - **CONFIRMED (узкая область):** RX3-EXP-02B подтвердил field50 как GUI Mx для
   one-plane X-X / Б1 и ручную цепочку до persisted RX38. Write policy остаётся
-  `EXPERIMENTAL`; field78 только `PROBABLE`, field92 `UNKNOWN`.
-- **PREPARED / WAITING FOR MANUAL GUI:** RX3-EXP-03 привязан к exact
-  RX3-EXP-02B template/fingerprint и создаёт отдельный `generated_Q3.rx38` с
-  единственным изменением field92 `2,32 → 3,00`. RX3 не запускается;
-  field92 остаётся `UNKNOWN`, production write заблокирован.
+  `EXPERIMENTAL`; field78 только `PROBABLE`.
+- **CONFIRMED (узкая область):** RX3-EXP-03 подтвердил field92 как RX3 GUI Q
+  input только для Б1 / 14Б2 / one-plane X-X. GUI Q `2,32 → 3,00`, Q
+  utilisation `0,028 → 0,037`; persisted field92=`3`, field50/78 и все
+  non-target records неизменны. Write policy остаётся `EXPERIMENTAL`.
+- **PHASE A / WAITING FOR GUI SCREENSHOT:** RX3-EXP-04 выбрал exact Кс1 / 20П
+  biaxial record без mutation. Field79 — strongest My candidate, но semantics
+  не назначены; heating требует GUI confirmation.
 - **UNKNOWN:** индекс толщины огнезащиты в RX38 не доказан, поэтому
   `fireproofing_thickness` остаётся `null`.
 - **BLOCKED:** production-расширение за пределы верифицированного

@@ -14,6 +14,7 @@ from fireprotect.rx3.experiment import (
     prepare_rx3_bending_mx10_validation,
     prepare_rx3_bending_q3_validation,
     prepare_rx3_experiment_phase_a,
+    prepare_rx3_my_biaxial_phase_a,
     rank_rx3_bending_template_candidates,
     rank_rx3_template_candidates,
     validate_rx3_bending_q3_result,
@@ -59,6 +60,18 @@ def _bending_record(mark: str, mx: str, q: str) -> list[str]:
     record[61] = "отн. Х-X"
     record[78] = mx
     record[92] = q
+    return record
+
+
+def _biaxial_record(mark: str, mx: str, my: str, q: str = "0") -> list[str]:
+    record = _bending_record(mark, "0", q)
+    record[45] = "Изгибаемый стержень в двух главных плоскостях"
+    record[19] = "20П"
+    record[50] = "0"
+    record[78] = mx
+    record[79] = my
+    record[92] = q
+    record[122] = "0,5"
     return record
 
 
@@ -561,8 +574,10 @@ def test_bending_q3_bundle_is_exactly_bound_and_changes_only_field92(
     assert audit["precalc_diff"]["changed_fields"][0]["index"] == 92
     assert audit["precalc_diff"]["all_other_target_fields_token_identical"] is True
     assert audit["precalc_diff"]["all_non_target_records_token_identical"] is True
-    assert audit["field92_evidence_decision"].startswith("UNKNOWN_")
-    assert audit["schema_mapping_promoted"] is False
+    assert audit["field92_evidence_decision"] == (
+        "CONFIRMED_SCOPED_RX3_GUI_Q_INPUT"
+    )
+    assert audit["schema_mapping_promoted"] is True
     assert audit["production_writer_changed"] is False
 
     project = json.loads(bundle.project_element.read_text(encoding="utf-8"))
@@ -757,3 +772,72 @@ def test_bending_q3_postcalc_validator_refuses_wrong_gui_or_persisted_values(
     observation.write_text(json.dumps(payload), encoding="utf-8")
     with pytest.raises(Rx3ExperimentPreparationError, match="not bound"):
         validate_rx3_bending_q3_result(bundle.directory, calculated, observation)
+
+
+def test_my_biaxial_phase_a_selects_exact_target_without_mutation(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "corpus.rx38"
+    _rx38(
+        source,
+        [
+            _bending_record("Б1", "8.89", "2.32"),
+            _biaxial_record("Кс1", "0.507", "4.3414"),
+            _biaxial_record("Св2.2", "1.1637", "4.3738"),
+        ],
+    )
+
+    bundle = prepare_rx3_my_biaxial_phase_a([source], tmp_path / "phase_a")
+
+    assert bundle.selected_source == source.resolve()
+    assert bundle.selected_mark == "Кс1"
+    assert bundle.target_position == 2
+    assert bundle.template.read_bytes() == source.read_bytes()
+    copied_target = construction_records(read_rx38(bundle.template))[1]
+    assert rx38_record_fingerprint(copied_target) == bundle.target_fingerprint
+    assert not any(bundle.directory.glob("generated*.rx38"))
+    assert {path.name for path in bundle.directory.iterdir()} == {
+        "template.rx38",
+        "template_summary.json",
+        "candidate_field_analysis.json",
+        "candidate_field_analysis.md",
+        "EXPECTED_RX3_GUI_VALUES.md",
+        "CHECKLIST.md",
+        "GUI_OBSERVATION_INSTRUCTIONS.md",
+        "audit.json",
+    }
+
+    summary = json.loads(bundle.template_summary.read_text(encoding="utf-8"))
+    assert summary["status"] == "WAITING_FOR_MY_BIAXIAL_GUI_SCREENSHOT"
+    assert summary["generation_allowed"] is False
+    assert summary["calculation_allowed"] is False
+    assert summary["heating_evidence"]["status"] == "GUI_CONFIRMATION_REQUIRED"
+    analysis = json.loads(
+        bundle.candidate_analysis_json.read_text(encoding="utf-8")
+    )
+    assert analysis["semantic_assignments_made"] is False
+    assert analysis["candidate_indices"]["My"] == [79]
+    assert analysis["candidate_indices"]["Mx"] == [78, 122]
+    assert 92 in analysis["candidate_indices"]["Q"]
+    assert analysis["ranked_candidates"]["My"][0]["index"] == 79
+    assert analysis["ranked_candidates"]["My"][0]["semantic_status"] == (
+        "CANDIDATE_ONLY_NOT_ASSIGNED"
+    )
+    audit = json.loads(bundle.audit.read_text(encoding="utf-8"))
+    assert audit["source"]["record_fingerprint"] == bundle.target_fingerprint
+    assert audit["mutation_performed"] is False
+    assert audit["generated_rx38_created"] is False
+    assert audit["schema_mapping_promoted"] is False
+    assert audit["production_writer_changed"] is False
+
+
+def test_my_biaxial_phase_a_rejects_ambiguous_exact_mark(tmp_path: Path) -> None:
+    first = tmp_path / "first.rx38"
+    second = tmp_path / "second.rx38"
+    _rx38(first, [_biaxial_record("Кс1", "0.507", "4.3414")])
+    _rx38(second, [_biaxial_record("Кс1", "0.507", "4.3414")])
+
+    with pytest.raises(Rx3ExperimentPreparationError, match="resolve to one"):
+        prepare_rx3_my_biaxial_phase_a(
+            [first, second], tmp_path / "ambiguous_phase_a"
+        )

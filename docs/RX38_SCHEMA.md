@@ -4,17 +4,17 @@
 
 ## Уровень доказанности
 
-- `confirmed`: 57
+- `confirmed`: 58
 - `probable`: 14
-- `unknown`: 129
+- `unknown`: 128
 
 `probable` не входит в безопасный writable-набор. Semantic confidence теперь
 отделён от write safety. `WritePolicy` имеет значения `SAFE_DIRECT`,
 `SAFE_WITH_COMPATIBILITY_CHECK`, `RESULT_ONLY`, `READ_ONLY`, `EXPERIMENTAL` и
 `FORBIDDEN`. UNKNOWN/PROBABLE запрещены; confirmed output fields 44/54 имеют
 `RESULT_ONLY`; field 0 имеет `READ_ONLY`; остальные расчётные inputs требуют
-явной compatibility-проверки. Подтверждённый field 50 остаётся
-`EXPERIMENTAL`: его узкая семантика не разрешает production-запись. Field 53 переведён из `unknown` в
+явной compatibility-проверки. Подтверждённые fields 50 и 92 остаются
+`EXPERIMENTAL`: их узкая семантика не разрешает production-запись. Field 53 переведён из `unknown` в
 `probable` после двух двунаправленных осевых возмущений, трёх GUI-
 совпадений и сверки со встроенной справкой RX3; запись по-прежнему
 запрещена.
@@ -119,7 +119,7 @@ note. Наличие CONFIRMED-семантики само по себе не д
 | 89 | unknown_089 | Not established | unknown | — | unknown | unknown | No admissible evidence | unknown | Preserved verbatim; do not write through the typed API. |
 | 90 | plastic_modulus_x_m3 | Plastic section modulus Wpl,x | decimal | m³ | calculated | yes for steel Tconstr | RX38 values + RX3 report | probable | — |
 | 91 | plastic_modulus_y_m3 | Plastic section modulus Wpl,y | decimal | m³ | calculated | yes for steel Tconstr | RX38 values + RX3 report | probable | — |
-| 92 | unknown_092 | Q candidate pending controlled GUI causality | unknown | — | unknown | unknown | Five-record correlation + RX3-EXP-03 pre-calc preparation only | unknown | Preserved verbatim and blocked in typed/production writers. A fingerprint-bound VALIDATION-only experimental function may prepare field92 `2,32 → 3,00`; no semantic promotion occurs before real GUI Calculate/Save evidence. |
+| 92 | rx3_gui_q_input_kn | RX3 GUI shear-force Q input for the verified one-plane X-X bending family | decimal | kN | input | conditional | Five-record correlation + RX3-EXP-02/02B/03 controlled GUI evidence | confirmed | Only Б1 / 14Б2 / one-plane X-X GUI Q scope. `EXPERIMENTAL`; no LIRA Qx/Qy, sign, local-axis, other stress-state, combined-stress or production claim. |
 | 93 | unknown_093 | Not established | unknown | — | unknown | unknown | No admissible evidence | unknown | Preserved verbatim; do not write through the typed API. |
 | 94 | unknown_094 | Not established | unknown | — | unknown | unknown | No admissible evidence | unknown | Preserved verbatim; do not write through the typed API. |
 | 95 | unknown_095 | Not established | unknown | — | unknown | unknown | No admissible evidence | unknown | Preserved verbatim; do not write through the typed API. |
@@ -246,9 +246,11 @@ note. Наличие CONFIRMED-семантики само по себе не д
 
 Большая часть строки относится к внутренним флагам, промежуточным характеристикам, комбинированным усилиям и моделям древесины. Одинаковое значение во всех проектах не доказывает назначения. Нужны контролируемые пары RX38, где в интерфейсе меняется ровно один параметр.
 
-Mappings Mx/My/Qx/Qy остаются неподтверждёнными. Field 50 остаётся
-`probable`; индексы My/Qx/Qy не назначаются по догадке. Поэтому ненулевое
-значение любого из четырёх компонентов блокирует генерацию до записи файла.
+Production mappings Mx/My/Qx/Qy остаются неподтверждёнными. Fields 50 и 92
+имеют только scoped RX3 GUI semantics и `EXPERIMENTAL` write policy; они не
+доказывают ProjectElement/LIRA mapping. Field79 — strongest My candidate из
+RX3-EXP-04 Phase A, но семантика не назначена. Поэтому ненулевые production
+actions по-прежнему блокируют генерацию до отдельной совместимости.
 Field 50=0 не доказывает, что шаблон осевой: нужен отдельный `AXIAL_ONLY`
 evidence для всего calculation profile.
 

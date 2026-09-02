@@ -21,7 +21,7 @@ Warning используется только для некритической 
 ## Реализовано
 
 - lossless parser и safe writer 200-позиционных записей `Tconstr`;
-- полная карта RX38: 57 `confirmed`, 14 `probable`, 129 `unknown`;
+- полная карта RX38: 58 `confirmed`, 14 `probable`, 128 `unknown`;
 - центральная модель `ProjectElement`, единицы, SI-конвертация и provenance;
 - конфигурируемые адаптеры таблиц усилий ЛИРА для CSV, HTML и XLSX;
 - geometry-модуль для периметров, ПТМ, section factor и площади обработки;
@@ -148,8 +148,10 @@ python -m fireprotect.cli prepare-rx3-bending-mx10 `
 `RX3-EXP-02B` confirmed field 50 as the active GUI Mx input only for the
 verified one-plane X-X / Б1 template family. Its schema write policy remains
 `EXPERIMENTAL`; the production writer and LIRA axis/sign mapping were not opened.
-Field 78 is only a probable post-calc persisted copy, and field 92 remains an
-unknown observational Q candidate.
+Field 78 is only a probable post-calc persisted copy. Field 92 is an RX3 GUI
+Q input confirmed only in the verified one-plane X-X / Б1 / 14Б2
+scope. Both fields 50 and 92 remain `EXPERIMENTAL`; production and ordinary
+typed writers remain blocked.
 
 `RX3-EXP-03` prepares the next single-variable check from the completed
 RX3-EXP-02B evidence directory:
@@ -164,10 +166,22 @@ The command requires the exact baseline SHA/fingerprint, unique Б1 position,
 14Б2 profile, one-plane X-X state, heating evidence, and completed manual
 RX3-EXP-02B report. It changes only field92 from `2,32` to `3,00`, creates
 `generated_Q3.rx38` without overwrite, and stops before RX3. This is a
-VALIDATION-only experimental exception: field92 stays `UNKNOWN`, the generic
-and production writers remain blocked, and Qx/Qy/LIRA axis/sign mappings are
-not inferred. Manual GUI actions and the post-calc command are contained in
-the local bundle.
+VALIDATION-only experimental exception. RX3-EXP-03 later confirmed field92 as
+the scoped GUI Q input through GUI Q `2.32 → 3.00`, Q utilisation `0.028 →
+0.037`, persisted numeric Q=3.00 and invariant non-target records. It does not
+confirm Qx/Qy/LIRA axis/sign mappings or production compatibility.
+
+The final planned force-family Phase A is non-mutating:
+
+```powershell
+python -m fireprotect.cli prepare-rx3-my-biaxial-phase-a `
+  --templates-dir rx3 `
+  --output-dir validation/RX3-EXP-04_A_MY_BIAXIAL_OBSERVATION
+```
+
+It selects exact mark Кс1, fingerprints the source record, ranks Mx/My/Q raw
+numeric candidates across the bending corpus, creates only a copied template
+and observation reports, and stops for a screenshot without Calculate or Save.
 
 Post-calc validation always requires an explicit target. Prefer the exact
 BEFORE-record fingerprint or a 1-based `Tconstr` position; `--target-mark` is

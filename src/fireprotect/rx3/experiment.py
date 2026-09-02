@@ -170,6 +170,24 @@ class Rx3BendingQResultReport:
     markdown_path: Path
 
 
+@dataclass(frozen=True, slots=True)
+class Rx3MyBiaxialPhaseABundle:
+    directory: Path
+    template: Path
+    template_summary: Path
+    candidate_analysis_json: Path
+    candidate_analysis_markdown: Path
+    expected_gui: Path
+    checklist: Path
+    gui_instructions: Path
+    audit: Path
+    selected_source: Path
+    selected_mark: str
+    source_sha256: str
+    target_fingerprint: str
+    target_position: int
+
+
 def _decimal(value: str) -> Decimal | None:
     try:
         parsed = Decimal(value.strip().replace(",", "."))
@@ -1068,7 +1086,7 @@ def _bending_expected_values(
             "|---|---:|---|",
             f"| N | `{record.fields[49]} kN` | CONFIRMED field49; must remain zero |",
             f"| Mx reference | `{reference.mx_knm} kN*m` | EXTERNAL GUI/REPORT REFERENCE; equals field50, Phase A alone does not promote mapping |",
-            f"| Q reference | `{reference.q_kn} kN` | EXTERNAL GUI/REPORT REFERENCE; equals raw field92, mapping remains UNKNOWN |",
+            f"| Q reference | `{reference.q_kn} kN` | EXTERNAL GUI/REPORT REFERENCE; field92 was later confirmed only in the scoped Б1/14Б2 one-plane X-X GUI path |",
             f"| My reference | `{my_value}` | {'EXTERNAL ZERO REFERENCE' if reference.my_knm == 0 else 'NOT PROVIDED; OBSERVE IN GUI'} |",
             f"| Length | `{record.fields[14]} m` | CONFIRMED field14 |",
             f"| Loading axis text | `{record.fields[61]}` | PROBABLE field61; observe exact GUI axis |",
@@ -1213,7 +1231,7 @@ def prepare_rx3_bending_phase_a(
         },
         "warnings": [
             "Q is non-zero; this is not a pure-Mx experiment",
-            "Phase A alone does not promote field50; field92 remains UNKNOWN",
+            "Phase A alone does not promote field50; field92's later confirmation is limited to the separate RX3-EXP-03 scope",
             "My/Qx/Qy mappings remain unassigned",
             "stale template fields 44/54 are not new calculation results",
         ],
@@ -1777,8 +1795,9 @@ def prepare_rx3_bending_mx10_validation(
             "one-plane bending / X-X / verified B1 template family"
         ),
         "Q_evidence_decision": (
-            "OBSERVATIONAL_CANDIDATE_ONLY: field92 is the sole exact candidate, "
-            "but Q semantics and directional mapping remain unconfirmed"
+            "CONFIRMED_LATER_IN_RX3_EXP_03_SCOPED_GUI_PATH: field92 is the "
+            "one-plane Б1/14Б2 X-X GUI Q input; directional LIRA mapping and "
+            "production compatibility remain unconfirmed"
         ),
         "Mx_write_safety_decision": (
             "EXPERIMENTAL_WRITE_ALLOWED / VALIDATION_ONLY / RX3-EXP-02B / "
@@ -2124,7 +2143,16 @@ def prepare_rx3_bending_q3_validation(
             "Exact Б1 baseline is incompatible with RX3-EXP-03"
         )
     spec92 = field_spec(92)
-    if spec92.confidence != "unknown" or spec92.write_policy is not WritePolicy.FORBIDDEN:
+    pending_schema = (
+        spec92.confidence == "unknown"
+        and spec92.write_policy is WritePolicy.FORBIDDEN
+    )
+    confirmed_schema = (
+        spec92.confidence == "confirmed"
+        and spec92.name == "rx3_gui_q_input_kn"
+        and spec92.write_policy is WritePolicy.EXPERIMENTAL
+    )
+    if not pending_schema and not confirmed_schema:
         raise Rx3ExperimentPreparationError(
             "Field 92 schema state changed; experimental protocol requires re-review"
         )
@@ -2311,11 +2339,13 @@ def prepare_rx3_bending_q3_validation(
         "compatibility_evidence": compatibility_payload,
         "precalc_diff": diff_payload,
         "field92_evidence_decision": (
-            "UNKNOWN_PENDING_RX3_EXP_03_GUI_CALCULATION_AND_PERSISTED_RX38"
+            "CONFIRMED_SCOPED_RX3_GUI_Q_INPUT"
+            if confirmed_schema
+            else "UNKNOWN_PENDING_RX3_EXP_03_GUI_CALCULATION_AND_PERSISTED_RX38"
         ),
         "field92_write_policy": "VALIDATION_EXPERIMENTAL_ONLY",
         "production_writer_changed": False,
-        "schema_mapping_promoted": False,
+        "schema_mapping_promoted": confirmed_schema,
         "stale_template_results": [
             {"index": 44, "raw_value": before_target.fields[44]},
             {"index": 54, "raw_value": before_target.fields[54]},
@@ -2788,3 +2818,537 @@ def validate_rx3_bending_q3_result(
     _write_new(json_path, json.dumps(payload, ensure_ascii=False, indent=2) + "\n")
     _write_new(markdown_path, markdown)
     return Rx3BendingQResultReport(payload, json_path, markdown_path)
+
+
+def _biaxial_bending_label(value: str) -> bool:
+    normalized = _normal_text(value)
+    return (
+        "изгибаемый стержень" in normalized
+        and "в двух главных плоскостях" in normalized
+        and "сжат" not in normalized
+        and "растянут" not in normalized
+    )
+
+
+def _reference_decimal(value: Decimal | str, name: str) -> Decimal:
+    parsed = value if isinstance(value, Decimal) else _decimal(str(value))
+    if parsed is None:
+        raise Rx3ExperimentPreparationError(f"{name} must be finite")
+    return parsed
+
+
+def _matching_numeric_fields(
+    record: Rx38Record, reference: Decimal, tolerance: Decimal
+) -> list[dict[str, Any]]:
+    matches: list[dict[str, Any]] = []
+    for index, raw in enumerate(record.fields):
+        numeric = _decimal(raw)
+        if numeric is None:
+            continue
+        error = abs(numeric - reference)
+        if error <= tolerance:
+            spec = field_spec(index)
+            matches.append(
+                {
+                    "index": index,
+                    "raw_token": record.raw_tokens[index],
+                    "numeric_value": str(numeric),
+                    "absolute_error": str(error),
+                    "schema_name": spec.name,
+                    "schema_confidence": spec.confidence,
+                    "schema_write_policy": spec.write_policy.value,
+                    "semantic_status": "CANDIDATE_ONLY_NOT_ASSIGNED",
+                }
+            )
+    return matches
+
+
+def _known_candidate_role(index: int) -> str:
+    return {
+        49: "CONFIRMED_AXIAL_N_NOT_MY_MX_OR_Q",
+        50: "CONFIRMED_MX_ONLY_IN_VERIFIED_ONE_PLANE_X_X_SCOPE",
+        77: "UNKNOWN_ZERO_VALUE_NO_SEMANTIC_ASSIGNMENT",
+        78: "PROBABLE_PERSISTED_MX_COPY_IN_VERIFIED_ONE_PLANE_SCOPE",
+        79: "UNKNOWN_STRONGEST_MY_PATTERN_CANDIDATE",
+        92: "CONFIRMED_GUI_Q_ONLY_IN_VERIFIED_ONE_PLANE_X_X_SCOPE",
+        122: "CONSTANT_0_5_NUMERIC_COINCIDENCE_CANDIDATE",
+    }.get(index, "NO_ADMISSIBLE_SEMANTIC_ASSIGNMENT")
+
+
+def prepare_rx3_my_biaxial_phase_a(
+    template_paths: Iterable[str | Path],
+    output_directory: str | Path,
+    *,
+    experiment_id: str = "RX3-EXP-04",
+    mark: str = "Кс1",
+    reference_mx_knm: Decimal | str = Decimal("0.51"),
+    reference_my_knm: Decimal | str = Decimal("4.34"),
+    reference_q_kn: Decimal | str = Decimal("0"),
+    tolerance: Decimal | str = Decimal("0.02"),
+    evidence_reference: str = (
+        "User-provided existing RX3 GUI/report reference for RX3-EXP-04 Phase A"
+    ),
+) -> Rx3MyBiaxialPhaseABundle:
+    """Create a fingerprint-bound, non-mutating My/biaxial observation bundle."""
+
+    if experiment_id != "RX3-EXP-04":
+        raise Rx3ExperimentPreparationError(
+            "Only the RX3-EXP-04 My/biaxial Phase A protocol is supported"
+        )
+    if not isinstance(mark, str) or not mark.strip():
+        raise Rx3ExperimentPreparationError("Phase A target mark must not be blank")
+    if not isinstance(evidence_reference, str) or not evidence_reference.strip():
+        raise Rx3ExperimentPreparationError("Evidence reference must not be blank")
+    mx_reference = _reference_decimal(reference_mx_knm, "Mx reference")
+    my_reference = _reference_decimal(reference_my_knm, "My reference")
+    q_reference = _reference_decimal(reference_q_kn, "Q reference")
+    match_tolerance = _reference_decimal(tolerance, "Reference tolerance")
+    if match_tolerance < 0:
+        raise Rx3ExperimentPreparationError("Reference tolerance must not be negative")
+
+    paths = sorted(
+        {Path(path).resolve(strict=True) for path in template_paths},
+        key=lambda item: str(item).casefold(),
+    )
+    if not paths:
+        raise Rx3ExperimentPreparationError("No RX38 templates were supplied")
+    source_hashes = {path: _sha256(path) for path in paths}
+    corpus: list[tuple[Path, int, Rx38Record, str]] = []
+    target_matches: list[tuple[Path, int, Rx38Record]] = []
+    for path in paths:
+        records = construction_records(read_rx38(path))
+        for position, record in enumerate(records, 1):
+            family = (
+                "BIAXIAL"
+                if _biaxial_bending_label(record.fields[45])
+                else "SINGLE_PLANE"
+                if _single_plane_bending_label(record.fields[45])
+                else "OTHER"
+            )
+            if family != "OTHER":
+                corpus.append((path, position, record, family))
+            if record.mark == mark:
+                target_matches.append((path, position, record))
+        if _sha256(path) != source_hashes[path]:
+            raise Rx3ExperimentPreparationError(
+                f"RX38 changed during Phase A selection: {path}"
+            )
+    if len(target_matches) != 1:
+        raise Rx3ExperimentPreparationError(
+            "Exact Phase A mark must resolve to one Tconstr across the corpus; "
+            f"mark={mark!r}, matches={[(str(path), pos) for path, pos, _ in target_matches]}"
+        )
+    source, target_position, target = target_matches[0]
+    if not _biaxial_bending_label(target.fields[45]):
+        raise Rx3ExperimentPreparationError(
+            "Exact Phase A target is not explicit two-principal-plane bending"
+        )
+    for index, label in ((14, "length"), (55, "required R")):
+        value = _decimal(target.fields[index])
+        if value is None or value <= 0:
+            raise Rx3ExperimentPreparationError(
+                f"Exact Phase A target {label} is missing or invalid"
+            )
+    if not target.fields[19].strip() or not target.fields[42].strip():
+        raise Rx3ExperimentPreparationError(
+            "Exact Phase A target profile or steel is missing"
+        )
+    source_sha = source_hashes[source]
+    target_fingerprint = rx38_record_fingerprint(target)
+
+    reference_candidates = {
+        "Mx": _matching_numeric_fields(target, mx_reference, match_tolerance),
+        "My": _matching_numeric_fields(target, my_reference, match_tolerance),
+        "Q": _matching_numeric_fields(
+            target,
+            q_reference,
+            Decimal("0") if q_reference == 0 else match_tolerance,
+        ),
+    }
+    if not reference_candidates["My"]:
+        raise Rx3ExperimentPreparationError(
+            "No exact-record field matches the external My reference within tolerance"
+        )
+
+    relevant_rows: list[dict[str, Any]] = []
+    for path, position, record, family in corpus:
+        relevant_rows.append(
+            {
+                "source_file": str(path),
+                "position_1_based": position,
+                "mark": record.mark,
+                "profile": record.fields[19],
+                "stress_state": record.fields[45],
+                "axis_raw": record.fields[61],
+                "family": family,
+                "candidate_pattern": {
+                    str(index): record.raw_tokens[index]
+                    for index in (50, 77, 78, 79, 92, 122)
+                },
+            }
+        )
+
+    pattern_indices = sorted(
+        {
+            item["index"]
+            for kind in ("Mx", "My")
+            for item in reference_candidates[kind]
+        }
+        | {50, 77, 78, 79, 92, 122}
+    )
+    pattern_analysis: dict[str, Any] = {}
+    for index in pattern_indices:
+        family_values: dict[str, list[Decimal]] = {
+            "BIAXIAL": [],
+            "SINGLE_PLANE": [],
+        }
+        raw_rows: list[dict[str, Any]] = []
+        for path, position, record, family in corpus:
+            numeric = _decimal(record.fields[index])
+            if numeric is not None:
+                family_values[family].append(numeric)
+            raw_rows.append(
+                {
+                    "source_file": str(path),
+                    "position_1_based": position,
+                    "mark": record.mark,
+                    "family": family,
+                    "raw_token": record.raw_tokens[index],
+                    "numeric_value": None if numeric is None else str(numeric),
+                }
+            )
+        all_values = family_values["BIAXIAL"] + family_values["SINGLE_PLANE"]
+        pattern_analysis[str(index)] = {
+            "known_role": _known_candidate_role(index),
+            "schema_name": field_spec(index).name,
+            "schema_confidence": field_spec(index).confidence,
+            "biaxial_numeric_count": len(family_values["BIAXIAL"]),
+            "biaxial_nonzero_count": sum(
+                value != 0 for value in family_values["BIAXIAL"]
+            ),
+            "single_plane_numeric_count": len(family_values["SINGLE_PLANE"]),
+            "single_plane_nonzero_count": sum(
+                value != 0 for value in family_values["SINGLE_PLANE"]
+            ),
+            "distinct_numeric_values": sorted({str(value) for value in all_values}),
+            "constant_across_relevant_corpus": len(set(all_values)) == 1,
+            "rows": raw_rows,
+            "semantic_status": "OBSERVATIONAL_PATTERN_ONLY_NOT_CAUSAL",
+        }
+
+    def rank_candidates(kind: str, candidates: list[dict[str, Any]]) -> None:
+        for item in candidates:
+            index = int(item["index"])
+            pattern = pattern_analysis.get(str(index))
+            if kind == "My":
+                if pattern is None:
+                    raise Rx3ExperimentPreparationError(
+                        "Internal My candidate pattern analysis is missing"
+                    )
+                primary = 0 if (
+                    pattern["biaxial_nonzero_count"]
+                    == pattern["biaxial_numeric_count"]
+                    and pattern["single_plane_nonzero_count"] == 0
+                ) else 1
+            elif kind == "Mx":
+                if pattern is None:
+                    raise Rx3ExperimentPreparationError(
+                        "Internal Mx candidate pattern analysis is missing"
+                    )
+                primary = 0 if index == 78 else 1
+            else:
+                primary = 0 if index == 92 else 1
+            item["ranking_key"] = [
+                primary,
+                item["absolute_error"],
+                index,
+            ]
+            item["known_role"] = _known_candidate_role(index)
+            item["pattern_support"] = (
+                {
+                    "biaxial_numeric_count": pattern["biaxial_numeric_count"],
+                    "biaxial_nonzero_count": pattern["biaxial_nonzero_count"],
+                    "single_plane_numeric_count": pattern[
+                        "single_plane_numeric_count"
+                    ],
+                    "single_plane_nonzero_count": pattern[
+                        "single_plane_nonzero_count"
+                    ],
+                    "constant_across_relevant_corpus": pattern[
+                        "constant_across_relevant_corpus"
+                    ],
+                }
+                if pattern is not None
+                else None
+            )
+        candidates.sort(
+            key=lambda item: (
+                int(item["ranking_key"][0]),
+                Decimal(str(item["ranking_key"][1])),
+                int(item["ranking_key"][2]),
+            )
+        )
+        for rank, item in enumerate(candidates, 1):
+            item["rank"] = rank
+
+    for kind, candidates in reference_candidates.items():
+        rank_candidates(kind, candidates)
+
+    nearby = {
+        str(index): {
+            "raw_token": target.raw_tokens[index],
+            "numeric_value": (
+                None
+                if _decimal(target.fields[index]) is None
+                else str(_decimal(target.fields[index]))
+            ),
+            "schema_name": field_spec(index).name,
+            "schema_confidence": field_spec(index).confidence,
+            "known_role": _known_candidate_role(index),
+        }
+        for index in range(76, 93)
+    }
+    analysis = {
+        "experiment_id": experiment_id,
+        "phase": "A_MY_BIAXIAL_OBSERVATION",
+        "status": "CANDIDATE_ANALYSIS_ONLY",
+        "semantic_assignments_made": False,
+        "evidence_reference": evidence_reference,
+        "external_references": {
+            "Mx_knm": str(mx_reference),
+            "My_knm": str(my_reference),
+            "Q_kn": str(q_reference),
+            "absolute_tolerance": str(match_tolerance),
+            "Q_absolute_tolerance": (
+                "0" if q_reference == 0 else str(match_tolerance)
+            ),
+            "status": "OBSERVATION_REFERENCE_NOT_RX38_MAPPING",
+        },
+        "target": {
+            "source_file": str(source),
+            "source_sha256": source_sha,
+            "record_fingerprint": target_fingerprint,
+            "position_1_based": target_position,
+            "mark": target.mark,
+            "profile": target.fields[19],
+            "stress_state": target.fields[45],
+        },
+        "candidate_indices": {
+            kind: [item["index"] for item in candidates]
+            for kind, candidates in reference_candidates.items()
+        },
+        "ranked_candidates": reference_candidates,
+        "known_false_interpretation_guards": {
+            str(index): _known_candidate_role(index)
+            for index in (49, 50, 77, 78, 92, 122)
+        },
+        "nearby_fields_76_92": nearby,
+        "corpus_summary": {
+            "biaxial_record_count": sum(
+                row["family"] == "BIAXIAL" for row in relevant_rows
+            ),
+            "single_plane_record_count": sum(
+                row["family"] == "SINGLE_PLANE" for row in relevant_rows
+            ),
+            "explicit_y_y_record_count": sum(
+                "Y-Y"
+                in str(row["axis_raw"]).upper().replace("Х", "X").replace("У", "Y")
+                for row in relevant_rows
+            ),
+        },
+        "cross_corpus_pattern_analysis": pattern_analysis,
+        "relevant_corpus_rows": relevant_rows,
+        "decision": (
+            "Field79 is the strongest My perturbation candidate for GUI review, "
+            "but Phase A assigns no semantics and authorizes no mutation."
+        ),
+    }
+    summary = {
+        "experiment_id": experiment_id,
+        "phase": "A_MY_BIAXIAL_OBSERVATION",
+        "status": "WAITING_FOR_MY_BIAXIAL_GUI_SCREENSHOT",
+        "generation_allowed": False,
+        "calculation_allowed": False,
+        "save_allowed": False,
+        "template": {
+            "source_file": str(source),
+            "working_copy": "template.rx38",
+            "sha256": source_sha,
+            "record_fingerprint": target_fingerprint,
+            "position_1_based": target_position,
+        },
+        "selection": {
+            "mark": target.mark,
+            "section": target.fields[5],
+            "standard": target.fields[17],
+            "profile": target.fields[19],
+            "stress_state": target.fields[45],
+            "steel": target.fields[42],
+            "length_m": target.fields[14],
+            "required_R_min": target.fields[55],
+        },
+        "external_references": analysis["external_references"],
+        "candidate_indices": analysis["candidate_indices"],
+        "heating_evidence": {
+            "status": "GUI_CONFIRMATION_REQUIRED",
+            "heating_sides": None,
+            "active_sides": None,
+            "rx38_indices_mapped": False,
+        },
+        "warnings": [
+            "No field semantics are promoted in Phase A.",
+            "Heating sides are not inferred from RX38 tokens.",
+            "LIRA My mapping, sign and local-axis conventions remain unverified.",
+        ],
+    }
+    audit = {
+        "experiment_id": experiment_id,
+        "phase": "A_MY_BIAXIAL_OBSERVATION",
+        "status": "WAITING_FOR_MY_BIAXIAL_GUI_SCREENSHOT",
+        "source": summary["template"],
+        "selection": summary["selection"],
+        "candidate_indices": analysis["candidate_indices"],
+        "heating_evidence": summary["heating_evidence"],
+        "mutation_performed": False,
+        "generated_rx38_created": False,
+        "calculation_started": False,
+        "schema_mapping_promoted": False,
+        "production_writer_changed": False,
+        "issue_readiness_changed": False,
+    }
+
+    directory = Path(output_directory).resolve(strict=False)
+    if directory.exists() and any(directory.iterdir()):
+        raise Rx3ExperimentPreparationError(
+            f"RX3-EXP-04 Phase A directory must be new or empty: {directory}"
+        )
+    directory.mkdir(parents=True, exist_ok=True)
+    template = directory / "template.rx38"
+    summary_path = directory / "template_summary.json"
+    analysis_json_path = directory / "candidate_field_analysis.json"
+    analysis_markdown_path = directory / "candidate_field_analysis.md"
+    expected_path = directory / "EXPECTED_RX3_GUI_VALUES.md"
+    checklist_path = directory / "CHECKLIST.md"
+    instructions_path = directory / "GUI_OBSERVATION_INSTRUCTIONS.md"
+    audit_path = directory / "audit.json"
+    _copy_new(source, template)
+    if template.read_bytes() != source.read_bytes() or _sha256(template) != source_sha:
+        raise Rx3ExperimentPreparationError(
+            "Phase A working template is not byte-identical to its source"
+        )
+    copied_records = construction_records(read_rx38(template))
+    if (
+        target_position > len(copied_records)
+        or copied_records[target_position - 1].mark != mark
+        or rx38_record_fingerprint(copied_records[target_position - 1])
+        != target_fingerprint
+    ):
+        raise Rx3ExperimentPreparationError(
+            "Phase A working template target binding changed after copy"
+        )
+
+    def indices_text(kind: str) -> str:
+        return ", ".join(
+            str(item["index"]) for item in reference_candidates[kind]
+        ) or "none"
+
+    analysis_markdown = "\n".join(
+        [
+            "# RX3-EXP-04 Phase A candidate field analysis",
+            "",
+            f"- Source SHA-256: `{source_sha}`",
+            f"- Target fingerprint: `{target_fingerprint}`",
+            f"- Target: `{mark}`, Tconstr position `{target_position}`",
+            f"- Mx≈{mx_reference} candidates: `{indices_text('Mx')}`",
+            f"- My≈{my_reference} candidates: `{indices_text('My')}`",
+            f"- Q≈{q_reference} candidates: `{indices_text('Q')}`",
+            "",
+            "## Ranked My candidates",
+            "",
+            "| Rank | Index | Raw | Numeric | Error | Pattern |",
+            "|---:|---:|---:|---:|---:|---|",
+            *[
+                f"| {item['rank']} | {item['index']} | `{item['raw_token']}` | `{item['numeric_value']}` | `{item['absolute_error']}` | {item['known_role']} |"
+                for item in reference_candidates["My"]
+            ],
+            "",
+            "Field79 is the strongest observation candidate, not a confirmed mapping.",
+            "Fields 50/78/92 retain only their previously verified narrow roles.",
+            "No mutation, calculation, schema promotion, or production-writer change occurred.",
+            "",
+        ]
+    )
+    expected_gui = "\n".join(
+        [
+            "# RX3-EXP-04 Phase A expected GUI observation",
+            "",
+            f"- Mark: `{mark}`",
+            f"- Profile: `{target.fields[19]}` / `{target.fields[17]}`",
+            f"- Stress state: `{target.fields[45]}`",
+            f"- Steel: `{target.fields[42]}`",
+            f"- Length: `{target.fields[14]} m`",
+            f"- Required fire resistance: `R{target.fields[55]}`",
+            f"- External report reference only: Mx≈`{mx_reference} kN*m`, My≈`{my_reference} kN*m`, Q≈`{q_reference} kN`.",
+            "- Heating: `GUI_CONFIRMATION_REQUIRED`; no sides are pre-assigned.",
+            "",
+            "These are screenshot comparison references, not RX38 field mappings.",
+            "",
+        ]
+    )
+    checklist = "\n".join(
+        [
+            "# RX3-EXP-04 Phase A screenshot checklist",
+            "",
+            "Capture one full calculation-dialog screenshot showing:",
+            "",
+            "- [ ] exact mark, profile and stress-state text;",
+            "- [ ] Mx label/value/unit and My label/value/unit;",
+            "- [ ] Q label/value/unit, if present;",
+            "- [ ] X-X / Y-Y selectors and separate principal-plane values;",
+            "- [ ] plastic/elastic region options and W/Wpl controls;",
+            "- [ ] stability and lateral-torsional buckling controls;",
+            "- [ ] support/effective/unbraced length controls;",
+            "- [ ] heating arrows, R and all visible coefficients.",
+            "",
+            "Do not edit, calculate, Save to table, or Save As.",
+            "",
+        ]
+    )
+    instructions = "\n".join(
+        [
+            "# RX3-EXP-04 Phase A — user actions",
+            "",
+            "1. Open `template.rx38` in RX3.",
+            f"2. Select `{mark}` and open its calculation dialog.",
+            "3. Capture one full screenshot covering `CHECKLIST.md`.",
+            "4. Close without editing, Calculate, Save to table, or Save As.",
+            "5. Return the screenshot for external interpretation and exact binding.",
+            "",
+        ]
+    )
+    _write_new(summary_path, json.dumps(summary, ensure_ascii=False, indent=2) + "\n")
+    _write_new(
+        analysis_json_path,
+        json.dumps(analysis, ensure_ascii=False, indent=2) + "\n",
+    )
+    _write_new(analysis_markdown_path, analysis_markdown)
+    _write_new(expected_path, expected_gui)
+    _write_new(checklist_path, checklist)
+    _write_new(instructions_path, instructions)
+    _write_new(audit_path, json.dumps(audit, ensure_ascii=False, indent=2) + "\n")
+    return Rx3MyBiaxialPhaseABundle(
+        directory,
+        template,
+        summary_path,
+        analysis_json_path,
+        analysis_markdown_path,
+        expected_path,
+        checklist_path,
+        instructions_path,
+        audit_path,
+        source,
+        mark,
+        source_sha,
+        target_fingerprint,
+        target_position,
+    )

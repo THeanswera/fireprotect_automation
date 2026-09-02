@@ -41,8 +41,8 @@ GUI/help/report/database evidence, управляемой причинности
 3. `RX3-EXP-01D`: N=25 bidirectional controlled axial perturbation.
 4. `RX3-EXP-02`: single-plane bending family; Phase A observation before any perturbation.
 5. `RX3-EXP-02B`: field50 Mx=10 controlled X-X perturbation, Q fixed.
-6. `RX3-EXP-03`: изменить только My.
-7. `RX3-EXP-04`: изменить только Qx.
+6. `RX3-EXP-03`: field92-only Q perturbation with Mx fixed.
+7. `RX3-EXP-04`: My / biaxial family, Phase A before any perturbation.
 8. `RX3-EXP-05`: изменить только Qy.
 9. `RX3-EXP-06`: изменить только support condition.
 10. `RX3-EXP-07`: изменить только effective-length factor.
@@ -168,5 +168,37 @@ semantically `3.00`. Raw token normalization such as `3,00 → 3` is reported
 separately from numeric change. The validator never promotes field92 in the
 schema automatically.
 
-Current status: `WAITING_FOR_Q3_GUI_CALCULATION`. No Q result or
-`Q_X_AXIS_PATH_MVP_STATUS = VALIDATED` claim exists yet.
+RX3-EXP-03 completed manual GUI Calculate, Save to table and Save As.
+GUI Q changed `2.32 → 3.00 kN`, Q utilisation `0.028 → 0.037`, while Mx and
+M utilisation remained `8.89 kN*m` / `0.433`. Persisted field92 normalized
+`3,00 → 3` without numeric change; field50/78 and all non-target Tconstr were
+unchanged. Field92 is now `CONFIRMED` only as the Б1 / 14Б2 / one-plane X-X
+RX3 GUI Q input and remains `EXPERIMENTAL`.
+
+`Q_X_AXIS_PATH_MVP_STATUS = VALIDATED` is scoped to that RX3 GUI chain. It
+does not establish LIRA Qx/Qy, sign/local-axis convention, other stress
+states, combined-stress semantics or production compatibility.
+
+## RX3-EXP-04 Phase A — My / biaxial observation
+
+`prepare-rx3-my-biaxial-phase-a` searched the local RX38 corpus and selected
+the unique Кс1 record in `rx3/новый_2_78_9.rx38`: profile 20П, two-principal-
+plane bending, Tconstr position 7. The working template is byte-identical to
+the source. No altered RX38, calculation or Save artifact was created.
+Source SHA-256 is
+`81cb11901fcab586bbd47d4f6c66e77659183a5c1de8579e87643ff2ce3ae9c6`;
+target fingerprint is
+`2283c2d01f09ec0477e38d6d113fe395dd1182fa2aa3769158ff480e4347146b`.
+
+Against external screenshot/report references Mx≈`0.51`, My≈`4.34`, Q=`0`:
+
+- Mx candidates: fields `78` (`0,507`) and `122` (`0,5`, corpus constant);
+- My candidate: field `79` (`4,3414`), ranked strongest but still UNKNOWN;
+- Q candidates: every exact numeric-zero field is reported; field92 ranks
+  first only because of its separate one-plane evidence, which is not
+  transferred to biaxial semantics.
+
+Heating status is `GUI_CONFIRMATION_REQUIRED`. The next and only current user
+checkpoint is to open the copied template, select Кс1, open the calculation
+dialog, capture one full screenshot, and close without editing, Calculate,
+Save to table or Save As.
