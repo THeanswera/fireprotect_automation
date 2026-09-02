@@ -98,7 +98,7 @@ def test_rx38_result_extracts_confirmed_and_labels_probable_without_unknown_valu
     confirmed_indices = {field.index for field in result.confirmed_fields}
     probable_indices = {field.index for field in result.probable_fields}
     assert 44 in confirmed_indices
-    assert 50 not in confirmed_indices and 50 in probable_indices
+    assert 50 in confirmed_indices and 50 not in probable_indices
     assert 2 in result.unknown_indices
     assert "opaque-value" not in str(result.as_dict())
 
@@ -112,7 +112,8 @@ def test_apply_rx3_result_attaches_only_confirmed_outputs_with_rx3_provenance():
     assert updated.critical_temperature == Quantity.of("650.5", Unit.CELSIUS)
     assert updated.unprotected_fire_resistance == Quantity.of("15", Unit.MINUTE)
     assert updated.trace_for("critical_temperature").kind is ProvenanceType.RX3_RESULT
-    assert updated.Mx is None  # probable RX38 field 50 is never promoted.
+    # Narrow field semantics do not authorize a global ProjectElement Mx import.
+    assert updated.Mx is None
 
 
 def test_apply_rx3_result_blocks_identity_or_input_conflict():

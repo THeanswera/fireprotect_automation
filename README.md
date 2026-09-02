@@ -21,7 +21,7 @@ Warning используется только для некритической 
 ## Реализовано
 
 - lossless parser и safe writer 200-позиционных записей `Tconstr`;
-- полная карта RX38: 56 `confirmed`, 13 `probable`, 131 `unknown`;
+- полная карта RX38: 57 `confirmed`, 14 `probable`, 129 `unknown`;
 - центральная модель `ProjectElement`, единицы, SI-конвертация и provenance;
 - конфигурируемые адаптеры таблиц усилий ЛИРА для CSV, HTML и XLSX;
 - geometry-модуль для периметров, ПТМ, section factor и площади обработки;
@@ -135,6 +135,21 @@ This command copies the selected template and creates a candidate comparison,
 expected-value report, checklist, and GUI instructions. It never creates an
 altered RX38 and never starts RX3 calculation. A non-zero Q reference is
 reported as a confounder, so the observation is not labelled pure Mx.
+
+The fingerprint-bound validation-only Mx perturbation is prepared separately:
+
+```powershell
+python -m fireprotect.cli prepare-rx3-bending-mx10 `
+  --phase-a-dir validation/RX3-EXP-02_A_BENDING_OBSERVATION `
+  --observation validation/RX3-EXP-02_A_BENDING_OBSERVATION/phase_a_gui_observation.json `
+  --output-dir validation/RX3-EXP-02B_MX10
+```
+
+`RX3-EXP-02B` confirmed field 50 as the active GUI Mx input only for the
+verified one-plane X-X / Б1 template family. Its schema write policy remains
+`EXPERIMENTAL`; the production writer and LIRA axis/sign mapping were not opened.
+Field 78 is only a probable post-calc persisted copy, and field 92 remains an
+unknown observational Q candidate.
 
 Post-calc validation always requires an explicit target. Prefer the exact
 BEFORE-record fingerprint or a 1-based `Tconstr` position; `--target-mark` is

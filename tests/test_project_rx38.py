@@ -154,9 +154,9 @@ def test_project_element_to_rx38_safe_template_round_trip(template_rx38, tmp_pat
         safety_context=_safety_context(),
     )
     assert report.round_trip_valid
-    assert report.unknown_fields_count == 130
+    assert report.unknown_fields_count == 129
     assert any(
-        "Mx/My/Qx/Qy mappings remain unconfirmed" in warning
+        "Mx production writing and My/Qx/Qy mappings remain unverified" in warning
         for warning in report.warnings
     )
     assert any("STALE_TEMPLATE_RESULT" in warning for warning in report.warnings)

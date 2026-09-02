@@ -203,6 +203,20 @@ def test_confirmed_numeric_token_normalization_preserves_raw_diff(tmp_path: Path
     assert change["classification"] == "RX3_TOKEN_NORMALIZATION"
 
 
+def test_confirmed_load_level_change_is_a_calculated_result_not_an_input(tmp_path: Path):
+    generated, calculated = _two_record_calculation(
+        tmp_path,
+        target_changes={44: "675", 52: "0,487", 54: "18"},
+    )
+
+    report = validate_rx3_result_files(
+        generated, calculated, target_record_positions=(1,)
+    )
+
+    assert report.data["allowed_calculated_result_fields"] == [44, 52, 54]
+    assert 52 not in report.data["unsafe_production_change_indices"]
+
+
 def test_unknown_numeric_tokens_are_not_treated_as_semantically_equal(
     tmp_path: Path,
 ):
@@ -373,8 +387,8 @@ def test_result_only_fields_cannot_be_written_as_input(index: int):
         )
 
 
-def test_probable_field_cannot_be_written_through_typed_api():
-    with pytest.raises(UnsafeRx38WriteError, match="not confirmed"):
+def test_experimental_field_cannot_be_written_through_typed_api():
+    with pytest.raises(UnsafeRx38WriteError, match="EXPERIMENTAL"):
         make_record().with_typed_field(50, "12,5", compatibility_verified=True)
 
 

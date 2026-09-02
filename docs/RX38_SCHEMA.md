@@ -4,16 +4,17 @@
 
 ## Уровень доказанности
 
-- `confirmed`: 56
+- `confirmed`: 57
 - `probable`: 14
-- `unknown`: 130
+- `unknown`: 129
 
 `probable` не входит в безопасный writable-набор. Semantic confidence теперь
 отделён от write safety. `WritePolicy` имеет значения `SAFE_DIRECT`,
 `SAFE_WITH_COMPATIBILITY_CHECK`, `RESULT_ONLY`, `READ_ONLY`, `EXPERIMENTAL` и
 `FORBIDDEN`. UNKNOWN/PROBABLE запрещены; confirmed output fields 44/54 имеют
 `RESULT_ONLY`; field 0 имеет `READ_ONLY`; остальные расчётные inputs требуют
-явной compatibility-проверки. Field 53 переведён из `unknown` в
+явной compatibility-проверки. Подтверждённый field 50 остаётся
+`EXPERIMENTAL`: его узкая семантика не разрешает production-запись. Field 53 переведён из `unknown` в
 `probable` после двух двунаправленных осевых возмущений, трёх GUI-
 совпадений и сверки со встроенной справкой RX3; запись по-прежнему
 запрещена.
@@ -76,10 +77,10 @@ note. Наличие CONFIRMED-семантики само по себе не д
 | 47 | support_condition_code | Numeric support-condition code | integer | — | service | conditional | RX38 cross-comparison | probable | — |
 | 48 | support_condition | Support condition | string | — | input | conditional | RX38 values + RX3 help/report | confirmed | — |
 | 49 | axial_force_kn | Axial force N | decimal | kN | input | conditional | RX38 values + RX3 help/report | confirmed | — |
-| 50 | major_axis_moment_knm | Bending moment about selected major axis | decimal | kN·m | input | conditional | RX38 differential values + RX3 help | probable | — |
+| 50 | major_axis_moment_knm | Bending moment about selected major axis | decimal | kN·m | input | conditional | 5-record bending corpus + RX3 help + RX3-EXP-02/02B controlled GUI evidence | confirmed | Only one-plane bending, X-X, verified Б1 template family; `EXPERIMENTAL` write policy, no LIRA axis/sign or global production-write claim. |
 | 51 | effective_length_m | Effective/calculated member length | decimal | m | calculated | yes for steel Tconstr | Exact identity field14×field141 for supported compression records + RX3 report | confirmed | — |
 | 52 | load_level_mu0 | Load level used to determine critical temperature | decimal | 1 | calculated | yes for steel Tconstr | Exact EN 1993-1-2 critical-temperature relation with field44 + RX3 help | confirmed | — |
-| 53 | beta_tem_modulus_reduction | RX3 beta_tem / elastic-modulus reduction coefficient at critical temperature | decimal | 1 | calculated | yes for steel Tconstr | RX3-EXP-01/01C/01D GUI equality + RX3 EN 1993-1-2 help | probable | Three controlled axial states equal GUI beta_tem after display rounding; broader stress-state applicability and a direct exported-report binding remain unverified. |
+| 53 | beta_tem_modulus_reduction | RX3 beta_tem / elastic-modulus reduction coefficient at critical temperature | decimal | 1 | calculated | yes for steel Tconstr | RX3-EXP-01/01C/01D/02B GUI equality + RX3 EN 1993-1-2 help | probable | Axial states and X-X bending match GUI beta_tem; the bending value is 0, while the separate 1200 C beta-related temperature is not mapped. |
 | 54 | unprotected_fire_resistance_min | Calculated unprotected fire resistance | decimal | min | output | yes for steel Tconstr | RX38 values + RX3 report | confirmed | — |
 | 55 | required_fire_resistance_min | Required fire resistance R | decimal | min | input | yes for steel Tconstr | RX38 values + RX3 report/help | confirmed | — |
 | 56 | unknown_056 | Not established | unknown | — | unknown | unknown | No admissible evidence | unknown | Preserved verbatim; do not write through the typed API. |
@@ -102,9 +103,9 @@ note. Наличие CONFIRMED-семантики само по себе не д
 | 73 | unknown_073 | Not established | unknown | — | unknown | unknown | No admissible evidence | unknown | Preserved verbatim; do not write through the typed API. |
 | 74 | unknown_074 | Not established | unknown | — | unknown | unknown | No admissible evidence | unknown | Preserved verbatim; do not write through the typed API. |
 | 75 | unknown_075 | Not established | unknown | — | unknown | unknown | No admissible evidence | unknown | Preserved verbatim; do not write through the typed API. |
-| 76 | normal_stress_mpa | Calculated normal stress | decimal | MPa | calculated | yes for steel Tconstr | RX38 values + RX3 report | probable | Three controlled axial states match the GUI stress value, but combined-stress records are not uniquely attributable. |
+| 76 | normal_stress_mpa | Calculated normal stress | decimal | MPa | calculated | yes for steel Tconstr | RX38 values + RX3 report | probable | Axial states and one X-X bending state match GUI stress/load; broader combined-stress semantics remain unverified. |
 | 77 | unknown_077 | Not established | unknown | — | unknown | unknown | No admissible evidence | unknown | Preserved verbatim; do not write through the typed API. |
-| 78 | unknown_078 | Not established | unknown | — | unknown | unknown | No admissible evidence | unknown | Preserved verbatim; do not write through the typed API. |
+| 78 | persisted_major_axis_moment_copy_knm | RX3-persisted copy of the active major-axis moment | decimal | kN·m | service | conditional | RX3-EXP-02 corpus + RX3-EXP-02B post-calc differential | probable | Synchronized from 8.89 to 10 only after calculate/save; did not control pre-calc GUI Mx; writing is forbidden. |
 | 79 | unknown_079 | Not established | unknown | — | unknown | unknown | No admissible evidence | unknown | Preserved verbatim; do not write through the typed API. |
 | 80 | unknown_080 | Not established | unknown | — | unknown | unknown | No admissible evidence | unknown | Preserved verbatim; do not write through the typed API. |
 | 81 | unknown_081 | Not established | unknown | — | unknown | unknown | No admissible evidence | unknown | Preserved verbatim; do not write through the typed API. |

@@ -462,6 +462,7 @@ def validate_rx3_result_files(
     unsafe_change_sets: list[set[int]] = []
     unexpected_non_target_changes: list[dict[str, Any]] = []
     expected_output_fields = {44, 54}
+    allowed_calculated_result_fields = expected_output_fields | {52}
     for position, (old, new) in enumerate(zip(before, after), 1):
         changes = [_change_dict(item) for item in diff_records(old, new)]
         changed_indices = {item["index"] for item in changes}
@@ -480,7 +481,7 @@ def validate_rx3_result_files(
             {
                 item["index"]
                 for item in changes
-                if item["index"] not in expected_output_fields
+                if item["index"] not in allowed_calculated_result_fields
                 and item["semantic_changed"] is not False
             }
         )
@@ -585,6 +586,9 @@ def validate_rx3_result_files(
         "byte_identical": byte_identical,
         "target_resolution": target_resolution,
         "expected_result_fields": sorted(expected_output_fields),
+        "allowed_calculated_result_fields": sorted(
+            allowed_calculated_result_fields
+        ),
         "expected_result_fields_changed": result_fields_changed,
         "target_result_fields_changed": target_result_fields_changed,
         "non_target_records_text_unchanged": non_target_records_text_unchanged,
@@ -654,6 +658,7 @@ def validate_rx3_result_files(
         f"- Byte-identical: `{byte_identical}`",
         f"- Target resolution: `{target_resolution}`",
         f"- Expected result fields 44/54 changed: `{result_fields_changed}`",
+        f"- Allowed calculated result fields: `{sorted(allowed_calculated_result_fields)}`",
         f"- Non-target records text-unchanged: `{non_target_records_text_unchanged}`",
         f"- Non-target records semantically unchanged: `{non_target_records_semantically_unchanged}`",
         f"- RX3 recalculation proven: `{recalculation_proven}`",

@@ -15,6 +15,7 @@ from .rx3.gui_validation import (
 from .rx3.experiment import (
     load_bending_report_references,
     prepare_rx3_bending_phase_a,
+    prepare_rx3_bending_mx10_validation,
     prepare_rx3_experiment_phase_a,
 )
 from .rx3.parser import Rx38Construction, construction_records, read_rx38
@@ -196,6 +197,37 @@ def cmd_prepare_rx3_bending_phase_a(args: argparse.Namespace) -> None:
     )
 
 
+def cmd_prepare_rx3_bending_mx10(args: argparse.Namespace) -> None:
+    bundle = prepare_rx3_bending_mx10_validation(
+        args.phase_a_dir,
+        args.observation,
+        args.output_dir,
+        experiment_id=args.experiment_id,
+    )
+    print(
+        json.dumps(
+            {
+                "directory": str(bundle.directory),
+                "template": str(bundle.template),
+                "generated": str(bundle.generated),
+                "generated_sha256": bundle.generated_sha256,
+                "project_element": str(bundle.project_element),
+                "template_profile": str(bundle.template_profile),
+                "heating_evidence": str(bundle.heating_evidence),
+                "precalc_diff_json": str(bundle.diff_json),
+                "precalc_diff_markdown": str(bundle.diff_markdown),
+                "expected_gui": str(bundle.expected_gui),
+                "checklist": str(bundle.checklist),
+                "instructions": str(bundle.instructions),
+                "audit": str(bundle.audit),
+                "status": "WAITING_FOR_MX10_PRECALC_GUI_VERIFICATION",
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+    )
+
+
 def cmd_validate_rx3_result(args: argparse.Namespace) -> None:
     report = validate_rx3_result_files(
         args.before,
@@ -337,6 +369,20 @@ def main() -> None:
     )
     command.add_argument("--experiment-id", default="RX3-EXP-02")
     command.set_defaults(func=cmd_prepare_rx3_bending_phase_a)
+
+    command = subparsers.add_parser(
+        "prepare-rx3-bending-mx10",
+        help="Prepare the fingerprint-bound RX3-EXP-02B Mx=10 pre-calc bundle",
+    )
+    command.add_argument("--phase-a-dir", type=Path, required=True)
+    command.add_argument("--observation", type=Path, required=True)
+    command.add_argument(
+        "--output-dir",
+        type=Path,
+        default=Path("validation/RX3-EXP-02B_MX10"),
+    )
+    command.add_argument("--experiment-id", default="RX3-EXP-02B")
+    command.set_defaults(func=cmd_prepare_rx3_bending_mx10)
 
     command = subparsers.add_parser(
         "validate-rx3-result",

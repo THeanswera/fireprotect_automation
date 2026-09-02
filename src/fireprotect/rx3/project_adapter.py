@@ -359,7 +359,7 @@ def _prepare_rx38_record(
     ).value
     if abs(template_mx) > mx_tolerance:
         raise TemplateProfileError(
-            "AXIAL_ONLY template conflicts with non-zero probable RX38 field 50; "
+            "AXIAL_ONLY template conflicts with non-zero RX38 field 50; "
             "the value cannot be cleared through the safe typed API"
         )
 
@@ -426,7 +426,7 @@ def _prepare_rx38_record(
 
     warnings: list[str] = list(action_warnings) + list(steel_report.warnings)
     warnings.append(
-        "Mx/My/Qx/Qy mappings remain unconfirmed; only a verified AXIAL_ONLY profile with zero actions may proceed"
+        "Mx production writing and My/Qx/Qy mappings remain unverified; only a verified AXIAL_ONLY profile with zero actions may proceed"
     )
     if element.heating_sides is not None and not heating_verified:
         warnings.append(

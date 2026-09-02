@@ -206,8 +206,14 @@ def test_prepare_bundle_and_classify_manual_rx3_changes(tmp_path: Path):
     )
 
     record = report.data["records"][0]
-    assert {item["index"] for item in record["confirmed_changes"]} == {44, 54}
-    assert {item["index"] for item in record["probable_changes"]} == {50}
+    assert {item["index"] for item in record["confirmed_changes"]} == {44, 50, 54}
+    field50 = next(
+        item for item in record["confirmed_changes"] if item["index"] == 50
+    )
+    assert field50["semantic_changed"] is True
+    assert field50["classification"] == "SEMANTIC_NUMERIC_CHANGE"
+    assert 50 in report.data["unsafe_production_change_indices"]
+    assert record["probable_changes"] == []
     assert {item["index"] for item in record["unknown_changes"]} == {2}
     assert report.json_path.exists() and report.markdown_path.exists()
     assert record["rx3_result"]["critical_temperature"] == {
