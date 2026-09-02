@@ -40,8 +40,9 @@
 - Осевой field49 двунаправленно повторён; больше чистых N-возмущений не
   планируется. Mx X-X закрыт в узком RX3-EXP-02B scope; field92/Q закрыт в
   узком RX3-EXP-03 GUI scope. RX3-EXP-04 Phase A screenshot прошёл внешнюю
-  проверку; RX3-EXP-04B подготовил field79-only `4,3414 → 5,00` и ждёт
-  pre-calc screenshot. Field79 остаётся `UNKNOWN/FORBIDDEN` до GUI causality.
+  проверку; RX3-EXP-04B field79-only `4,3414 → 5,00` прошёл manual Calculate,
+  Save и target-aware validator. Field79 eligible только для отдельного scoped
+  promotion review и пока остаётся `UNKNOWN/FORBIDDEN`.
 - Изменить только тип закрепления и коэффициент расчётной длины.
 - Переключить расчёт на прочность/устойчивость и упругие/пластические характеристики.
 - Переключить число/стороны обогрева.
@@ -65,5 +66,5 @@ field77 и field79 остаются `unknown`. Field92 scoped-confirmed, но о
 
 Полная последовательность и идентификаторы опытов зафиксированы в
 `docs/RX3_CONTROLLED_EXPERIMENTS.md`. Осевой, Mx X-X и GUI Q MVP-пути
-подтверждены только в узких опытных областях. Следующий checkpoint — открыть
-RX3-EXP-04B `generated_MY5.rx38` и вернуть один Кс1 screenshot до Calculate.
+подтверждены только в узких опытных областях. RX3-EXP-04B validation завершён;
+следующее действие требует отдельного reviewer approval на scoped field79 entry.

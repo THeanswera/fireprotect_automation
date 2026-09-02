@@ -211,8 +211,19 @@ profile/stress state, field79 baseline `4,3414`, heating and R60. It creates
 `generated_MY5.rx38` with the sole raw-token change field79 `4,3414 → 5,00`.
 All other target fields and every non-target Tconstr must remain token-identical.
 
-Field79 remains `UNKNOWN` with `FORBIDDEN` generic write policy. DRAFT,
-PRODUCTION, the ordinary typed writer, schema promotion and post-calc preparation
-remain blocked. The only next checkpoint is to open `generated_MY5.rx38`, select
-Кс1, open the calculation dialog and return one complete screenshot without
-Calculate, Save to table or Save As.
+During pre-calc preparation field79 remained `UNKNOWN` with `FORBIDDEN` generic
+write policy. DRAFT, PRODUCTION, the ordinary typed writer and automatic schema
+promotion stayed blocked; the program did not start RX3 or perform Calculate/Save.
+
+The manual checkpoint and calculation/save sequence subsequently passed external
+review. `validate-rx3-my5` binds the observation to the exact source/generated
+hashes, original/generated target fingerprints, Кс1 at position 7, GUI identity,
+three-side heating, R60, Calculate, Save to table and Save As evidence.
+
+Generated-to-calculated changes were fields `44, 52, 54, 76, 78, 79` only.
+Field79 normalized `5,00 → 5` without numeric change; field78 persisted the
+GUI-rounded Mx `0,507 → 0,51`; field50 remained zero; field92/Q remained zero;
+all six non-target Tconstr records were token-identical. This evidence is eligible
+for a separate scoped field79 promotion review for Кс1 / 20П biaxial GUI My only.
+The validator performs no automatic promotion, production-write change,
+IssueReadiness change, LIRA mapping, or broader X/Y/sign inference.

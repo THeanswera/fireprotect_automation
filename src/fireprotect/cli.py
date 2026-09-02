@@ -21,6 +21,7 @@ from .rx3.experiment import (
     prepare_rx3_my5_validation,
     prepare_rx3_my_biaxial_phase_a,
     validate_rx3_bending_q3_result,
+    validate_rx3_my5_result,
 )
 from .rx3.parser import Rx38Construction, construction_records, read_rx38
 from .rx3.profiles import ProfileRepository, list_tables
@@ -352,6 +353,28 @@ def cmd_prepare_rx3_my5(args: argparse.Namespace) -> None:
     )
 
 
+def cmd_validate_rx3_my5(args: argparse.Namespace) -> None:
+    report = validate_rx3_my5_result(
+        args.bundle_dir,
+        args.calculated,
+        args.observation,
+        json_report=args.json_report,
+        markdown_report=args.markdown_report,
+    )
+    print(
+        json.dumps(
+            {
+                "json_report": str(report.json_path),
+                "markdown_report": str(report.markdown_path),
+                "status": report.data["status"],
+                "schema_mapping_promoted": report.data["schema_mapping_promoted"],
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+    )
+
+
 def cmd_validate_rx3_result(args: argparse.Namespace) -> None:
     report = validate_rx3_result_files(
         args.before,
@@ -574,6 +597,17 @@ def main() -> None:
         default=ExecutionMode.VALIDATION.value,
     )
     command.set_defaults(func=cmd_prepare_rx3_my5)
+
+    command = subparsers.add_parser(
+        "validate-rx3-my5",
+        help="Validate manual RX3-EXP-04B calculation and persisted My behavior",
+    )
+    command.add_argument("--bundle-dir", type=Path, required=True)
+    command.add_argument("--calculated", type=Path, required=True)
+    command.add_argument("--observation", type=Path, required=True)
+    command.add_argument("--json-report", type=Path)
+    command.add_argument("--markdown-report", type=Path)
+    command.set_defaults(func=cmd_validate_rx3_my5)
 
     command = subparsers.add_parser(
         "validate-rx3-result",

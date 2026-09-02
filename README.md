@@ -199,6 +199,21 @@ only field79 `4,3414 → 5,00`. Field79 remains `UNKNOWN/FORBIDDEN`; DRAFT,
 PRODUCTION and the ordinary typed writer remain blocked. The generated file is
 for the pre-calc screenshot checkpoint only—no Calculate or Save action.
 
+After the manual Calculate / Save sequence, the exact result is checked with:
+
+```powershell
+python -m fireprotect.cli validate-rx3-my5 `
+  --bundle-dir validation/RX3-EXP-04B_MY5 `
+  --calculated validation/RX3-EXP-04B_MY5/calculated_MY5.rx38 `
+  --observation validation/RX3-EXP-04B_MY5/POSTCALC_OBSERVATION.json
+```
+
+RX3-EXP-04B passed this validator: field79 persisted numerically as `5.00`
+with token normalization `5,00 → 5`, field78 persisted GUI-rounded Mx=`0.51`,
+field92 remained zero, and all six non-target records were token-identical.
+This makes field79 eligible for a separate scoped promotion review only; the
+validator does not modify the schema or production writer.
+
 Post-calc validation always requires an explicit target. Prefer the exact
 BEFORE-record fingerprint or a 1-based `Tconstr` position; `--target-mark` is
 accepted only when the mark resolves uniquely. Required result changes are

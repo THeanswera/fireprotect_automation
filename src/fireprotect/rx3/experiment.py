@@ -40,6 +40,12 @@ RX3_EXP_04_TARGET_FINGERPRINT = (
 )
 RX3_EXP_04_TARGET_POSITION = 7
 RX3_EXP_04_TARGET_MARK = "Кс1"
+RX3_EXP_04B_GENERATED_SHA256 = (
+    "cc22d92d5fc041e8328029d241dc8280bb64e9245275b24f5fbecb2476c2cb09"
+)
+RX3_EXP_04B_GENERATED_FINGERPRINT = (
+    "d18fd0294d67b3e7da0ea59b1e414b8414e7e8696235be2ae891a87881b334db"
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -214,6 +220,13 @@ class Rx3MyBiaxialValidationBundle:
     instructions: Path
     audit: Path
     generated_sha256: str
+
+
+@dataclass(frozen=True, slots=True)
+class Rx3MyBiaxialResultReport:
+    data: dict[str, Any]
+    json_path: Path
+    markdown_path: Path
 
 
 def _decimal(value: str) -> Decimal | None:
@@ -2722,14 +2735,20 @@ def validate_rx3_bending_q3_result(
         )
     non_target_changes: list[dict[str, Any]] = []
     for position, (before, after) in enumerate(zip(before_records, after_records), 1):
-        changes = diff_records(before, after)
-        if position != target_position and changes:
+        raw_changed_indices = [
+            index
+            for index, (old_token, new_token) in enumerate(
+                zip(before.raw_tokens, after.raw_tokens)
+            )
+            if old_token != new_token
+        ]
+        if position != target_position and raw_changed_indices:
             non_target_changes.append(
                 {
                     "position": position,
                     "before_mark": before.mark,
                     "after_mark": after.mark,
-                    "changed_indices": [item.index for item in changes],
+                    "changed_indices": raw_changed_indices,
                 }
             )
     if non_target_changes:
@@ -3919,3 +3938,373 @@ def prepare_rx3_my5_validation(
         audit_path,
         generated_sha,
     )
+
+
+def validate_rx3_my5_result(
+    bundle_directory: str | Path,
+    calculated_rx38: str | Path,
+    observation_path: str | Path,
+    *,
+    json_report: str | Path | None = None,
+    markdown_report: str | Path | None = None,
+) -> Rx3MyBiaxialResultReport:
+    """Validate the exact manual RX3-EXP-04B calculate/save result fail-closed."""
+
+    directory = Path(bundle_directory).resolve(strict=True)
+    generated = (directory / "generated_MY5.rx38").resolve(strict=True)
+    calculated = Path(calculated_rx38).resolve(strict=True)
+    observation_file = Path(observation_path).resolve(strict=True)
+    audit = _read_json_mapping(directory / "audit.json", "RX3-EXP-04B audit")
+    observation = _read_json_mapping(
+        observation_file, "RX3-EXP-04B GUI observation"
+    )
+    if (
+        audit.get("experiment_id") != "RX3-EXP-04B"
+        or audit.get("execution_mode") != ExecutionMode.VALIDATION.value
+        or audit.get("status") != "WAITING_FOR_MY5_PRECALC_GUI_VERIFICATION"
+        or audit.get("calculation_started") is not False
+    ):
+        raise Rx3ExperimentPreparationError(
+            "Bundle is not the pending RX3-EXP-04B pre-calc bundle"
+        )
+    audit_template = _require_mapping(audit.get("template"), "audit.template")
+    audit_generated = _require_mapping(audit.get("generated"), "audit.generated")
+    source_sha = _require_observation_text(
+        audit_template.get("sha256"), "audit template SHA-256"
+    )
+    original_fingerprint = _require_observation_text(
+        audit_template.get("record_sha256"), "audit original target fingerprint"
+    )
+    generated_sha = _require_file_sha(
+        generated,
+        audit_generated.get("sha256"),
+        "RX3-EXP-04B generated SHA-256",
+    )
+    generated_fingerprint = _require_observation_text(
+        audit_generated.get("record_sha256"), "audit generated target fingerprint"
+    )
+    target_position = audit_template.get("position_1_based")
+    if (
+        source_sha != RX3_EXP_04_SOURCE_SHA256
+        or generated_sha != RX3_EXP_04B_GENERATED_SHA256
+        or original_fingerprint != RX3_EXP_04_TARGET_FINGERPRINT
+        or generated_fingerprint != RX3_EXP_04B_GENERATED_FINGERPRINT
+        or target_position != RX3_EXP_04_TARGET_POSITION
+    ):
+        raise Rx3ExperimentPreparationError(
+            "RX3-EXP-04B bundle SHA/fingerprint/position binding mismatch"
+        )
+    if calculated.name != "calculated_MY5.rx38":
+        raise Rx3ExperimentPreparationError(
+            "Post-calc file must be named calculated_MY5.rx38"
+        )
+    if (
+        observation.get("experiment_id") != "RX3-EXP-04B"
+        or observation.get("protocol") != "CONTROLLED_MY_PERTURBATION_PRECALC"
+        or observation.get("result") != "PASS"
+        or observation.get("source_sha256") != source_sha
+        or observation.get("generated_sha256") != generated_sha
+        or observation.get("original_target_fingerprint") != original_fingerprint
+        or observation.get("target_generated_fingerprint")
+        != generated_fingerprint
+        or observation.get("target_position_1_based") != target_position
+    ):
+        raise Rx3ExperimentPreparationError(
+            "GUI observation is not bound to this exact RX3-EXP-04B bundle"
+        )
+    if observation.get("evidence_reference") != (
+        "RX3-EXP-04B GUI screenshots reviewed 2026-09-02"
+    ):
+        raise Rx3ExperimentPreparationError(
+            "RX3-EXP-04B GUI evidence reference mismatch"
+        )
+
+    selection = _require_mapping(observation.get("selection"), "observation.selection")
+    actions = _require_mapping(observation.get("actions"), "observation.actions")
+    calculation = _require_mapping(
+        observation.get("calculation"), "observation.calculation"
+    )
+    persistence = _require_mapping(
+        observation.get("persistence"), "observation.persistence"
+    )
+    active_sides = selection.get("active_sides")
+    if (
+        selection.get("mark") != "Кс1"
+        or selection.get("profile") != "20П"
+        or selection.get("profile_standard") != "ГОСТ 8240-97"
+        or _normal_text(str(selection.get("steel", ""))) != _normal_text("С245")
+        or _decimal(str(selection.get("length_m", ""))) != Decimal("3.87")
+        or not _biaxial_bending_label(str(selection.get("stress_state", "")))
+        or _normal_axis(str(selection.get("axis", ""))) != "ОТН. X-X"
+        or selection.get("plastic_region_enabled") is not True
+        or selection.get("en_classification_enabled") is not False
+        or selection.get("heating_sides") != 3
+        or not isinstance(active_sides, list)
+        or set(active_sides) != {"LEFT", "RIGHT", "BOTTOM"}
+        or selection.get("inactive_sides") != ["TOP"]
+        or _decimal(str(selection.get("required_R_min", ""))) != Decimal("60")
+        or _normal_text(str(selection.get("fire_regime", "")))
+        != _normal_text("Стандартный температурный режим")
+        or _decimal(str(actions.get("Mx_knm", ""))) != Decimal("0.51")
+        or _decimal(str(actions.get("My_knm", ""))) != Decimal("5.00")
+    ):
+        raise Rx3ExperimentPreparationError(
+            "Post-calc GUI observation differs from the exact My5 protocol"
+        )
+    if (
+        calculation.get("pressed") is not True
+        or persistence.get("save_to_table") is not True
+        or persistence.get("save_as") is not True
+        or persistence.get("filename") != "calculated_MY5.rx38"
+    ):
+        raise Rx3ExperimentPreparationError(
+            "Manual Calculate / Save to table / Save As evidence is incomplete"
+        )
+    observed_values = {
+        key: _required_observed_decimal(calculation, key, "calculation")
+        for key in (
+            "governing_gamma_tem",
+            "beta_tem",
+            "beta_related_theta_C",
+            "governing_theta_cr_C",
+            "R0_min",
+        )
+    }
+    exact_gui_values = {
+        "governing_gamma_tem": Decimal("0.518"),
+        "beta_tem": Decimal("0.000"),
+        "beta_related_theta_C": Decimal("1200.00"),
+        "governing_theta_cr_C": Decimal("505.26"),
+        "R0_min": Decimal("7.28"),
+    }
+    if observed_values != exact_gui_values:
+        raise Rx3ExperimentPreparationError(
+            "Post-calc GUI result values differ from reviewed RX3-EXP-04B evidence"
+        )
+
+    before_records = construction_records(read_rx38(generated))
+    after_records = construction_records(read_rx38(calculated))
+    if len(before_records) != len(after_records):
+        raise Rx3ExperimentPreparationError("Post-calc Tconstr count changed")
+    if not isinstance(target_position, int) or isinstance(target_position, bool):
+        raise Rx3ExperimentPreparationError("Audit target position is invalid")
+    if target_position < 1 or target_position > len(before_records):
+        raise Rx3ExperimentPreparationError("Post-calc target position is outside the file")
+    before_target = before_records[target_position - 1]
+    after_target = after_records[target_position - 1]
+    if (
+        before_target.mark != RX3_EXP_04_TARGET_MARK
+        or after_target.mark != RX3_EXP_04_TARGET_MARK
+        or rx38_record_fingerprint(before_target) != generated_fingerprint
+    ):
+        raise Rx3ExperimentPreparationError(
+            "Post-calc target mark/fingerprint/position mismatch"
+        )
+
+    non_target_changes: list[dict[str, Any]] = []
+    for position, (before, after) in enumerate(zip(before_records, after_records), 1):
+        changes = diff_records(before, after)
+        if position != target_position and changes:
+            non_target_changes.append(
+                {
+                    "position": position,
+                    "before_mark": before.mark,
+                    "after_mark": after.mark,
+                    "changed_indices": [item.index for item in changes],
+                }
+            )
+    if non_target_changes:
+        raise Rx3ExperimentPreparationError(
+            f"Unexpected non-target mutation: {non_target_changes}"
+        )
+
+    expected_changed_indices = {44, 52, 54, 76, 78, 79}
+    actual_changed_indices = {
+        index
+        for index, (old_token, new_token) in enumerate(
+            zip(before_target.raw_tokens, after_target.raw_tokens)
+        )
+        if old_token != new_token
+    }
+    unexpected_target_indices = sorted(
+        actual_changed_indices - expected_changed_indices
+    )
+    if unexpected_target_indices:
+        raise Rx3ExperimentPreparationError(
+            "Unexpected target engineering-input mutation: "
+            f"{unexpected_target_indices}"
+        )
+    missing_result_indices = sorted(expected_changed_indices - actual_changed_indices)
+    if missing_result_indices:
+        raise Rx3ExperimentPreparationError(
+            f"Expected RX3-EXP-04B calculated changes are missing: {missing_result_indices}"
+        )
+
+    if (
+        _decimal(after_target.fields[79]) != Decimal("5.00")
+        or _decimal(after_target.fields[78]) != Decimal("0.51")
+        or _decimal(after_target.fields[50]) != Decimal("0")
+        or _decimal(after_target.fields[92]) != Decimal("0")
+        or before_target.raw_tokens[122] != after_target.raw_tokens[122]
+    ):
+        raise Rx3ExperimentPreparationError(
+            "Post-calc persisted My/Mx/Q values violate the My5 protocol"
+        )
+    persisted_theta = _decimal(after_target.fields[44])
+    persisted_gamma = _decimal(after_target.fields[52])
+    persisted_beta = _decimal(after_target.fields[53])
+    persisted_r0 = _decimal(after_target.fields[54])
+    persisted_stress = _decimal(after_target.fields[76])
+    if (
+        persisted_theta is None
+        or abs(persisted_theta - observed_values["governing_theta_cr_C"])
+        > Decimal("0.005")
+        or persisted_gamma is None
+        or abs(persisted_gamma - observed_values["governing_gamma_tem"])
+        > Decimal("0.0005")
+        or persisted_beta != observed_values["beta_tem"]
+        or persisted_r0 is None
+        or abs(persisted_r0 - observed_values["R0_min"]) > Decimal("0.005")
+        or persisted_stress is None
+    ):
+        raise Rx3ExperimentPreparationError(
+            "Persisted calculated fields do not match the reviewed GUI evidence"
+        )
+
+    inspected_indices = (44, 50, 52, 53, 54, 76, 78, 79, 92, 122)
+    observations = {
+        str(index): _numeric_field_observation(before_target, after_target, index)
+        for index in inspected_indices
+    }
+    for index in (44, 52, 54, 76):
+        observations[str(index)]["classification"] = "CALCULATED_RESULT_CHANGE"
+    observations["78"]["classification"] = "RX3_PERSISTED_GUI_DISPLAY_ROUNDING"
+    if observations["79"]["semantic_changed"] is not False:
+        raise Rx3ExperimentPreparationError(
+            "Field79 did not persist as Decimal-equivalent My=5.00"
+        )
+    observations["79"]["classification"] = "RX3_TOKEN_NORMALIZATION"
+
+    calculated_sha = _sha256(calculated)
+    payload: dict[str, Any] = {
+        "experiment_id": "RX3-EXP-04B",
+        "status": "RX3_EXP_04B_ANALYSED",
+        "execution_mode": ExecutionMode.VALIDATION.value,
+        "source_sha256": source_sha,
+        "source_target_fingerprint": original_fingerprint,
+        "generated": {"path": str(generated), "sha256": generated_sha},
+        "calculated": {"path": str(calculated), "sha256": calculated_sha},
+        "target": {
+            "position_1_based": target_position,
+            "mark": RX3_EXP_04_TARGET_MARK,
+            "generated_fingerprint": generated_fingerprint,
+            "calculated_fingerprint": rx38_record_fingerprint(after_target),
+        },
+        "gui_observation": {
+            "path": str(observation_file),
+            "sha256": _sha256(observation_file),
+            "evidence_reference": observation["evidence_reference"],
+            "values": {key: str(value) for key, value in observed_values.items()},
+        },
+        "changed_target_indices": sorted(actual_changed_indices),
+        "field_observations": observations,
+        "field79_persistence": {
+            **observations["79"],
+            "persisted_numeric_matches_MY5": True,
+        },
+        "Mx_persistence": {
+            "gui_Mx_knm": "0.51",
+            "field50_numeric": observations["50"]["new_numeric"],
+            "field50_unchanged": observations["50"]["text_changed"] is False,
+            "field78_numeric": observations["78"]["new_numeric"],
+            "field78_matches_gui_Mx": True,
+            "field122_unchanged": observations["122"]["text_changed"] is False,
+        },
+        "Q_persistence": {
+            "gui_Q_kn": "0",
+            "field92_numeric": observations["92"]["new_numeric"],
+            "field92_unchanged": observations["92"]["text_changed"] is False,
+        },
+        "non_target_record_count": len(before_records) - 1,
+        "non_target_records_token_identical": True,
+        "unexpected_target_indices": [],
+        "field79_evidence_decision": (
+            "ELIGIBLE_FOR_SCOPED_MANUAL_PROMOTION_REVIEW; no automatic schema promotion"
+        ),
+        "recommended_schema": {
+            "index": 79,
+            "name": "rx3_gui_minor_axis_moment_input_knm",
+            "purpose": (
+                "RX3 GUI My bending-moment input for the verified biaxial "
+                "Кс1 / 20П family"
+            ),
+            "data_type": "decimal",
+            "units": "kN·m",
+            "direction": "input",
+            "required": "conditional",
+            "confidence": "confirmed",
+            "evidence_type": "CONTROLLED_SINGLE_VARIABLE_GUI_CAUSALITY",
+            "controlled_experiment_ids": ["RX3-EXP-04", "RX3-EXP-04B"],
+            "write_policy": "EXPERIMENTAL",
+            "reviewer_note": (
+                "Scoped only to RX3 GUI My input for Кс1 / 20П biaxial bending. "
+                "Excludes LIRA My mapping, LIRA local-axis mapping, sign convention, "
+                "arbitrary X/Y correspondence, other profiles or stress states, "
+                "general combined-stress semantics, and production compatibility."
+            ),
+        },
+        "schema_mapping_promoted": False,
+        "production_write_allowed": False,
+        "issue_readiness_changed": False,
+    }
+    json_path = (
+        Path(json_report).resolve(strict=False)
+        if json_report is not None
+        else directory / "rx3_exp_04b_validation_report.json"
+    )
+    markdown_path = (
+        Path(markdown_report).resolve(strict=False)
+        if markdown_report is not None
+        else directory / "rx3_exp_04b_validation_report.md"
+    )
+    protected = {generated, calculated, observation_file}
+    if json_path in protected or markdown_path in protected or json_path == markdown_path:
+        raise Rx3ExperimentPreparationError(
+            "Post-calc reports must be distinct from each other and all inputs"
+        )
+    changed_rows = [
+        (
+            f"| {index} | `{observations[str(index)]['old_token']}` | "
+            f"`{observations[str(index)]['new_token']}` | "
+            f"`{observations[str(index)]['old_numeric']}` | "
+            f"`{observations[str(index)]['new_numeric']}` | "
+            f"{observations[str(index)]['text_changed']} | "
+            f"{observations[str(index)]['semantic_changed']} | "
+            f"{observations[str(index)]['classification']} |"
+        )
+        for index in inspected_indices
+    ]
+    markdown = "\n".join(
+        [
+            "# RX3-EXP-04B post-calc validation",
+            "",
+            "Status: `RX3_EXP_04B_ANALYSED`.",
+            "",
+            f"- Calculated SHA-256: `{calculated_sha}`",
+            f"- Target: `Кс1`, Tconstr position `{target_position}`",
+            f"- Changed target indices: `{sorted(actual_changed_indices)}`",
+            "- All six non-target Tconstr records are token-identical.",
+            "- Field79 persisted as Decimal 5.00; raw token normalized `5,00 → 5`.",
+            "- Field78 persisted GUI-rounded Mx `0,507 → 0,51`; field50 stayed zero.",
+            "- Field92/Q stayed semantically zero.",
+            "- No schema promotion or production-write change was performed.",
+            "",
+            "| Field | Raw before | Raw after | Numeric before | Numeric after | Text changed | Semantic changed | Classification |",
+            "|---:|---|---|---:|---:|---|---|---|",
+            *changed_rows,
+            "",
+        ]
+    )
+    _write_new(json_path, json.dumps(payload, ensure_ascii=False, indent=2) + "\n")
+    _write_new(markdown_path, markdown)
+    return Rx3MyBiaxialResultReport(payload, json_path, markdown_path)

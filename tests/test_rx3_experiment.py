@@ -21,6 +21,7 @@ from fireprotect.rx3.experiment import (
     rank_rx3_bending_template_candidates,
     rank_rx3_template_candidates,
     validate_rx3_bending_q3_result,
+    validate_rx3_my5_result,
 )
 from fireprotect.rx3.diff import diff_records
 from fireprotect.rx3.parser import (
@@ -94,6 +95,7 @@ def _my_phase_a_and_observation(
     target[14] = "3,87"
     target[17] = "ГОСТ 8240-97"
     target[42] = "С245"
+    target[53] = "0"
     target[55] = "60"
     target[61] = "отн. X-X"
     target[104] = "Стандартный температурный режим"
@@ -167,6 +169,96 @@ def _my_phase_a_and_observation(
         phase_a.target_fingerprint,
     )
     return phase_a, observation
+
+
+def _my5_postcalc_fixture(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> tuple[object, Path, Path]:
+    phase_a, phase_a_observation = _my_phase_a_and_observation(
+        tmp_path, monkeypatch
+    )
+    bundle = prepare_rx3_my5_validation(
+        phase_a.directory,
+        phase_a_observation,
+        tmp_path / "my5",
+    )
+    generated_records = [
+        list(record.fields)
+        for record in construction_records(read_rx38(bundle.generated))
+    ]
+    generated_records[6][44] = "505,26276072886"
+    generated_records[6][52] = "0,517895650323622"
+    generated_records[6][54] = "7,28333333333333"
+    generated_records[6][76] = "126,884434329287"
+    generated_records[6][78] = "0,51"
+    generated_records[6][79] = "5"
+    calculated = bundle.directory / "calculated_MY5.rx38"
+    _rx38(calculated, generated_records)
+    monkeypatch.setattr(
+        rx3_experiment, "RX3_EXP_04B_GENERATED_SHA256", bundle.generated_sha256
+    )
+    generated_target = construction_records(read_rx38(bundle.generated))[6]
+    monkeypatch.setattr(
+        rx3_experiment,
+        "RX3_EXP_04B_GENERATED_FINGERPRINT",
+        rx38_record_fingerprint(generated_target),
+    )
+    observation = bundle.directory / "POSTCALC_OBSERVATION.json"
+    observation.write_text(
+        json.dumps(
+            {
+                "experiment_id": "RX3-EXP-04B",
+                "protocol": "CONTROLLED_MY_PERTURBATION_PRECALC",
+                "result": "PASS",
+                "source_sha256": phase_a.source_sha256,
+                "generated_sha256": bundle.generated_sha256,
+                "original_target_fingerprint": phase_a.target_fingerprint,
+                "target_generated_fingerprint": rx38_record_fingerprint(
+                    generated_target
+                ),
+                "target_position_1_based": 7,
+                "selection": {
+                    "mark": "Кс1",
+                    "profile": "20П",
+                    "profile_standard": "ГОСТ 8240-97",
+                    "steel": "C245",
+                    "length_m": "3.87",
+                    "stress_state": (
+                        "Изгибаемый стержень в двух главных плоскостях"
+                    ),
+                    "axis": "отн. X-X",
+                    "plastic_region_enabled": True,
+                    "en_classification_enabled": False,
+                    "heating_sides": 3,
+                    "active_sides": ["LEFT", "RIGHT", "BOTTOM"],
+                    "inactive_sides": ["TOP"],
+                    "required_R_min": "60",
+                    "fire_regime": "Стандартный температурный режим",
+                },
+                "actions": {"Mx_knm": "0.51", "My_knm": "5.00"},
+                "calculation": {
+                    "pressed": True,
+                    "governing_gamma_tem": "0.518",
+                    "beta_tem": "0.000",
+                    "beta_related_theta_C": "1200.00",
+                    "governing_theta_cr_C": "505.26",
+                    "R0_min": "7.28",
+                },
+                "persistence": {
+                    "save_to_table": True,
+                    "save_as": True,
+                    "filename": "calculated_MY5.rx38",
+                },
+                "evidence_reference": (
+                    "RX3-EXP-04B GUI screenshots reviewed 2026-09-02"
+                ),
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    return bundle, calculated, observation
 
 
 def _bending_references(path: Path, source: Path, *, second_q: str = "20") -> None:
@@ -834,7 +926,7 @@ def test_bending_q3_postcalc_validator_fails_on_non_target_mutation(
         list(record.raw_tokens)
         for record in construction_records(read_rx38(bundle.generated))
     ]
-    records[0][44] = "999"
+    records[0][44] = "503,40"
     calculated = bundle.directory / "calculated_Q3.rx38"
     _rx38(calculated, records)
     observation = _complete_q3_observation(bundle.directory)
@@ -1097,3 +1189,135 @@ def test_my5_validation_does_not_promote_or_open_generic_field79_writer(
     record = construction_records(read_rx38(phase_a.template))[6]
     with pytest.raises(UnsafeRx38WriteError, match="not confirmed"):
         record.with_typed_field(79, "5,00", compatibility_verified=True)
+
+
+def test_my5_postcalc_validator_binds_target_and_classifies_persistence(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    bundle, calculated, observation = _my5_postcalc_fixture(tmp_path, monkeypatch)
+
+    report = validate_rx3_my5_result(bundle.directory, calculated, observation)
+
+    assert report.data["status"] == "RX3_EXP_04B_ANALYSED"
+    assert report.data["changed_target_indices"] == [44, 52, 54, 76, 78, 79]
+    field79 = report.data["field79_persistence"]
+    assert field79["old_token"] == "5,00"
+    assert field79["new_token"] == "5"
+    assert field79["old_numeric"] == "5.00"
+    assert field79["new_numeric"] == "5"
+    assert field79["text_changed"] is True
+    assert field79["semantic_changed"] is False
+    assert field79["classification"] == "RX3_TOKEN_NORMALIZATION"
+    assert field79["persisted_numeric_matches_MY5"] is True
+    assert report.data["Mx_persistence"] == {
+        "gui_Mx_knm": "0.51",
+        "field50_numeric": "0",
+        "field50_unchanged": True,
+        "field78_numeric": "0.51",
+        "field78_matches_gui_Mx": True,
+        "field122_unchanged": True,
+    }
+    assert report.data["field_observations"]["78"]["semantic_changed"] is True
+    assert report.data["field_observations"]["78"]["classification"] == (
+        "RX3_PERSISTED_GUI_DISPLAY_ROUNDING"
+    )
+    assert report.data["Q_persistence"] == {
+        "gui_Q_kn": "0",
+        "field92_numeric": "0",
+        "field92_unchanged": True,
+    }
+    assert report.data["non_target_record_count"] == 6
+    assert report.data["non_target_records_token_identical"] is True
+    assert report.data["schema_mapping_promoted"] is False
+    assert report.data["production_write_allowed"] is False
+    assert field_spec(79).confidence == "unknown"
+    assert field_spec(79).write_policy is WritePolicy.FORBIDDEN
+
+
+def test_my5_postcalc_validator_fails_on_non_target_mutation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    bundle, calculated, observation = _my5_postcalc_fixture(tmp_path, monkeypatch)
+    records = [
+        list(record.fields)
+        for record in construction_records(read_rx38(calculated))
+    ]
+    records[0][44] = "999"
+    _rx38(calculated, records)
+
+    with pytest.raises(Rx3ExperimentPreparationError, match="non-target mutation"):
+        validate_rx3_my5_result(bundle.directory, calculated, observation)
+
+
+def test_my5_postcalc_validator_fails_on_engineering_input_mutation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    bundle, calculated, observation = _my5_postcalc_fixture(tmp_path, monkeypatch)
+    records = [
+        list(record.fields)
+        for record in construction_records(read_rx38(calculated))
+    ]
+    records[6][92] = "0,0"
+    _rx38(calculated, records)
+
+    with pytest.raises(
+        Rx3ExperimentPreparationError, match="engineering-input mutation"
+    ):
+        validate_rx3_my5_result(bundle.directory, calculated, observation)
+
+
+@pytest.mark.parametrize(
+    "field",
+    ("generated_sha256", "target_generated_fingerprint"),
+)
+def test_my5_postcalc_validator_refuses_wrong_observation_binding(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    field: str,
+) -> None:
+    bundle, calculated, observation = _my5_postcalc_fixture(tmp_path, monkeypatch)
+    payload = json.loads(observation.read_text(encoding="utf-8"))
+    payload[field] = "0" * 64
+    observation.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(Rx3ExperimentPreparationError, match="not bound"):
+        validate_rx3_my5_result(bundle.directory, calculated, observation)
+
+
+@pytest.mark.parametrize(
+    ("section", "field"),
+    (("calculation", "pressed"), ("persistence", "save_to_table"),
+     ("persistence", "save_as")),
+)
+def test_my5_postcalc_validator_refuses_missing_calculate_or_save_evidence(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    section: str,
+    field: str,
+) -> None:
+    bundle, calculated, observation = _my5_postcalc_fixture(tmp_path, monkeypatch)
+    payload = json.loads(observation.read_text(encoding="utf-8"))
+    payload[section][field] = False
+    observation.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(Rx3ExperimentPreparationError, match="evidence is incomplete"):
+        validate_rx3_my5_result(bundle.directory, calculated, observation)
+
+
+def test_my5_postcalc_validator_leaves_production_field79_write_blocked(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    bundle, calculated, observation = _my5_postcalc_fixture(tmp_path, monkeypatch)
+    before_spec = field_spec(79)
+
+    report = validate_rx3_my5_result(bundle.directory, calculated, observation)
+
+    assert report.data["schema_mapping_promoted"] is False
+    assert field_spec(79) == before_spec
+    target = construction_records(read_rx38(calculated))[6]
+    with pytest.raises(UnsafeRx38WriteError, match="not confirmed"):
+        target.with_typed_field(79, "6", compatibility_verified=True)

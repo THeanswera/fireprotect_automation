@@ -76,10 +76,11 @@
   input только для Б1 / 14Б2 / one-plane X-X. GUI Q `2,32 → 3,00`, Q
   utilisation `0,028 → 0,037`; persisted field92=`3`, field50/78 и все
   non-target records неизменны. Write policy остаётся `EXPERIMENTAL`.
-- **PRE-CALC / WAITING FOR MY5 GUI SCREENSHOT:** RX3-EXP-04 Phase A GUI
-  подтвердил exact Кс1 / 20П, Mx=0,51, My=4,34, три стороны обогрева и R60.
-  RX3-EXP-04B изменил только field79 `4,3414 → 5,00`; все прочие target fields
-  и non-target records token-identical. Field79 остаётся `UNKNOWN/FORBIDDEN`.
+- **VALIDATED / AWAITING SCOPED PROMOTION REVIEW:** RX3-EXP-04B подтвердил
+  цепочку field79 `4,3414 → 5,00` → GUI My=`5,00` → manual Calculate/Save →
+  persisted field79=`5`. Mx persisted через field78=`0,51`, Q/field92 остался
+  нулевым, все шесть non-target records token-identical. Validator не меняет
+  schema: field79 пока остаётся `UNKNOWN/FORBIDDEN`, production закрыт.
 - **UNKNOWN:** индекс толщины огнезащиты в RX38 не доказан, поэтому
   `fireproofing_thickness` остаётся `null`.
 - **BLOCKED:** production-расширение за пределы верифицированного
