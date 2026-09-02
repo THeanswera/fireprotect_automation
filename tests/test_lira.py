@@ -68,6 +68,8 @@ def test_csv_import_uses_arbitrary_headers_and_converts_to_si(tmp_path: Path) ->
 
     assert len(result) == 1
     assert result[0].source_row == 2
+    assert result[0].source.raw_tokens["N"] == "-125,5"
+    assert result[0].source.source_cells["N"] == "E2"
     assert_converted(result[0])
 
 
@@ -97,6 +99,9 @@ def test_html_import_uses_standard_library_parser(tmp_path: Path) -> None:
 
     assert len(result) == 1
     assert result[0].source_row == 2
+    assert result[0].source.raw_tokens["Mx"] == "12.25"
+    assert result[0].source.source_cells["Mx"] == "F2"
+    assert result[0].source_sheet == "table[0]"
     assert_converted(result[0])
 
 
@@ -153,6 +158,8 @@ def test_xlsx_numeric_cells_are_imported_from_exact_ooxml_tokens(
     )
     assert result[0].source.N == Decimal("-125.5")
     assert result[0].source.Mx == Decimal("12.25")
+    assert result[0].source.raw_tokens["N"] == "-125.5"
+    assert result[0].source.source_cells["N"] == "E2"
 
 
 def test_mapping_is_mandatory_complete_and_units_are_dimension_checked() -> None:
@@ -169,6 +176,12 @@ def test_mapping_is_mandatory_complete_and_units_are_dimension_checked() -> None
             columns=HEADERS,
             units=ForceUnits(N="kN*m", Mx="kN*m", My="N*m", Qx="N", Qy="tf"),
         )
+
+    unicode_moment_mapping = LiraColumnMapping(
+        columns=HEADERS,
+        units=ForceUnits(N="kN", Mx="kN·m", My="N×m", Qx="N", Qy="tf"),
+    )
+    assert unicode_moment_mapping.units.Mx == "kN·m"
 
 
 def test_missing_mapped_header_and_bad_value_include_context(tmp_path: Path) -> None:

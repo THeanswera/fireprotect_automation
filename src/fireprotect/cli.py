@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 
 from .execution import ExecutionMode
+from .lira import prepare_lira_review_bundle
 from .project_io import read_project_element_json
 from .pipeline import run_pipeline, rx3_safety_context_from_dict
 from .rx3.project_adapter import create_rx38_from_project_element
@@ -437,6 +438,19 @@ def cmd_pipeline(args: argparse.Namespace) -> None:
     print(json.dumps(result.as_dict(), ensure_ascii=False, indent=2))
 
 
+def cmd_prepare_lira_review(args: argparse.Namespace) -> None:
+    existing = tuple(
+        read_project_element_json(path) for path in (args.project_element or ())
+    )
+    bundle = prepare_lira_review_bundle(
+        args.input,
+        args.mapping,
+        args.output_dir,
+        existing_elements=existing,
+    )
+    print(json.dumps(bundle.as_dict(), ensure_ascii=False, indent=2))
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(prog="fireprotect")
     subparsers = parser.add_subparsers(required=True)
@@ -681,6 +695,21 @@ def main() -> None:
     )
     command.add_argument("config", type=Path)
     command.set_defaults(func=cmd_pipeline)
+
+    command = subparsers.add_parser(
+        "prepare-lira-review",
+        help="Import a LIRA table into a review-only bundle without writing RX38 forces",
+    )
+    command.add_argument("--input", type=Path, required=True)
+    command.add_argument("--mapping", type=Path, required=True)
+    command.add_argument("--output-dir", type=Path, required=True)
+    command.add_argument(
+        "--project-element",
+        type=Path,
+        action="append",
+        help="Optional existing ProjectElement JSON; repeat for multiple elements",
+    )
+    command.set_defaults(func=cmd_prepare_lira_review)
 
     args = parser.parse_args()
     args.func(args)

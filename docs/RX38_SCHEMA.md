@@ -4,16 +4,16 @@
 
 ## Уровень доказанности
 
-- `confirmed`: 58
+- `confirmed`: 59
 - `probable`: 14
-- `unknown`: 128
+- `unknown`: 127
 
 `probable` не входит в безопасный writable-набор. Semantic confidence теперь
 отделён от write safety. `WritePolicy` имеет значения `SAFE_DIRECT`,
 `SAFE_WITH_COMPATIBILITY_CHECK`, `RESULT_ONLY`, `READ_ONLY`, `EXPERIMENTAL` и
 `FORBIDDEN`. UNKNOWN/PROBABLE запрещены; confirmed output fields 44/54 имеют
 `RESULT_ONLY`; field 0 имеет `READ_ONLY`; остальные расчётные inputs требуют
-явной compatibility-проверки. Подтверждённые fields 50 и 92 остаются
+явной compatibility-проверки. Подтверждённые fields 50, 79 и 92 остаются
 `EXPERIMENTAL`: их узкая семантика не разрешает production-запись. Field 53 переведён из `unknown` в
 `probable` после двух двунаправленных осевых возмущений, трёх GUI-
 совпадений и сверки со встроенной справкой RX3; запись по-прежнему
@@ -106,7 +106,7 @@ note. Наличие CONFIRMED-семантики само по себе не д
 | 76 | normal_stress_mpa | Calculated normal stress | decimal | MPa | calculated | yes for steel Tconstr | RX38 values + RX3 report | probable | Axial states and one X-X bending state match GUI stress/load; broader combined-stress semantics remain unverified. |
 | 77 | unknown_077 | Not established | unknown | — | unknown | unknown | No admissible evidence | unknown | Preserved verbatim; do not write through the typed API. |
 | 78 | persisted_major_axis_moment_copy_knm | RX3-persisted copy of the active major-axis moment | decimal | kN·m | service | conditional | RX3-EXP-02 corpus + RX3-EXP-02B post-calc differential | probable | Synchronized from 8.89 to 10 only after calculate/save; did not control pre-calc GUI Mx; writing is forbidden. |
-| 79 | unknown_079 | Not established | unknown | — | unknown | unknown | No admissible evidence | unknown | Preserved verbatim; do not write through the typed API. |
+| 79 | rx3_gui_minor_axis_moment_input_knm | RX3 GUI My bending-moment input for verified biaxial Кс1 / 20П | decimal | kN·m | input | conditional | RX3-EXP-04/04B controlled GUI and persisted RX38 evidence | confirmed | Only the verified Кс1 / 20П biaxial GUI My path; `EXPERIMENTAL`, no LIRA axis/sign or production-write claim. |
 | 80 | unknown_080 | Not established | unknown | — | unknown | unknown | No admissible evidence | unknown | Preserved verbatim; do not write through the typed API. |
 | 81 | unknown_081 | Not established | unknown | — | unknown | unknown | No admissible evidence | unknown | Preserved verbatim; do not write through the typed API. |
 | 82 | convection_coefficient | Convective heat-transfer coefficient | decimal | W/(m²·K) | input | yes for steel Tconstr | RX38 value + rx3.xml ac + RX3 help | confirmed | — |

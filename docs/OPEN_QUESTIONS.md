@@ -8,11 +8,11 @@
    верифицированного axial-шаблона и field49? Осевой контролируемый
    случай RX3-EXP-01C/01D открылся, рассчитался и сохранился, но это
    не доказывает общую production-совместимость.
-4. Field50 причинно подтверждён только как GUI Mx для one-plane X-X и
-   верифицированного шаблона Б1. Какие индексы и соглашения соответствуют My,
-   Qx/Qy, другим stress states, расчёту устойчивости и промежуточным
-   коэффициентам? Field92 остаётся наблюдательным кандидатом Q до отдельного
-   управляемого возмущения.
+4. Field50 причинно подтверждён только как GUI Mx для one-plane X-X / Б1,
+   field92 — как GUI Q в том же узком семействе, field79 — как GUI My для
+   biaxial Кс1 / 20П. Какие LIRA-компоненты, локальные оси и знаки соответствуют
+   этим scoped RX3 semantics? Field50 не является универсальным Mx; field78
+   остаётся только `PROBABLE` persisted/display copy.
 5. Какая техническая документация и редакция являются источником таблиц
    `Толщина ОЗ` и `Расход ОЗ` в Excel, и относятся ли названия «ОБМ»,
    «Expert» и `DEFENDER M solvent` к одному продукту?
@@ -34,15 +34,13 @@
     `Rx3CalculationProfile`, включая critical-temperature mode?
 11. Какой CONFIRMED индекс RX38 хранит требуемую толщину огнезащиты?
 
-## Нужные контролируемые эксперименты RX3
+## Остановленные и отложенные RX3 эксперименты
 
 - Один профиль и одна конструкция: изменить только длину.
-- Осевой field49 двунаправленно повторён; больше чистых N-возмущений не
-  планируется. Mx X-X закрыт в узком RX3-EXP-02B scope; field92/Q закрыт в
-  узком RX3-EXP-03 GUI scope. RX3-EXP-04 Phase A screenshot прошёл внешнюю
-  проверку; RX3-EXP-04B field79-only `4,3414 → 5,00` прошёл manual Calculate,
-  Save и target-aware validator. Field79 eligible только для отдельного scoped
-  promotion review и пока остаётся `UNKNOWN/FORBIDDEN`.
+- Осевой field49 двунаправленно повторён; Mx X-X закрыт в узком RX3-EXP-02B
+  scope; field92/Q — в узком RX3-EXP-03 GUI scope; field79/My — в узком
+  RX3-EXP-04/04B Кс1 / 20П scope и promoted как `CONFIRMED/EXPERIMENTAL`.
+  Дальнейший общий force reverse engineering для MVP не планируется.
 - Изменить только тип закрепления и коэффициент расчётной длины.
 - Переключить расчёт на прочность/устойчивость и упругие/пластические характеристики.
 - Переключить число/стороны обогрева.
@@ -50,11 +48,11 @@
 
 ## Неподтверждённые области строки
 
-В `docs/RX38_SCHEMA.md` 128 позиций остаются `unknown`, ещё 14 — `probable`. Они
+В `docs/RX38_SCHEMA.md` 127 позиций остаются `unknown`, ещё 14 — `probable`. Они
 сохраняются без изменений и недоступны для безопасной записи. Field53 переведён
 только в `probable`; field78 добавлен как `probable` persisted Mx copy;
-field77 и field79 остаются `unknown`. Field92 scoped-confirmed, но остаётся
-`EXPERIMENTAL` и не открывает production mapping.
+field77 остаётся `unknown`; fields 50/79/92 scoped-confirmed, но остаются
+`EXPERIMENTAL` и не открывают production или LIRA mapping.
 
 ## Внешние smoke-tests
 
@@ -65,6 +63,7 @@ field77 и field79 остаются `unknown`. Field92 scoped-confirmed, но о
   пересчёта и сравнить формулы/итоги с контрольной копией.
 
 Полная последовательность и идентификаторы опытов зафиксированы в
-`docs/RX3_CONTROLLED_EXPERIMENTS.md`. Осевой, Mx X-X и GUI Q MVP-пути
-подтверждены только в узких опытных областях. RX3-EXP-04B validation завершён;
-следующее действие требует отдельного reviewer approval на scoped field79 entry.
+`docs/RX3_CONTROLLED_EXPERIMENTS.md`. Осевой N, Mx X-X, GUI Q и biaxial GUI My
+MVP-пути подтверждены только в узких опытных областях. Следующее действие — одна
+реальная строка/таблица экспорта ЛИРА для проверки sign/local-axis convention,
+не новый широкий эксперимент RX38.

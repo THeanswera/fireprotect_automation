@@ -8,11 +8,11 @@
   newline и кодировку; safe writer разрешает менять только доказанные поля.
 - **CONFIRMED:** `Rx38Construction`, `rx38_diff.py`, `group-by-profile` и
   `ProfileRepository` работают без автоматического разрешения неоднозначности.
-- **CONFIRMED:** 56 полей имеют достаточное доказательство; синхронность полей
+- **CONFIRMED:** 59 полей имеют достаточное доказательство; синхронность полей
   1 и 3 марки подтверждена на всех 46 записях корпуса.
 - **PROBABLE:** 14 полей имеют сильное, но пока не однозначное сопоставление и
   остаются недоступными для записи.
-- **UNKNOWN:** 128 полей сохраняются как raw и не интерпретируются.
+- **UNKNOWN:** 127 полей сохраняются как raw и не интерпретируются.
 
 ## Этап 2 — обмен через ProjectElement
 
@@ -23,8 +23,12 @@
 - **CONFIRMED:** `NormativeTrace` и `NormativeResult` блокируют подтверждение
   нормативного результата без ссылки в production-режиме.
 - **CONFIRMED:** LIRA-архитектура импортирует CSV, HTML и XLSX через полностью
-  настраиваемое сопоставление девяти колонок и явные единицы усилий; будущий
+  настраиваемое сопоставление колонок и явные единицы усилий; будущий
   LiraAPI подключается через тот же `LiraRowSource`.
+- **CONFIRMED:** `prepare-lira-review` создаёт batch review bundle без RX38:
+  source/mapping hashes, raw tokens, exact Decimal/SI values, cell provenance,
+  accepted/rejected rows, ProjectElement candidates, blockers and audit. Output
+  directory создаётся только новым; source не перезаписывается.
 - **CONFIRMED:** изучены все 5 листов исходной Excel-книги и 579 формул;
   `fireprotect.excel` создаёт только копию OOXML, защищает формулы и стили и
   проверяет SHA-256 исходника.
@@ -50,7 +54,7 @@
 ## Этап 3 — сквозной инженерный MVP
 
 - **CONFIRMED:** `Rx3Result` извлекает из RX38 доказанные поля, сохраняет
-  PROBABLE отдельно и не приписывает семантику 128 UNKNOWN-индексам.
+  PROBABLE отдельно и не приписывает семантику 127 UNKNOWN-индексам.
 - **CONFIRMED:** каждое типизированное значение RX3 имеет provenance
   `RX3_RESULT`; при обратном переносе с ProjectElement сверяются марка,
   профиль, геометрия, N, сталь и R.
@@ -76,11 +80,12 @@
   input только для Б1 / 14Б2 / one-plane X-X. GUI Q `2,32 → 3,00`, Q
   utilisation `0,028 → 0,037`; persisted field92=`3`, field50/78 и все
   non-target records неизменны. Write policy остаётся `EXPERIMENTAL`.
-- **VALIDATED / AWAITING SCOPED PROMOTION REVIEW:** RX3-EXP-04B подтвердил
+- **CONFIRMED (узкая область):** RX3-EXP-04B подтвердил
   цепочку field79 `4,3414 → 5,00` → GUI My=`5,00` → manual Calculate/Save →
   persisted field79=`5`. Mx persisted через field78=`0,51`, Q/field92 остался
-  нулевым, все шесть non-target records token-identical. Validator не меняет
-  schema: field79 пока остаётся `UNKNOWN/FORBIDDEN`, production закрыт.
+  нулевым, все шесть non-target records token-identical. Field79 promoted как
+  GUI My только для Кс1 / 20П biaxial; write policy остаётся `EXPERIMENTAL`,
+  production закрыт. `MY_BIAXIAL_PATH_MVP_STATUS = VALIDATED`.
 - **UNKNOWN:** индекс толщины огнезащиты в RX38 не доказан, поэтому
   `fireproofing_thickness` остаётся `null`.
 - **BLOCKED:** production-расширение за пределы верифицированного
@@ -114,3 +119,20 @@
 - **BLOCKED:** реальные mappings Mx/My/Qx/Qy, sign convention, steel field 33,
   GUI smoke-test, Excel recalculation и primary manufacturer data всё ещё
   требуют внешних доказательств.
+
+## RX3 force-mapping stop point
+
+| Усилие RX3 | Field | Подтверждённая область | Production write |
+|---|---:|---|---|
+| N | 49 | narrow axial compression path | blocked pending LIRA sign/convention evidence |
+| Mx | 50 | one-plane X-X / Б1 family only | blocked; not universal Mx |
+| Q | 92 | one-plane X-X / Б1 / 14Б2 family only | blocked; not a LIRA Qx/Qy mapping |
+| My | 79 | biaxial Кс1 / 20П family only | blocked; not a LIRA My mapping |
+
+Общий reverse engineering силовых полей RX3 для MVP остановлен. RX3-EXP-04B
+является прямым контрпримером универсальности field50: в biaxial Кс1 field50=`0`,
+field78=`0,507` до save при GUI Mx=`0,51`, затем field78=`0,51` после save.
+Поэтому field78 остаётся `PROBABLE` persisted/display copy, а глобальные Mx/X/Y
+семантики не установлены. Следующий validation использует одну реальную строку
+экспорта ЛИРА и соответствующий элемент RX3; новых широких RX38 экспериментов
+для MVP не планируется.

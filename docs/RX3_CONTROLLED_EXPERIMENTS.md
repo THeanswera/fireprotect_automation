@@ -212,8 +212,10 @@ profile/stress state, field79 baseline `4,3414`, heating and R60. It creates
 All other target fields and every non-target Tconstr must remain token-identical.
 
 During pre-calc preparation field79 remained `UNKNOWN` with `FORBIDDEN` generic
-write policy. DRAFT, PRODUCTION, the ordinary typed writer and automatic schema
-promotion stayed blocked; the program did not start RX3 or perform Calculate/Save.
+write policy. After independent review of the completed evidence it was promoted
+to scoped `CONFIRMED` with `EXPERIMENTAL` policy. DRAFT, PRODUCTION and the
+ordinary typed writer remain blocked; the program did not start RX3 or perform
+Calculate/Save automatically.
 
 The manual checkpoint and calculation/save sequence subsequently passed external
 review. `validate-rx3-my5` binds the observation to the exact source/generated
@@ -223,7 +225,22 @@ three-side heating, R60, Calculate, Save to table and Save As evidence.
 Generated-to-calculated changes were fields `44, 52, 54, 76, 78, 79` only.
 Field79 normalized `5,00 → 5` without numeric change; field78 persisted the
 GUI-rounded Mx `0,507 → 0,51`; field50 remained zero; field92/Q remained zero;
-all six non-target Tconstr records were token-identical. This evidence is eligible
-for a separate scoped field79 promotion review for Кс1 / 20П biaxial GUI My only.
-The validator performs no automatic promotion, production-write change,
-IssueReadiness change, LIRA mapping, or broader X/Y/sign inference.
+all six non-target Tconstr records were token-identical. Independent review
+approved field79 only for Кс1 / 20П biaxial GUI My. The validator performs no
+automatic production-write change, IssueReadiness change, LIRA mapping, or
+broader X/Y/sign inference.
+
+## MVP force-mapping stop point
+
+The controlled RX3 semantics stop at field49=N (narrow axial), field50=Mx
+(one-plane X-X / Б1 only), field92=Q (one-plane X-X / Б1 / 14Б2 only), and
+field79=My (biaxial Кс1 / 20П only). All non-axial fields remain
+`EXPERIMENTAL`; none establishes a LIRA component, local axis, sign, or universal
+X/Y correspondence.
+
+RX3-EXP-04B specifically prevents a universal field50 claim: in the Кс1 biaxial
+record field50=`0`, field78=`0.507` before save while GUI Mx=`0.51`, and RX3 save
+changes field78 to `0.51`. Field78 therefore remains only a probable
+persisted/display copy. No further broad RX38 force decoding is planned for the
+MVP. The next validation must start from one real exported LIRA row and its
+matching RX3 element.

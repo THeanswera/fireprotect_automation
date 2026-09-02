@@ -153,6 +153,35 @@ FIELD_SPECS: dict[int, FieldSpec] = {
     72: _c(72, "fireproofing_material", "Fireproofing material name", "string", None, source="RX38 values + fpm.rxdb + RX3 report/help"),
     76: _c(76, "normal_stress_mpa", "Calculated normal stress", units="MPa", direction="calculated", source="RX38 values + RX3 report", confidence="probable", comment="Three controlled axial states and one one-plane X-X bending state match the GUI stress/load value, but broader combined-stress semantics are not uniquely attributable.", evidence_type="CONTROLLED_GUI_CORRELATION_AND_REPORT", evidence_sources=("RX3 report", "RX3-EXP-01 baseline GUI observation", "RX3-EXP-01C controlled N30 GUI observation", "RX3-EXP-01D controlled N25 GUI observation", "RX3-EXP-02B controlled Mx10 GUI observation"), controlled_experiment_ids=("RX3-EXP-01", "RX3-EXP-01C", "RX3-EXP-01D", "RX3-EXP-02B"), reviewer_note="Retained as PROBABLE because the displayed quantity is stress/load and broader combined-stress states are unverified."),
     78: _c(78, "persisted_major_axis_moment_copy_knm", "RX3-persisted copy of the active major-axis moment", units="kN·m", direction="service", required="conditional", source="RX3-EXP-02 corpus + RX3-EXP-02B post-calc differential", confidence="probable", comment="Equal to Mx in the five-record one-plane corpus and synchronized from 8.89 to 10 only after RX3 calculation/save; it did not control the pre-calc GUI value.", evidence_type="CONTROLLED_POST_CALC_PERSISTENCE_CORRELATION", evidence_sources=("RX3-EXP-02 five-record one-plane bending corpus", "RX3-EXP-02B generated-to-calculated diff"), controlled_experiment_ids=("RX3-EXP-02", "RX3-EXP-02B"), reviewer_note="Derived/persisted-copy role is probable only for the verified one-plane X-X template family; writing remains forbidden."),
+    79: _c(
+        79,
+        "rx3_gui_minor_axis_moment_input_knm",
+        "RX3 GUI My bending-moment input for the verified biaxial Кс1 / 20П family",
+        data_type="decimal",
+        units="kN·m",
+        direction="input",
+        required="conditional",
+        source="RX3-EXP-04/04B controlled GUI and persisted RX38 evidence",
+        confidence="confirmed",
+        comment=(
+            "Confirmed only for the verified Кс1 / 20П biaxial RX3 GUI My path; "
+            "production writing remains disabled."
+        ),
+        evidence_type="CONTROLLED_SINGLE_VARIABLE_GUI_CAUSALITY",
+        evidence_sources=(
+            "RX3-EXP-04 exact Phase A GUI correlation",
+            "RX3-EXP-04B field79-only My perturbation with Mx fixed at 0.51",
+            "RX3-EXP-04B manual Calculate / Save to table / Save As persistence",
+            "RX3-EXP-04B target-aware diff with six invariant non-target records",
+        ),
+        controlled_experiment_ids=("RX3-EXP-04", "RX3-EXP-04B"),
+        reviewer_note=(
+            "Excludes LIRA My mapping, LIRA local-axis mapping, sign convention, "
+            "arbitrary X/Y correspondence, other profiles or stress states, "
+            "general combined-stress semantics, and production compatibility."
+        ),
+        write_policy=WritePolicy.EXPERIMENTAL,
+    ),
     82: _c(82, "convection_coefficient", "Convective heat-transfer coefficient", units="W/(m²·K)", source="RX38 value + rx3.xml ac + RX3 help"),
     83: _c(83, "flame_emissivity", "Flame emissivity", units="1", source="RX38 value + rx3.xml blackflame + RX3 help"),
     84: _c(84, "view_factor", "Radiation view/configuration factor", units="1", source="RX38 value + rx3.xml ff + RX3 help"),
@@ -172,6 +201,7 @@ FIELD_SPECS: dict[int, FieldSpec] = {
 }
 
 TCONSTR_FIELD_COUNT = 200
+MY_BIAXIAL_PATH_MVP_STATUS = "VALIDATED"
 CONFIRMED_INDICES = frozenset(i for i, spec in FIELD_SPECS.items() if spec.confidence == "confirmed")
 WRITABLE_CONFIRMED_INDICES = frozenset(
     i

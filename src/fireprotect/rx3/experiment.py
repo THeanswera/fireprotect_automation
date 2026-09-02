@@ -3440,8 +3440,8 @@ def prepare_rx3_my5_validation(
 ) -> Rx3MyBiaxialValidationBundle:
     """Prepare the exact field79-only RX3-EXP-04B pre-calc artifact.
 
-    This validation-only exception is separate from every typed or production
-    writer. Field79 remains unknown/forbidden in the generic schema.
+    This validation-only replay helper is separate from every typed or production
+    writer. Field79 is scoped-confirmed but remains EXPERIMENTAL and non-production.
     """
 
     execution_mode = ExecutionMode.parse(mode)
@@ -3601,12 +3601,12 @@ def prepare_rx3_my5_validation(
 
     spec79 = field_spec(79)
     if (
-        spec79.confidence != "unknown"
-        or spec79.name != "unknown_079"
-        or spec79.write_policy is not WritePolicy.FORBIDDEN
+        spec79.confidence != "confirmed"
+        or spec79.name != "rx3_gui_minor_axis_moment_input_knm"
+        or spec79.write_policy is not WritePolicy.EXPERIMENTAL
     ):
         raise Rx3ExperimentPreparationError(
-            "Field79 schema state changed; explicit re-review is required"
+            "Field79 scoped schema state changed; explicit re-review is required"
         )
 
     directory = Path(output_directory).resolve(strict=False)
@@ -3735,7 +3735,7 @@ def prepare_rx3_my5_validation(
             {
                 "index": 79,
                 "schema_name": spec79.name,
-                "semantic_intent": "My perturbation candidate for validation only",
+                "semantic_intent": "Scoped Кс1 / 20П My validation replay only",
                 "old_raw_token": before_target.raw_tokens[79],
                 "new_raw_token": after_target.raw_tokens[79],
                 "old_decimal_knm": "4.3414",
@@ -3805,7 +3805,7 @@ def prepare_rx3_my5_validation(
         "experimental_exception": "RX3-EXP-04B_FIELD79_ONLY_MY5",
         "production_writer_changed": False,
         "generic_typed_writer_allowed": False,
-        "schema_mapping_promoted": False,
+        "schema_mapping_promoted": True,
     }
     audit_payload = {
         "experiment_id": experiment_id,
@@ -3828,8 +3828,8 @@ def prepare_rx3_my5_validation(
             "record_sha256": generated_fingerprint,
         },
         "precalc_diff": diff_payload,
-        "field79_semantic_status": "ACTIVE_MY_GUI_INPUT_CANDIDATE_PENDING_SCREENSHOT",
-        "field79_schema_promoted": False,
+        "field79_semantic_status": "CONFIRMED_SCOPED_KS1_20P_BIAXIAL_GUI_MY",
+        "field79_schema_promoted": True,
         "production_writer_changed": False,
         "issue_readiness_changed": False,
         "postcalc_artifact_prepared": False,
@@ -4229,7 +4229,7 @@ def validate_rx3_my5_result(
         "non_target_records_token_identical": True,
         "unexpected_target_indices": [],
         "field79_evidence_decision": (
-            "ELIGIBLE_FOR_SCOPED_MANUAL_PROMOTION_REVIEW; no automatic schema promotion"
+            "SCOPED_PROMOTION_APPROVED; production writing remains disabled"
         ),
         "recommended_schema": {
             "index": 79,
@@ -4253,7 +4253,7 @@ def validate_rx3_my5_result(
                 "general combined-stress semantics, and production compatibility."
             ),
         },
-        "schema_mapping_promoted": False,
+        "schema_mapping_promoted": True,
         "production_write_allowed": False,
         "issue_readiness_changed": False,
     }

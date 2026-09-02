@@ -7,8 +7,9 @@ mapping and SI conversion pipeline as the file adapters.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field as dataclass_field
 from decimal import Decimal, InvalidOperation
+from types import MappingProxyType
 from typing import Any, Mapping, Protocol, runtime_checkable
 
 
@@ -68,6 +69,8 @@ class SourceForceValues:
     Qx: Decimal
     Qy: Decimal
     units: ForceUnits
+    raw_tokens: Mapping[str, str] = dataclass_field(default_factory=dict)
+    source_cells: Mapping[str, str] = dataclass_field(default_factory=dict)
 
     def __post_init__(self) -> None:
         for field in FORCE_FIELDS:
@@ -76,6 +79,18 @@ class SourceForceValues:
             )
         if not isinstance(self.units, ForceUnits):
             raise TypeError("units must be ForceUnits")
+        for name, values in (
+            ("raw_tokens", self.raw_tokens),
+            ("source_cells", self.source_cells),
+        ):
+            if not isinstance(values, Mapping):
+                raise TypeError(f"{name} must be a mapping")
+            unknown = set(values) - set(FORCE_FIELDS)
+            if unknown:
+                raise ValueError(f"{name} contains unknown force fields: {sorted(unknown)}")
+            if any(not isinstance(value, str) for value in values.values()):
+                raise TypeError(f"{name} values must be strings")
+            object.__setattr__(self, name, MappingProxyType(dict(values)))
 
 
 @dataclass(frozen=True, slots=True)
@@ -122,6 +137,19 @@ class RawTableRow:
     values: Mapping[str, Any]
     row_number: int
     sheet: str | None = None
+    cells: Mapping[str, str] = dataclass_field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.values, Mapping):
+            raise TypeError("RawTableRow.values must be a mapping")
+        if isinstance(self.row_number, bool) or self.row_number < 1:
+            raise ValueError("RawTableRow.row_number must be a positive integer")
+        if not isinstance(self.cells, Mapping):
+            raise TypeError("RawTableRow.cells must be a mapping")
+        if set(self.cells) - set(self.values):
+            raise ValueError("RawTableRow.cells contains headers absent from values")
+        object.__setattr__(self, "values", MappingProxyType(dict(self.values)))
+        object.__setattr__(self, "cells", MappingProxyType(dict(self.cells)))
 
 
 @runtime_checkable

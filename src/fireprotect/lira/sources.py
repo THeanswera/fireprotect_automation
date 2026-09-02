@@ -48,8 +48,21 @@ def _rows_from_matrix(
                 f"{source}: row {row_number} has more values than the header"
             )
         values.extend([None] * (len(headers) - len(values)))
-        rows.append(RawTableRow(dict(zip(headers, values)), row_number, sheet))
+        row_values = dict(zip(headers, values))
+        cells = {
+            header: f"{_column_name(column)}{row_number}"
+            for column, header in enumerate(headers, 1)
+        }
+        rows.append(RawTableRow(row_values, row_number, sheet, cells))
     return rows
+
+
+def _column_name(index: int) -> str:
+    result = ""
+    while index:
+        index, remainder = divmod(index - 1, 26)
+        result = chr(ord("A") + remainder) + result
+    return result
 
 
 @dataclass(frozen=True, slots=True)
@@ -140,6 +153,7 @@ class HtmlTableSource:
             parser.tables[self.table_index],
             header_index=self.header_row - 1,
             source=str(self.path),
+            sheet=f"table[{self.table_index}]",
         )
 
 

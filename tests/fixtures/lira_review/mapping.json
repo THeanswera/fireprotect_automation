@@ -1,0 +1,36 @@
+{
+  "format": "csv",
+  "options": {
+    "encoding": "utf-8",
+    "delimiter": ";",
+    "header_row": 1
+  },
+  "columns": {
+    "element_id": "Element",
+    "node_id": null,
+    "member_id": null,
+    "mark": "Mark",
+    "section": "Section",
+    "load_case": "Load case",
+    "combination": "Combination",
+    "N": "N",
+    "Mx": "Mx",
+    "My": "My",
+    "Qx": "Qx",
+    "Qy": "Qy"
+  },
+  "units": {
+    "N": "kN",
+    "Mx": "kN*m",
+    "My": "kN*m",
+    "Qx": "kN",
+    "Qy": "kN"
+  },
+  "decimal_separator": ",",
+  "thousands_separator": null,
+  "project": {
+    "project_id": "SYNTHETIC-LIRA-REVIEW",
+    "element_type": "column"
+  },
+  "convention": null
+}

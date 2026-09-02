@@ -50,6 +50,14 @@ class LiraForceImporter:
         source_values = SourceForceValues(
             **raw_forces,
             units=ForceUnits(**source_units.as_dict()),
+            raw_tokens={
+                field: self._raw_token(row.values[columns[field]])
+                for field in FORCE_FIELDS
+            },
+            source_cells={
+                field: row.cells.get(columns[field], columns[field])
+                for field in FORCE_FIELDS
+            },
         )
         return LiraForceRow(
             element_id=self._required_text(
@@ -71,6 +79,12 @@ class LiraForceImporter:
             source_row=row.row_number,
             source_sheet=row.sheet,
         )
+
+    @staticmethod
+    def _raw_token(value: object) -> str:
+        if isinstance(value, bool):
+            return "1" if value else "0"
+        return str(value)
 
     @staticmethod
     def _required_text(row: RawTableRow, header: str, field: str) -> str:

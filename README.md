@@ -21,7 +21,7 @@ Warning используется только для некритической 
 ## Реализовано
 
 - lossless parser и safe writer 200-позиционных записей `Tconstr`;
-- полная карта RX38: 58 `confirmed`, 14 `probable`, 128 `unknown`;
+- полная карта RX38: 59 `confirmed`, 14 `probable`, 127 `unknown`;
 - центральная модель `ProjectElement`, единицы, SI-конвертация и provenance;
 - конфигурируемые адаптеры таблиц усилий ЛИРА для CSV, HTML и XLSX;
 - geometry-модуль для периметров, ПТМ, section factor и площади обработки;
@@ -195,8 +195,10 @@ python -m fireprotect.cli prepare-rx3-my5 `
 ```
 
 The command accepts only the exact Кс1 fingerprint at position 7 and changes
-only field79 `4,3414 → 5,00`. Field79 remains `UNKNOWN/FORBIDDEN`; DRAFT,
-PRODUCTION and the ordinary typed writer remain blocked. The generated file is
+only field79 `4,3414 → 5,00`. At that historical preparation checkpoint field79
+was `UNKNOWN/FORBIDDEN`; it is now scoped-confirmed for Кс1 / 20П GUI My with
+`EXPERIMENTAL` write policy. DRAFT, PRODUCTION and the ordinary typed writer
+remain blocked. The generated file is
 for the pre-calc screenshot checkpoint only—no Calculate or Save action.
 
 After the manual Calculate / Save sequence, the exact result is checked with:
@@ -211,8 +213,28 @@ python -m fireprotect.cli validate-rx3-my5 `
 RX3-EXP-04B passed this validator: field79 persisted numerically as `5.00`
 with token normalization `5,00 → 5`, field78 persisted GUI-rounded Mx=`0.51`,
 field92 remained zero, and all six non-target records were token-identical.
-This makes field79 eligible for a separate scoped promotion review only; the
-validator does not modify the schema or production writer.
+The approved scoped promotion records this evidence without opening the
+production writer or any LIRA axis/sign mapping.
+
+## LIRA batch review (no RX38 force writing)
+
+The current MVP entrypoint imports a configurable CSV/HTML/XLSX force table and
+creates a local review bundle only:
+
+```powershell
+python -m fireprotect.cli prepare-lira-review `
+  --input <lira-export.xlsx-or-csv> `
+  --mapping <mapping.json> `
+  --output-dir <new-review-directory>
+```
+
+`tests/fixtures/lira_review/mapping.json` is a synthetic configuration example.
+Every supported concept is explicit: arbitrary source headers, unavailable
+columns as `null`, source units, parsing options, and a per-component convention
+registry. The default convention is `UNKNOWN`; therefore the bundle reports
+`LIRA_RX3_FORCE_CONVENTION` and never writes RX38 forces. JSON retains raw source
+tokens, exact `Decimal` values, SI conversions, source cells, SHA-256 and the
+mapping fingerprint. `forces_review.csv` is human-readable only.
 
 Post-calc validation always requires an explicit target. Prefer the exact
 BEFORE-record fingerprint or a 1-based `Tconstr` position; `--target-mark` is

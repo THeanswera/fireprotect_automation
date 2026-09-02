@@ -1,5 +1,29 @@
 # Сквозной MVP: ЛИРА → RX3 → Excel
 
+## Текущая безопасная точка входа: batch review
+
+До доказательства реальной LIRA↔RX3 sign/local-axis convention используется
+только review-команда:
+
+```powershell
+python -m fireprotect.cli prepare-lira-review `
+  --input <export.xlsx|export.csv|export.html> `
+  --mapping <mapping.json> `
+  --output-dir <new-directory>
+```
+
+Она использует существующие CSV/HTML/XLSX adapters и `ProjectElement`, сохраняет
+raw numeric token + Decimal + source unit + SI conversion + row/cell provenance,
+создаёт hashes, audit, blockers и human-readable CSV, но никогда не пишет RX38.
+Default component convention — `UNKNOWN`; `ENGINEER_CONFIRMED` можно явно
+зафиксировать, но только `VALIDATED` считается разрешённым convention state.
+В этой итерации даже `VALIDATED` state не открывает writer: review result всегда
+имеет `rx38_force_generation_allowed=false`.
+
+Ниже описан более широкий исторически реализованный pipeline. Его RX38 stage
+остаётся закрытым production gates и не должен использовать scoped fields
+49/50/79/92 как универсальное LIRA mapping.
+
 Команда `pipeline` создаёт воспроизводимый рабочий каталог, но не запускает
 и не подменяет RX3. Пути в JSON разрешаются относительно самого файла
 конфигурации.

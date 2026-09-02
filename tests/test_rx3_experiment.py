@@ -1167,7 +1167,7 @@ def test_my5_validation_refuses_non_validation_modes(
         )
 
 
-def test_my5_validation_does_not_promote_or_open_generic_field79_writer(
+def test_my5_validation_does_not_mutate_or_open_generic_field79_writer(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1184,10 +1184,10 @@ def test_my5_validation_does_not_promote_or_open_generic_field79_writer(
 
     after_spec = field_spec(79)
     assert before_spec == after_spec
-    assert after_spec.confidence == "unknown"
-    assert after_spec.write_policy is WritePolicy.FORBIDDEN
+    assert after_spec.confidence == "confirmed"
+    assert after_spec.write_policy is WritePolicy.EXPERIMENTAL
     record = construction_records(read_rx38(phase_a.template))[6]
-    with pytest.raises(UnsafeRx38WriteError, match="not confirmed"):
+    with pytest.raises(UnsafeRx38WriteError, match="EXPERIMENTAL"):
         record.with_typed_field(79, "5,00", compatibility_verified=True)
 
 
@@ -1229,10 +1229,10 @@ def test_my5_postcalc_validator_binds_target_and_classifies_persistence(
     }
     assert report.data["non_target_record_count"] == 6
     assert report.data["non_target_records_token_identical"] is True
-    assert report.data["schema_mapping_promoted"] is False
+    assert report.data["schema_mapping_promoted"] is True
     assert report.data["production_write_allowed"] is False
-    assert field_spec(79).confidence == "unknown"
-    assert field_spec(79).write_policy is WritePolicy.FORBIDDEN
+    assert field_spec(79).confidence == "confirmed"
+    assert field_spec(79).write_policy is WritePolicy.EXPERIMENTAL
 
 
 def test_my5_postcalc_validator_fails_on_non_target_mutation(
@@ -1316,8 +1316,8 @@ def test_my5_postcalc_validator_leaves_production_field79_write_blocked(
 
     report = validate_rx3_my5_result(bundle.directory, calculated, observation)
 
-    assert report.data["schema_mapping_promoted"] is False
+    assert report.data["schema_mapping_promoted"] is True
     assert field_spec(79) == before_spec
     target = construction_records(read_rx38(calculated))[6]
-    with pytest.raises(UnsafeRx38WriteError, match="not confirmed"):
+    with pytest.raises(UnsafeRx38WriteError, match="EXPERIMENTAL"):
         target.with_typed_field(79, "6", compatibility_verified=True)
