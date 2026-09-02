@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
+from enum import Enum
 from pathlib import Path
 import tempfile
 from typing import Any
@@ -47,6 +48,13 @@ class Rx38EngineeringConflictError(Rx38ProjectAdapterError):
     pass
 
 
+class DerivedFieldWritePolicy(str, Enum):
+    PRESERVE_DERIVED_IF_INPUTS_UNCHANGED = (
+        "PRESERVE_DERIVED_IF_INPUTS_UNCHANGED"
+    )
+    RECOMPUTE_VERIFIED = "RECOMPUTE_VERIFIED"
+
+
 @dataclass(frozen=True)
 class Rx38FieldChange:
     index: int
@@ -61,6 +69,9 @@ class Rx38CreationReport:
     output: str
     template_mark: str
     output_mark: str
+    target_record_position: int
+    template_record_sha256: str
+    output_record_sha256: str
     changed_fields: tuple[Rx38FieldChange, ...]
     preserved_fields_count: int
     unknown_fields_count: int
@@ -82,6 +93,9 @@ class Rx38CreationReport:
             "output": self.output,
             "template_mark": self.template_mark,
             "output_mark": self.output_mark,
+            "target_record_position": self.target_record_position,
+            "template_record_sha256": self.template_record_sha256,
+            "output_record_sha256": self.output_record_sha256,
             "changed_fields": [change.__dict__ for change in self.changed_fields],
             "preserved_fields_count": self.preserved_fields_count,
             "unknown_fields_count": self.unknown_fields_count,
@@ -105,6 +119,10 @@ def _format_decimal(value: Decimal) -> str:
     return (text or "0").replace(".", ",")
 
 
+def _format_decimal_preserving_scale(value: Decimal) -> str:
+    return format(value, "f").replace(".", ",")
+
+
 def _as_decimal(quantity: Quantity, unit: Unit) -> Decimal:
     return quantity.to(unit).value
 
@@ -113,10 +131,98 @@ def _same_text(left: str, right: str) -> bool:
     return " ".join(left.casefold().split()) == " ".join(right.casefold().split())
 
 
+_DERIVED_FIELD_INPUTS: dict[int, tuple[int, ...]] = {
+    22: (20, 21),
+    23: (20, 21),
+    24: (21, 14),
+    25: (21, 14, 15),
+    66: (20, 14, 32),
+    67: (20, 14, 15, 32),
+}
+_DERIVED_ABSOLUTE_TOLERANCE = Decimal("1e-12")
+_DERIVED_RELATIVE_TOLERANCE = Decimal("2e-15")
+
+
+def _decimal_token(value: str) -> Decimal | None:
+    try:
+        parsed = Decimal(value.strip().replace(",", "."))
+    except InvalidOperation:
+        return None
+    return parsed if parsed.is_finite() else None
+
+
+def _numeric_tokens_equal(left: str, right: str) -> bool:
+    left_value = _decimal_token(left)
+    right_value = _decimal_token(right)
+    return (
+        left_value is not None
+        and right_value is not None
+        and left_value == right_value
+    )
+
+
+def _derived_value_is_compatible(existing: str, calculated: str) -> bool:
+    existing_value = _decimal_token(existing)
+    calculated_value = _decimal_token(calculated)
+    if existing_value is None or calculated_value is None:
+        return False
+    difference = abs(existing_value - calculated_value)
+    tolerance = max(
+        _DERIVED_ABSOLUTE_TOLERANCE,
+        abs(calculated_value) * _DERIVED_RELATIVE_TOLERANCE,
+    )
+    return difference <= tolerance
+
+
+def _apply_derived_field_policy(
+    template: Rx38Record,
+    values: dict[int, str],
+    policy: DerivedFieldWritePolicy,
+) -> None:
+    for derived_index, input_indices in _DERIVED_FIELD_INPUTS.items():
+        if policy is DerivedFieldWritePolicy.RECOMPUTE_VERIFIED:
+            continue
+        inputs_unchanged = all(
+            _numeric_tokens_equal(template.fields[index], values[index])
+            for index in input_indices
+        )
+        if not inputs_unchanged:
+            continue
+        calculated = values[derived_index]
+        existing = template.fields[derived_index]
+        if not _derived_value_is_compatible(existing, calculated):
+            raise Rx38EngineeringConflictError(
+                f"Derived field {derived_index} ({field_spec(derived_index).name}) "
+                "is incompatible with its unchanged authoritative inputs; "
+                "refusing an implicit rewrite"
+            )
+        values[derived_index] = existing
+
+
 def _select_template_record(
-    document: Rx38Document, element: ProjectElement, template_mark: str | None
+    document: Rx38Document,
+    element: ProjectElement,
+    template_mark: str | None,
+    template_record_sha256: str | None,
 ) -> tuple[int, Rx38Record]:
     indexed = [(index, record) for index, record in enumerate(document.records) if record.record_type == "Tconstr"]
+    if template_record_sha256 is not None:
+        matches = [
+            (index, record)
+            for index, record in indexed
+            if rx38_record_fingerprint(record) == template_record_sha256
+        ]
+        if len(matches) != 1:
+            raise Rx38TemplateMismatchError(
+                "Template record fingerprint matched "
+                f"{len(matches)} constructions; exact unique resolution is required"
+            )
+        index, record = matches[0]
+        if template_mark is not None and record.mark != template_mark:
+            raise Rx38TemplateMismatchError(
+                f"Template fingerprint resolved mark {record.mark!r}, not {template_mark!r}"
+            )
+        return index, record
     selector = template_mark or element.mark
     matches = [(index, record) for index, record in indexed if record.mark == selector]
     if len(matches) == 1:
@@ -172,11 +278,15 @@ def project_element_to_rx38_record(
     template: Rx38Record,
     *,
     safety_context: Rx3SafetyContext | None = None,
+    derived_field_policy: DerivedFieldWritePolicy = (
+        DerivedFieldWritePolicy.PRESERVE_DERIVED_IF_INPUTS_UNCHANGED
+    ),
 ) -> tuple[Rx38Record, tuple[str, ...]]:
     record, warnings, _ = _prepare_rx38_record(
         element,
         template,
         safety_context=safety_context,
+        derived_field_policy=derived_field_policy,
     )
     return record, warnings
 
@@ -186,6 +296,7 @@ def _prepare_rx38_record(
     template: Rx38Record,
     *,
     safety_context: Rx3SafetyContext | None,
+    derived_field_policy: DerivedFieldWritePolicy,
 ) -> tuple[Rx38Record, tuple[str, ...], dict[str, Any]]:
     context = safety_context or Rx3SafetyContext.draft()
     element.require_fields(
@@ -292,8 +403,8 @@ def _prepare_rx38_record(
         19: element.profile_name or "",
         20: _format_decimal(area_mm2),
         21: _format_decimal(perimeter_mm),
-        22: _format_decimal(ptm_mm),
-        23: _format_decimal(Decimal(1000) / ptm_mm),
+        22: _format_decimal(calculated_ptm),
+        23: _format_decimal(Decimal(1000) * perimeter_mm / area_mm2),
         24: _format_decimal(protected_one),
         25: _format_decimal(protected_total),
         32: _format_decimal(_as_decimal(element.density, Unit.KILOGRAM_PER_CUBIC_METER)),  # type: ignore[arg-type]
@@ -301,7 +412,9 @@ def _prepare_rx38_record(
         42: element.steel_grade or "",
         45: element.stress_state or "",
         48: element.support_condition or "",
-        49: _format_decimal(_as_decimal(rx3_input.axial_force, Unit.KILONEWTON)),
+        49: _format_decimal_preserving_scale(
+            _as_decimal(rx3_input.axial_force, Unit.KILONEWTON)
+        ),
         51: _format_decimal(_as_decimal(effective_length, Unit.METER)),
         55: _format_decimal(_as_decimal(element.required_fire_resistance, Unit.MINUTE)),  # type: ignore[arg-type]
         66: _format_decimal(area_mm2 * Decimal("0.000001") * length_m * _as_decimal(element.density, Unit.KILOGRAM_PER_CUBIC_METER)),  # type: ignore[arg-type]
@@ -309,6 +422,7 @@ def _prepare_rx38_record(
         141: _format_decimal(effective_factor),
     }
     values.update(steel_report.write_values)
+    _apply_derived_field_policy(template, values, derived_field_policy)
 
     warnings: list[str] = list(action_warnings) + list(steel_report.warnings)
     warnings.append(
@@ -370,11 +484,15 @@ def project_element_to_rx38_construction(
     template: Rx38Record,
     *,
     safety_context: Rx3SafetyContext | None = None,
+    derived_field_policy: DerivedFieldWritePolicy = (
+        DerivedFieldWritePolicy.PRESERVE_DERIVED_IF_INPUTS_UNCHANGED
+    ),
 ) -> Rx38Construction:
     record, _ = project_element_to_rx38_record(
         element,
         template,
         safety_context=safety_context,
+        derived_field_policy=derived_field_policy,
     )
     return Rx38Construction.from_record(record)
 
@@ -386,6 +504,9 @@ def create_rx38_from_project_element(
     *,
     template_mark: str | None = None,
     safety_context: Rx3SafetyContext | None = None,
+    derived_field_policy: DerivedFieldWritePolicy = (
+        DerivedFieldWritePolicy.PRESERVE_DERIVED_IF_INPUTS_UNCHANGED
+    ),
 ) -> Rx38CreationReport:
     template_path = Path(template_path).resolve(strict=True)
     output_path = Path(output_path).resolve(strict=False)
@@ -399,11 +520,22 @@ def create_rx38_from_project_element(
         )
     output_path.parent.mkdir(parents=True, exist_ok=True)
     document = read_rx38_document(template_path)
-    record_index, template = _select_template_record(document, element, template_mark)
+    template_record_sha256 = (
+        safety_context.template_evidence.template_record_sha256
+        if safety_context is not None and safety_context.template_evidence is not None
+        else None
+    )
+    record_index, template = _select_template_record(
+        document,
+        element,
+        template_mark,
+        template_record_sha256,
+    )
     updated, warnings, safety = _prepare_rx38_record(
         element,
         template,
         safety_context=safety_context,
+        derived_field_policy=derived_field_policy,
     )
     output_document = document.replace_record(record_index, updated)
     handle = tempfile.NamedTemporaryFile(
@@ -447,9 +579,16 @@ def create_rx38_from_project_element(
     unknown_count = sum(
         field_spec(index).confidence == "unknown" for index in range(TCONSTR_FIELD_COUNT)
     )
+    target_record_position = sum(
+        record.record_type == "Tconstr"
+        for record in document.records[: record_index + 1]
+    )
     return Rx38CreationReport(
         template=str(template_path), output=str(output_path),
         template_mark=template.mark or "", output_mark=element.mark,
+        target_record_position=target_record_position,
+        template_record_sha256=rx38_record_fingerprint(template),
+        output_record_sha256=rx38_record_fingerprint(reparsed),
         changed_fields=changes,
         preserved_fields_count=TCONSTR_FIELD_COUNT - len(changes),
         unknown_fields_count=unknown_count,

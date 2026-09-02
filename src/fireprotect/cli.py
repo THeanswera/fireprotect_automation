@@ -12,6 +12,7 @@ from .rx3.gui_validation import (
     prepare_rx3_validation,
     validate_rx3_result_files,
 )
+from .rx3.experiment import prepare_rx3_experiment_phase_a
 from .rx3.parser import Rx38Construction, construction_records, read_rx38
 from .rx3.profiles import ProfileRepository, list_tables
 from .rx3.safety import GuiExecutionEvidence, Rx3SafetyContext
@@ -129,6 +130,37 @@ def cmd_prepare_rx3_validation(args: argparse.Namespace) -> None:
     )
 
 
+def cmd_prepare_rx3_phase_a(args: argparse.Namespace) -> None:
+    templates = sorted(args.templates_dir.rglob("*.rx38"))
+    bundle = prepare_rx3_experiment_phase_a(
+        templates,
+        args.rx3_db,
+        args.output_dir,
+        experiment_id=args.experiment_id,
+        project_element_id=args.project_element_id,
+        heating_sides=args.heating_sides,
+    )
+    print(
+        json.dumps(
+            {
+                "directory": str(bundle.directory),
+                "selected_source": str(bundle.selected_source),
+                "selected_mark": bundle.selected_mark,
+                "template": str(bundle.template),
+                "template_summary_json": str(bundle.template_summary_json),
+                "template_summary_markdown": str(bundle.template_summary_markdown),
+                "heating_evidence_template": str(bundle.heating_evidence_template),
+                "checklist": str(bundle.checklist),
+                "selection_report": str(bundle.selection_report),
+                "project_element_draft": str(bundle.project_element_draft),
+                "status": "WAITING_FOR_PHASE_A_GUI_OBSERVATION",
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+    )
+
+
 def cmd_validate_rx3_result(args: argparse.Namespace) -> None:
     report = validate_rx3_result_files(
         args.before,
@@ -138,6 +170,9 @@ def cmd_validate_rx3_result(args: argparse.Namespace) -> None:
         overwrite=args.overwrite,
         gui_execution_evidence=GuiExecutionEvidence(args.gui_evidence),
         evidence_reference=args.evidence_reference,
+        target_record_fingerprints=args.target_fingerprints or (),
+        target_record_positions=args.target_positions or (),
+        target_marks=args.target_marks or (),
     )
     print(
         json.dumps(
@@ -176,6 +211,9 @@ def cmd_rx38_experiment_diff(args: argparse.Namespace) -> None:
         overwrite=args.overwrite,
         gui_execution_evidence=GuiExecutionEvidence.HASH_ONLY,
         evidence_reference=args.experiment_id,
+        target_record_fingerprints=args.target_fingerprints or (),
+        target_record_positions=args.target_positions or (),
+        target_marks=args.target_marks or (),
     )
     print(json.dumps(report.data, ensure_ascii=False, indent=2))
 
@@ -235,6 +273,22 @@ def main() -> None:
     command.set_defaults(func=cmd_prepare_rx3_validation)
 
     command = subparsers.add_parser(
+        "prepare-rx3-phase-a",
+        help="Rank local RX38 templates and prepare a non-generating GUI observation bundle",
+    )
+    command.add_argument("--templates-dir", type=Path, required=True)
+    command.add_argument("--rx3-db", type=Path, required=True)
+    command.add_argument(
+        "--output-dir",
+        type=Path,
+        default=Path("validation/RX3-EXP-01_A_TEMPLATE_OBSERVATION"),
+    )
+    command.add_argument("--experiment-id", default="RX3-EXP-01")
+    command.add_argument("--project-element-id", default="K1")
+    command.add_argument("--heating-sides", type=int, default=4)
+    command.set_defaults(func=cmd_prepare_rx3_phase_a)
+
+    command = subparsers.add_parser(
         "validate-rx3-result",
         help="Classify RX38 changes after a manual RX3 calculation",
     )
@@ -243,6 +297,26 @@ def main() -> None:
     command.add_argument("--json-report", type=Path)
     command.add_argument("--markdown-report", type=Path)
     command.add_argument("--overwrite", action="store_true")
+    targets = command.add_mutually_exclusive_group(required=True)
+    targets.add_argument(
+        "--target-fingerprint",
+        dest="target_fingerprints",
+        action="append",
+        help="SHA-256 fingerprint of an exact BEFORE Tconstr; repeat for multiple targets",
+    )
+    targets.add_argument(
+        "--target-position",
+        dest="target_positions",
+        action="append",
+        type=int,
+        help="1-based BEFORE Tconstr position; repeat for multiple targets",
+    )
+    targets.add_argument(
+        "--target-mark",
+        dest="target_marks",
+        action="append",
+        help="Exact mark that uniquely resolves in BEFORE; repeat for multiple targets",
+    )
     command.add_argument(
         "--gui-evidence",
         choices=[item.value for item in GuiExecutionEvidence],
@@ -261,6 +335,23 @@ def main() -> None:
     command.add_argument("--json-report", type=Path)
     command.add_argument("--markdown-report", type=Path)
     command.add_argument("--overwrite", action="store_true")
+    targets = command.add_mutually_exclusive_group(required=True)
+    targets.add_argument(
+        "--target-fingerprint",
+        dest="target_fingerprints",
+        action="append",
+    )
+    targets.add_argument(
+        "--target-position",
+        dest="target_positions",
+        action="append",
+        type=int,
+    )
+    targets.add_argument(
+        "--target-mark",
+        dest="target_marks",
+        action="append",
+    )
     command.set_defaults(func=cmd_rx38_experiment_diff)
 
     command = subparsers.add_parser(

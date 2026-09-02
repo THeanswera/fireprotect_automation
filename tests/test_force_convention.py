@@ -55,4 +55,7 @@ def test_validation_exception_is_named_and_audited():
     assert result.force_transformations[0]["status"] == (
         "UNVERIFIED_VALIDATION_EXCEPTION"
     )
+    assert result.force_transformations[0]["rule"] == (
+        "RX3_CONTROLLED_INPUT_CONVENTION"
+    )
     assert "controlled VALIDATION" in warnings[0]

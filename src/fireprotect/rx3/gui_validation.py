@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
+from collections.abc import Sequence
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
 from hashlib import sha256
@@ -19,7 +20,7 @@ from .parser import construction_records, read_rx38
 from .project_adapter import create_rx38_from_project_element
 from .project_adapter import Rx38CreationReport
 from .result import rx38_record_to_rx3_result
-from .safety import GuiExecutionEvidence, Rx3SafetyContext
+from .safety import GuiExecutionEvidence, Rx3SafetyContext, rx38_record_fingerprint
 from .schema import field_spec
 
 
@@ -92,6 +93,37 @@ def _write_new(path: Path, content: str) -> None:
 
 def _change_dict(change: Any) -> dict[str, Any]:
     spec = field_spec(change.index)
+    semantic_changed: bool | None
+    classification: str
+    if (
+        spec.confidence == "confirmed"
+        and spec.data_type == "decimal"
+        and spec.units is not None
+    ):
+        old_numeric = _finite_decimal(change.old_value)
+        new_numeric = _finite_decimal(change.new_value)
+        if old_numeric is None or new_numeric is None:
+            semantic_changed = None
+            classification = "CONFIRMED_NUMERIC_PARSE_UNAVAILABLE"
+        else:
+            semantic_changed = old_numeric != new_numeric
+            classification = (
+                "SEMANTIC_NUMERIC_CHANGE"
+                if semantic_changed
+                else "RX3_TOKEN_NORMALIZATION"
+            )
+    elif spec.confidence == "confirmed" and spec.data_type in {
+        "decimal",
+        "integer",
+    }:
+        semantic_changed = None
+        classification = "CONFIRMED_NUMERIC_EQUIVALENCE_NOT_APPLICABLE"
+    elif spec.confidence == "confirmed":
+        semantic_changed = True
+        classification = "CONFIRMED_TEXT_CHANGE"
+    else:
+        semantic_changed = None
+        classification = "RAW_TOKEN_CHANGE_SEMANTICS_UNVERIFIED"
     return {
         "index": change.index,
         "name": spec.name,
@@ -99,8 +131,122 @@ def _change_dict(change: Any) -> dict[str, Any]:
         "direction": spec.direction,
         "old_value": change.old_value,
         "new_value": change.new_value,
+        "old_token": change.old_value,
+        "new_token": change.new_value,
+        "text_changed": True,
+        "semantic_changed": semantic_changed,
+        "classification": classification,
         "evidence": spec.source,
         "comment": spec.comment,
+    }
+
+
+def _finite_decimal(token: str) -> Decimal | None:
+    try:
+        value = Decimal(token.strip().replace(",", "."))
+    except InvalidOperation:
+        return None
+    return value if value.is_finite() else None
+
+
+def _record_semantic_changed(changes: list[dict[str, Any]]) -> bool | None:
+    if not changes:
+        return False
+    semantic_values = [item["semantic_changed"] for item in changes]
+    if any(value is True for value in semantic_values):
+        return True
+    if all(value is False for value in semantic_values):
+        return False
+    return None
+
+
+def _resolve_target_positions(
+    records: Sequence[Any],
+    *,
+    target_record_fingerprints: Sequence[str],
+    target_record_positions: Sequence[int],
+    target_marks: Sequence[str],
+) -> tuple[set[int], dict[str, Any]]:
+    supplied = sum(
+        bool(items)
+        for items in (
+            target_record_fingerprints,
+            target_record_positions,
+            target_marks,
+        )
+    )
+    if supplied == 0:
+        raise Rx3GuiValidationError(
+            "At least one explicit target record fingerprint, position, or mark is required"
+        )
+    if supplied > 1:
+        raise Rx3GuiValidationError(
+            "Use exactly one target selector strategy per validation run"
+        )
+
+    positions: list[int] = []
+    if target_record_fingerprints:
+        strategy = "BEFORE_RECORD_FINGERPRINT"
+        fingerprints = [item.strip().lower() for item in target_record_fingerprints]
+        for fingerprint in fingerprints:
+            if len(fingerprint) != 64 or any(
+                character not in "0123456789abcdef" for character in fingerprint
+            ):
+                raise Rx3GuiValidationError(
+                    f"Invalid target record SHA-256 fingerprint: {fingerprint!r}"
+                )
+            matches = [
+                position
+                for position, record in enumerate(records, 1)
+                if rx38_record_fingerprint(record) == fingerprint
+            ]
+            if len(matches) != 1:
+                raise Rx3GuiValidationError(
+                    "Target fingerprint must resolve to exactly one BEFORE Tconstr; "
+                    f"fingerprint={fingerprint}, matches={matches}"
+                )
+            positions.append(matches[0])
+        requested: Sequence[str | int] = fingerprints
+    elif target_record_positions:
+        strategy = "TCONSTR_POSITION"
+        for position in target_record_positions:
+            if isinstance(position, bool) or not isinstance(position, int):
+                raise Rx3GuiValidationError("Target positions must be integers")
+            if position < 1 or position > len(records):
+                raise Rx3GuiValidationError(
+                    f"Target Tconstr position {position} is outside 1..{len(records)}"
+                )
+            positions.append(position)
+        requested = list(target_record_positions)
+    else:
+        strategy = "UNIQUE_MARK"
+        marks = [item.strip() for item in target_marks]
+        for mark in marks:
+            if not mark:
+                raise Rx3GuiValidationError("Target marks must not be blank")
+            matches = [
+                position
+                for position, record in enumerate(records, 1)
+                if record.mark == mark
+            ]
+            if len(matches) != 1:
+                raise Rx3GuiValidationError(
+                    "Target mark must resolve to exactly one BEFORE Tconstr; "
+                    f"mark={mark!r}, matches={matches}"
+                )
+            positions.append(matches[0])
+        requested = marks
+
+    if len(set(positions)) != len(positions):
+        raise Rx3GuiValidationError("Target selectors resolve to duplicate Tconstr records")
+    return set(positions), {
+        "strategy": strategy,
+        "requested": requested,
+        "resolved_positions": sorted(positions),
+        "resolved_before_record_fingerprints": [
+            rx38_record_fingerprint(records[position - 1])
+            for position in sorted(positions)
+        ],
     }
 
 
@@ -193,6 +339,11 @@ def prepare_rx3_validation(
         "stale_template_result_indices": list(
             creation.stale_template_result_indices
         ),
+        "target_record": {
+            "position": creation.target_record_position,
+            "before_record_fingerprint": creation.output_record_sha256,
+            "mark": creation.output_mark,
+        },
     }
     _write_new(diff_json, json.dumps(payload, ensure_ascii=False, indent=2) + "\n")
     _write_new(
@@ -216,19 +367,20 @@ def prepare_rx3_validation(
 3. Сверьте `project_element.json`, `rx3_input.json` и `rx3_template_profile.json`.
 4. Зафиксируйте экранные значения mark, profile, steel, N, Mx, My, Qx, Qy, length, support, effective length, fire regime, R и режим critical-temperature calculation.
 5. Для AXIAL_ONLY убедитесь, что Mx=My=Qx=Qy=0. При любом расхождении остановитесь.
-6. Нажмите расчёт в RX3. Не меняйте инженерные параметры без фиксации изменения.
-7. Сохраните рассчитанный файл в этой папке под именем `calculated.rx38`; не перезаписывайте `template.rx38` и `generated.rx38`.
-8. Выполните:
+6. Нажмите «Рассчитать» в RX3 и зафиксируйте состояние DIALOG_CALCULATED. Не меняйте инженерные параметры без фиксации изменения.
+7. Нажмите «Сохранить в таблицу» и зафиксируйте состояние TABLE_UPDATED.
+8. Выполните Project Save As в этой папке под именем `calculated.rx38`; не перезаписывайте `template.rx38` и `generated.rx38`. Это кандидат FILE_PERSISTED.
+9. Выполните:
 
-   `python -m fireprotect.cli validate-rx3-result generated.rx38 calculated.rx38 --gui-evidence ENGINEER_CONFIRMED --evidence-reference EVIDENCE-ID`
+   `python -m fireprotect.cli validate-rx3-result generated.rx38 calculated.rx38 --target-fingerprint BEFORE_RECORD_SHA256 --gui-evidence ENGINEER_CONFIRMED --evidence-reference EVIDENCE-ID`
 
-9. Передайте `calculated.rx38`, evidence, `rx3_result.json`, `rx3_validation_report.json` и `rx3_validation_report.md` обратно в проект.
-10. Before any VALIDATION/PRODUCTION generation, verify that typed
+10. Передайте `calculated.rx38`, evidence, `rx3_result.json`, `rx3_validation_report.json` и `rx3_validation_report.md` обратно в проект.
+11. Before any VALIDATION/PRODUCTION generation, verify that typed
     `heating_exposure` evidence names this ProjectElement, records the same
     `heating_sides`, and is bound to the SHA-256 of the exact template Tconstr.
     `heated_perimeter` alone is not RX3 heating-side evidence; RX38 heating-side
     indices remain unmapped.
-""",
+""".replace("BEFORE_RECORD_SHA256", creation.output_record_sha256),
     )
     return Rx3ValidationBundle(
         directory,
@@ -279,6 +431,9 @@ def validate_rx3_result_files(
     gui_execution_evidence: GuiExecutionEvidence = GuiExecutionEvidence.NOT_PROVIDED,
     evidence_reference: str | None = None,
     mode: ExecutionMode = ExecutionMode.VALIDATION,
+    target_record_fingerprints: Sequence[str] = (),
+    target_record_positions: Sequence[int] = (),
+    target_marks: Sequence[str] = (),
 ) -> Rx3ValidationReport:
     before_path = Path(before_rx38).resolve(strict=True)
     after_path = Path(after_rx38).resolve(strict=True)
@@ -294,11 +449,18 @@ def validate_rx3_result_files(
         raise Rx3GuiValidationError(
             f"Tconstr count changed: before={len(before)}, after={len(after)}"
         )
+    target_positions, target_resolution = _resolve_target_positions(
+        before,
+        target_record_fingerprints=target_record_fingerprints,
+        target_record_positions=target_record_positions,
+        target_marks=target_marks,
+    )
 
     records: list[dict[str, Any]] = []
     change_sets: list[set[int]] = []
     material_result_change_sets: list[set[int]] = []
     unsafe_change_sets: list[set[int]] = []
+    unexpected_non_target_changes: list[dict[str, Any]] = []
     expected_output_fields = {44, 54}
     for position, (old, new) in enumerate(zip(before, after), 1):
         changes = [_change_dict(item) for item in diff_records(old, new)]
@@ -314,12 +476,34 @@ def validate_rx3_result_files(
             if old_value.is_finite() and new_value.is_finite() and old_value != new_value:
                 material_changes.add(index)
         material_result_change_sets.append(material_changes)
-        unsafe_change_sets.append(changed_indices - expected_output_fields)
+        unsafe_change_sets.append(
+            {
+                item["index"]
+                for item in changes
+                if item["index"] not in expected_output_fields
+                and item["semantic_changed"] is not False
+            }
+        )
+        is_target = position in target_positions
+        if not is_target and changes:
+            unexpected_non_target_changes.append(
+                {
+                    "position": position,
+                    "before_mark": old.mark,
+                    "after_mark": new.mark,
+                    "changes": changes,
+                }
+            )
         records.append(
             {
                 "position": position,
+                "is_target": is_target,
                 "before_mark": old.mark,
                 "after_mark": new.mark,
+                "before_record_fingerprint": rx38_record_fingerprint(old),
+                "after_record_fingerprint": rx38_record_fingerprint(new),
+                "text_changed": bool(changes),
+                "semantic_changed": _record_semantic_changed(changes),
                 "confirmed_changes": [
                     item for item in changes if item["confidence"] == "confirmed"
                 ],
@@ -331,6 +515,11 @@ def validate_rx3_result_files(
                         "index": item["index"],
                         "old_value": item["old_value"],
                         "new_value": item["new_value"],
+                        "old_token": item["old_token"],
+                        "new_token": item["new_token"],
+                        "text_changed": item["text_changed"],
+                        "semantic_changed": item["semantic_changed"],
+                        "classification": item["classification"],
                     }
                     for item in changes
                     if item["confidence"] == "unknown"
@@ -342,11 +531,24 @@ def validate_rx3_result_files(
         )
 
     byte_identical = before_hash == after_hash
-    result_fields_changed = all(
-        expected_output_fields.issubset(indices)
-        for indices in material_result_change_sets
+    target_result_fields_changed = {
+        position: expected_output_fields.issubset(
+            material_result_change_sets[position - 1]
+        )
+        for position in sorted(target_positions)
+    }
+    result_fields_changed = all(target_result_fields_changed.values())
+    non_target_records_text_unchanged = not unexpected_non_target_changes
+    non_target_records_semantically_unchanged = all(
+        records[position - 1]["semantic_changed"] is False
+        for position in range(1, len(records) + 1)
+        if position not in target_positions
     )
-    recalculation_proven = not byte_identical and result_fields_changed
+    recalculation_proven = (
+        not byte_identical
+        and result_fields_changed
+        and non_target_records_text_unchanged
+    )
     evidence_reference_valid = (
         isinstance(evidence_reference, str) and bool(evidence_reference.strip())
     )
@@ -357,6 +559,7 @@ def validate_rx3_result_files(
     gui_verified = (
         recalculation_proven
         and evidence_reference_valid
+        and non_target_records_text_unchanged
         and not unsafe_production_changes
         and gui_execution_evidence
         in {
@@ -365,7 +568,9 @@ def validate_rx3_result_files(
         }
     )
     status = (
-        "RX3_RECALCULATION_NOT_PROVEN"
+        "RX3_UNEXPECTED_NON_TARGET_CHANGE"
+        if not non_target_records_text_unchanged
+        else "RX3_RECALCULATION_NOT_PROVEN"
         if not recalculation_proven
         else "RX3_PRODUCTION_INPUTS_CHANGED"
         if unsafe_production_changes
@@ -378,8 +583,15 @@ def validate_rx3_result_files(
         "before": {"path": str(before_path), "sha256": before_hash},
         "after": {"path": str(after_path), "sha256": after_hash},
         "byte_identical": byte_identical,
+        "target_resolution": target_resolution,
         "expected_result_fields": sorted(expected_output_fields),
         "expected_result_fields_changed": result_fields_changed,
+        "target_result_fields_changed": target_result_fields_changed,
+        "non_target_records_text_unchanged": non_target_records_text_unchanged,
+        "non_target_records_semantically_unchanged": (
+            non_target_records_semantically_unchanged
+        ),
+        "unexpected_non_target_changes": unexpected_non_target_changes,
         "rx3_recalculation_proven": recalculation_proven,
         "execution_mode": mode.value,
         "gui_execution_evidence": gui_execution_evidence.value,
@@ -440,7 +652,10 @@ def validate_rx3_result_files(
         f"- BEFORE SHA-256: `{payload['before']['sha256']}`",
         f"- AFTER SHA-256: `{payload['after']['sha256']}`",
         f"- Byte-identical: `{byte_identical}`",
+        f"- Target resolution: `{target_resolution}`",
         f"- Expected result fields 44/54 changed: `{result_fields_changed}`",
+        f"- Non-target records text-unchanged: `{non_target_records_text_unchanged}`",
+        f"- Non-target records semantically unchanged: `{non_target_records_semantically_unchanged}`",
         f"- RX3 recalculation proven: `{recalculation_proven}`",
         f"- Execution mode: `{mode.value}`",
         f"- GUI evidence: `{gui_execution_evidence.value}`",
@@ -453,6 +668,10 @@ def validate_rx3_result_files(
         lines.extend(
             [
                 f"## Конструкция {record['position']}: {record['after_mark'] or '-'}",
+                "",
+                f"- Target: `{record['is_target']}`",
+                f"- Text changed: `{record['text_changed']}`",
+                f"- Semantic changed: `{record['semantic_changed']}`",
                 "",
             ]
         )
@@ -470,7 +689,9 @@ def validate_rx3_result_files(
                 for item in items:
                     name = item.get("name", "raw")
                     lines.append(
-                        f"- `{item['index']}` {name}: `{item['old_value']}` → `{item['new_value']}`"
+                        f"- `{item['index']}` {name}: `{item['old_value']}` → `{item['new_value']}` "
+                        f"(semantic_changed=`{item['semantic_changed']}`, "
+                        f"classification=`{item['classification']}`)"
                     )
             lines.append("")
     lines.extend(

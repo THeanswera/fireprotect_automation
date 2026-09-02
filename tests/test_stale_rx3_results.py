@@ -14,6 +14,8 @@ from fireprotect.rx3.parser import (
     Rx38Document,
     Rx38Record,
     UnsafeRx38WriteError,
+    construction_records,
+    read_rx38,
     read_rx38_document,
     write_rx38,
 )
@@ -24,7 +26,38 @@ from tests.safety_support import (
     safety_context,
     write_template,
 )
-from fireprotect.rx3.safety import GuiExecutionEvidence
+from fireprotect.rx3.safety import GuiExecutionEvidence, rx38_record_fingerprint
+
+
+def _two_record_calculation(
+    tmp_path: Path,
+    *,
+    target_changes: dict[int, str],
+    non_target_changes: dict[int, str] | None = None,
+) -> tuple[Path, Path]:
+    generated = tmp_path / "generated.rx38"
+    calculated = tmp_path / "calculated.rx38"
+    write_template(generated)
+    with generated.open("r", encoding="utf-8", newline="") as stream:
+        rows = list(csv.reader(stream, delimiter=";"))
+    first = next(row for row in rows if row and row[0] == "Tconstr")
+    second = first.copy()
+    second[1] = "K2"
+    second[3] = "K2"
+    rows.append(second)
+    with generated.open("w", encoding="utf-8", newline="") as stream:
+        csv.writer(stream, delimiter=";", lineterminator="\r\n").writerows(rows)
+    changed_rows = [row.copy() for row in rows]
+    records = [row for row in changed_rows if row and row[0] == "Tconstr"]
+    for index, value in target_changes.items():
+        records[0][index] = value
+    for index, value in (non_target_changes or {}).items():
+        records[1][index] = value
+    with calculated.open("w", encoding="utf-8", newline="") as stream:
+        csv.writer(stream, delimiter=";", lineterminator="\r\n").writerows(
+            changed_rows
+        )
+    return generated, calculated
 
 
 def test_template_results_are_stale_and_excluded_from_rx3_input(tmp_path: Path):
@@ -48,7 +81,9 @@ def test_byte_identical_calculated_file_does_not_prove_gui_run(tmp_path: Path):
     calculated = tmp_path / "calculated.rx38"
     write_template(generated)
     calculated.write_bytes(generated.read_bytes())
-    report = validate_rx3_result_files(generated, calculated)
+    report = validate_rx3_result_files(
+        generated, calculated, target_record_positions=(1,)
+    )
     assert report.data["byte_identical"] is True
     assert report.data["status"] == "RX3_RECALCULATION_NOT_PROVEN"
     assert report.data["gui_recalculation_verified"] is False
@@ -66,7 +101,9 @@ def test_unrelated_file_change_does_not_refresh_stale_results(tmp_path: Path):
         writer = csv.writer(stream, delimiter=";", lineterminator="\r\n")
         writer.writerows(rows)
 
-    report = validate_rx3_result_files(generated, calculated)
+    report = validate_rx3_result_files(
+        generated, calculated, target_record_positions=(1,)
+    )
     assert report.data["byte_identical"] is False
     assert report.data["expected_result_fields_changed"] is False
     assert report.data["status"] == "RX3_RECALCULATION_NOT_PROVEN"
@@ -89,9 +126,178 @@ def test_formatting_only_result_changes_do_not_refresh_stale_values(tmp_path: Pa
         calculated,
         gui_execution_evidence=GuiExecutionEvidence.ENGINEER_CONFIRMED,
         evidence_reference="controlled evidence",
+        target_record_positions=(1,),
     )
     assert report.data["rx3_recalculation_proven"] is False
     assert report.data["status"] == "RX3_RECALCULATION_NOT_PROVEN"
+
+
+def test_single_target_recalculation_accepts_unchanged_non_target(tmp_path: Path):
+    generated, calculated = _two_record_calculation(
+        tmp_path,
+        target_changes={44: "675", 54: "18"},
+    )
+
+    report = validate_rx3_result_files(
+        generated,
+        calculated,
+        target_record_positions=(1,),
+        gui_execution_evidence=GuiExecutionEvidence.ENGINEER_CONFIRMED,
+        evidence_reference="controlled evidence",
+    )
+
+    assert report.data["status"] == "RX3_RESULT_ANALYSED"
+    assert report.data["rx3_recalculation_proven"] is True
+    assert report.data["target_result_fields_changed"] == {1: True}
+    assert report.data["non_target_records_text_unchanged"] is True
+    assert report.data["non_target_records_semantically_unchanged"] is True
+    assert report.data["records"][1]["text_changed"] is False
+
+
+def test_changed_non_target_record_fails_closed(tmp_path: Path):
+    generated, calculated = _two_record_calculation(
+        tmp_path,
+        target_changes={44: "675", 54: "18"},
+        non_target_changes={44: "676"},
+    )
+
+    report = validate_rx3_result_files(
+        generated,
+        calculated,
+        target_record_positions=(1,),
+        gui_execution_evidence=GuiExecutionEvidence.ENGINEER_CONFIRMED,
+        evidence_reference="controlled evidence",
+    )
+
+    assert report.data["status"] == "RX3_UNEXPECTED_NON_TARGET_CHANGE"
+    assert report.data["rx3_recalculation_proven"] is False
+    assert report.data["gui_recalculation_verified"] is False
+    assert report.data["non_target_records_text_unchanged"] is False
+    assert report.data["unexpected_non_target_changes"][0]["position"] == 2
+
+
+def test_confirmed_numeric_token_normalization_preserves_raw_diff(tmp_path: Path):
+    generated, calculated = _two_record_calculation(
+        tmp_path,
+        target_changes={44: "675", 49: "30", 54: "18"},
+    )
+    with generated.open("r", encoding="utf-8", newline="") as stream:
+        rows = list(csv.reader(stream, delimiter=";"))
+    first = next(row for row in rows if row and row[0] == "Tconstr")
+    first[49] = "30,00"
+    with generated.open("w", encoding="utf-8", newline="") as stream:
+        csv.writer(stream, delimiter=";", lineterminator="\r\n").writerows(rows)
+
+    report = validate_rx3_result_files(
+        generated, calculated, target_record_positions=(1,)
+    )
+    change = next(
+        item
+        for item in report.data["records"][0]["confirmed_changes"]
+        if item["index"] == 49
+    )
+    assert change["old_token"] == "30,00"
+    assert change["new_token"] == "30"
+    assert change["text_changed"] is True
+    assert change["semantic_changed"] is False
+    assert change["classification"] == "RX3_TOKEN_NORMALIZATION"
+
+
+def test_unknown_numeric_tokens_are_not_treated_as_semantically_equal(
+    tmp_path: Path,
+):
+    generated, calculated = _two_record_calculation(
+        tmp_path,
+        target_changes={44: "675", 53: "0,500", 54: "18"},
+    )
+    with generated.open("r", encoding="utf-8", newline="") as stream:
+        rows = list(csv.reader(stream, delimiter=";"))
+    first = next(row for row in rows if row and row[0] == "Tconstr")
+    first[53] = "0,5"
+    with generated.open("w", encoding="utf-8", newline="") as stream:
+        csv.writer(stream, delimiter=";", lineterminator="\r\n").writerows(rows)
+
+    report = validate_rx3_result_files(
+        generated, calculated, target_record_positions=(1,)
+    )
+    change = report.data["records"][0]["unknown_changes"][0]
+    assert change["text_changed"] is True
+    assert change["semantic_changed"] is None
+    assert change["classification"] == "RAW_TOKEN_CHANGE_SEMANTICS_UNVERIFIED"
+
+
+def test_confirmed_numeric_field_with_ambiguous_units_is_conservative(
+    tmp_path: Path,
+):
+    generated, calculated = _two_record_calculation(
+        tmp_path,
+        target_changes={35: "1", 44: "675", 54: "18"},
+    )
+    with generated.open("r", encoding="utf-8", newline="") as stream:
+        rows = list(csv.reader(stream, delimiter=";"))
+    first = next(row for row in rows if row and row[0] == "Tconstr")
+    first[35] = "1,0"
+    with generated.open("w", encoding="utf-8", newline="") as stream:
+        csv.writer(stream, delimiter=";", lineterminator="\r\n").writerows(rows)
+
+    report = validate_rx3_result_files(
+        generated, calculated, target_record_positions=(1,)
+    )
+    change = next(
+        item
+        for item in report.data["records"][0]["confirmed_changes"]
+        if item["index"] == 35
+    )
+    assert change["semantic_changed"] is None
+    assert change["classification"] == (
+        "CONFIRMED_NUMERIC_EQUIVALENCE_NOT_APPLICABLE"
+    )
+
+
+def test_validation_requires_an_explicit_target(tmp_path: Path):
+    generated = tmp_path / "generated.rx38"
+    calculated = tmp_path / "calculated.rx38"
+    write_template(generated)
+    calculated.write_bytes(generated.read_bytes())
+
+    with pytest.raises(Rx3GuiValidationError, match="explicit target"):
+        validate_rx3_result_files(generated, calculated)
+
+
+def test_target_mark_must_resolve_uniquely(tmp_path: Path):
+    generated, calculated = _two_record_calculation(
+        tmp_path,
+        target_changes={44: "675", 54: "18"},
+    )
+    with generated.open("r", encoding="utf-8", newline="") as stream:
+        rows = list(csv.reader(stream, delimiter=";"))
+    records = [row for row in rows if row and row[0] == "Tconstr"]
+    records[1][1] = records[0][1]
+    records[1][3] = records[0][3]
+    with generated.open("w", encoding="utf-8", newline="") as stream:
+        csv.writer(stream, delimiter=";", lineterminator="\r\n").writerows(rows)
+
+    with pytest.raises(Rx3GuiValidationError, match="exactly one"):
+        validate_rx3_result_files(generated, calculated, target_marks=("K1",))
+
+
+def test_exact_before_fingerprint_resolves_target(tmp_path: Path):
+    generated, calculated = _two_record_calculation(
+        tmp_path,
+        target_changes={44: "675", 54: "18"},
+    )
+    target = construction_records(read_rx38(generated))[0]
+
+    report = validate_rx3_result_files(
+        generated,
+        calculated,
+        target_record_fingerprints=(rx38_record_fingerprint(target),),
+    )
+
+    assert report.data["target_resolution"]["strategy"] == (
+        "BEFORE_RECORD_FINGERPRINT"
+    )
+    assert report.data["target_resolution"]["resolved_positions"] == [1]
 
 
 def test_production_rejects_any_non_result_rx38_change(tmp_path: Path):
@@ -113,6 +319,7 @@ def test_production_rejects_any_non_result_rx38_change(tmp_path: Path):
         gui_execution_evidence=GuiExecutionEvidence.ENGINEER_CONFIRMED,
         evidence_reference="controlled evidence",
         mode=ExecutionMode.PRODUCTION,
+        target_record_positions=(1,),
     )
     assert report.data["gui_recalculation_verified"] is False
     assert report.data["status"] == "RX3_PRODUCTION_INPUTS_CHANGED"
@@ -135,6 +342,7 @@ def test_gui_evidence_requires_a_reference(tmp_path: Path):
         generated,
         calculated,
         gui_execution_evidence=GuiExecutionEvidence.SCREENSHOT_REFERENCED,
+        target_record_positions=(1,),
     )
     assert report.data["gui_recalculation_verified"] is False
 
@@ -152,6 +360,7 @@ def test_validation_reports_cannot_overwrite_rx38_inputs(tmp_path: Path):
             calculated,
             json_report=generated,
             overwrite=True,
+            target_record_positions=(1,),
         )
     assert generated.read_bytes() == before
 

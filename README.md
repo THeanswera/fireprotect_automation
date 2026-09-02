@@ -83,10 +83,33 @@ python -m fireprotect.cli validate-rx38 FILE.rx38
 python -m fireprotect.cli lookup-profile RX3_DB.rxdb "30К1" --standard "СТО АСЧМ 20-93"
 python -m fireprotect.cli rx38-create INPUT.json TEMPLATE.rx38 OUTPUT.rx38 --template-mark "К1" --mode VALIDATION --safety-context safety.json --report report.json
 python -m fireprotect.cli prepare-rx3-validation INPUT.json TEMPLATE.rx38 --output-dir validation/rx3_gui_test --template-mark "К1" --mode VALIDATION --safety-context safety.json
-python -m fireprotect.cli validate-rx3-result generated.rx38 calculated.rx38 --gui-evidence ENGINEER_CONFIRMED --evidence-reference RX3-EXP-01
-python -m fireprotect.cli rx38-experiment-diff BASE.rx38 CHANGED.rx38 --experiment-id RX3-EXP-01
+python -m fireprotect.cli validate-rx3-result generated.rx38 calculated.rx38 --target-fingerprint BEFORE_TCONSTR_SHA256 --gui-evidence ENGINEER_CONFIRMED --evidence-reference RX3-EXP-01
+python -m fireprotect.cli rx38-experiment-diff BASE.rx38 CHANGED.rx38 --experiment-id RX3-EXP-01 --target-position 1
 python -m fireprotect.cli pipeline pipeline.json
 ```
+
+Phase A of the controlled pure-axial experiment is deliberately non-generating:
+
+```powershell
+python -m fireprotect.cli prepare-rx3-phase-a `
+  --templates-dir rx3 `
+  --rx3-db rx3/rx3.rxdb `
+  --output-dir validation/RX3-EXP-01_A_TEMPLATE_OBSERVATION `
+  --experiment-id RX3-EXP-01 `
+  --project-element-id K1 `
+  --heating-sides 4
+```
+
+The command ranks every local `Tconstr`, copies the selected RX38 byte-for-byte,
+and creates summaries, an `UNVERIFIED` heating-evidence template, a draft
+`ProjectElement`, and `CHECKLIST_A.md`. It never creates `generated.rx38`.
+
+Post-calc validation always requires an explicit target. Prefer the exact
+BEFORE-record fingerprint or a 1-based `Tconstr` position; `--target-mark` is
+accepted only when the mark resolves uniquely. Required result changes are
+checked only on targets, while any text change in a non-target record fails
+closed. For confirmed numeric fields with unambiguous units the audit preserves
+the raw token change and separately classifies `Decimal`-equivalent normalization.
 
 JSON для `rx38-create` обязан явно перечислять все поля `ProjectElement`:
 физические величины задаются объектами `{"value": "...", "unit": "..."}`,

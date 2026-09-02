@@ -895,6 +895,8 @@ def run_pipeline(config_path: str | Path) -> PipelineRunResult:
                 "rx3_generated": {
                     "path": str(generated),
                     "sha256": _hash(generated),
+                    "target_record_position": creation_evidence.target_record_position,
+                    "target_record_fingerprint": creation_evidence.output_record_sha256,
                     "rx3_input": rx3_input_audit,
                     "changed_fields": bundle_diff_audit["changed_fields"],
                 },
@@ -1038,6 +1040,9 @@ def run_pipeline(config_path: str | Path) -> PipelineRunResult:
                 gui_execution_evidence=gui_evidence,
                 evidence_reference=element_audit["gui_evidence_reference"],
                 mode=safety_context.mode,
+                target_record_positions=(
+                    element_audit["rx3_generated"]["target_record_position"],
+                ),
             )
             validation_statuses.append(validation.data["status"])
             rx3_validation_reports.append(validation)

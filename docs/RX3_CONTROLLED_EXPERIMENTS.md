@@ -10,6 +10,7 @@
 ```powershell
 python -m fireprotect.cli rx38-experiment-diff BASE.rx38 CHANGED.rx38 `
   --experiment-id RX3-EXP-XX `
+  --target-fingerprint BEFORE_TCONSTR_SHA256 `
   --json-report RX3-EXP-XX.json `
   --markdown-report RX3-EXP-XX.md
 ```
@@ -17,6 +18,18 @@ python -m fireprotect.cli rx38-experiment-diff BASE.rx38 CHANGED.rx38 `
 Кандидаты индексов остаются `PROBABLE`, пока совокупность независимых опытов,
 GUI/help/report/database evidence и review не докажет однозначную семантику.
 Совместное изменение не доказывает причинность.
+
+Каждый post-calc запуск обязан явно назвать целевые `Tconstr`. Предпочтительны
+точный fingerprint BEFORE-записи или её 1-based position. Марка допустима
+только при уникальном разрешении; неоднозначность останавливает проверку.
+Поля 44/54 должны материально измениться у каждой цели. Любое текстовое
+изменение нецелевой записи даёт `RX3_UNEXPECTED_NON_TARGET_CHANGE`.
+
+Для CONFIRMED numeric fields отчёт хранит одновременно исходные токены и
+результат сравнения через `Decimal`. Например, `30,00 → 30` имеет
+`text_changed=true`, `semantic_changed=false` и классификацию
+`RX3_TOKEN_NORMALIZATION`. Это правило не применяется к PROBABLE, UNKNOWN,
+нечисловым полям или полям с неоднозначными единицами.
 
 ## Матрица
 
@@ -46,7 +59,12 @@ GUI/help/report/database evidence и review не докажет однознач
    нулевых компонента, length, support, effective length, fire regime, R и
    режим critical-temperature calculation.
 3. При любом расхождении остановиться.
-4. Выполнить расчёт и сохранить только как `calculated.rx38`.
-5. Запустить `validate-rx3-result` с фактическим `gui_execution_evidence`.
-6. Сверить fields 44/54, все неожиданные PROBABLE/UNKNOWN изменения и hashes.
-7. Приложить протокол к evidence; не повышать mapping по одному опыту.
+4. Нажать «Рассчитать» и зафиксировать `DIALOG_CALCULATED`; это ещё не означает
+   обновление главной таблицы.
+5. Нажать «Сохранить в таблицу» и зафиксировать `TABLE_UPDATED`.
+6. Выполнить Project Save As только в новый `calculated.rx38` и зафиксировать
+   кандидат `FILE_PERSISTED`.
+7. Запустить `validate-rx3-result` с явной целью и фактическим
+   `gui_execution_evidence`.
+8. Сверить fields 44/54, все неожиданные PROBABLE/UNKNOWN изменения и hashes.
+9. Приложить протокол к evidence; не повышать mapping по одному опыту.

@@ -1,4 +1,5 @@
 import csv
+from dataclasses import replace
 from datetime import date, datetime, timezone
 from decimal import Decimal
 from pathlib import Path
@@ -16,6 +17,7 @@ from fireprotect.model import (
 )
 from fireprotect.rx3.parser import construction_records, read_rx38
 from fireprotect.rx3.project_adapter import (
+    DerivedFieldWritePolicy,
     Rx38EngineeringConflictError,
     Rx38ProjectAdapterError,
     Rx38TemplateMismatchError,
@@ -30,6 +32,7 @@ from fireprotect.rx3.safety import (
     Rx3TemplateEvidence,
     Rx3TemplateUseCase,
     UnverifiedRx38ActionMappingError,
+    rx38_record_fingerprint,
 )
 
 
@@ -159,13 +162,142 @@ def test_project_element_to_rx38_safe_template_round_trip(template_rx38, tmp_pat
     assert any("STALE_TEMPLATE_RESULT" in warning for warning in report.warnings)
     changed = {change.index for change in report.changed_fields}
     assert {1, 3, 14, 15, 24, 25, 49, 51, 66, 67}.issubset(changed)
+    assert 22 not in changed
+    assert 23 not in changed
     assert 50 not in changed  # Mx is still unconfirmed and remains verbatim.
 
     original = construction_records(read_rx38(template_rx38))[0]
     result = construction_records(read_rx38(output))[0]
     assert result.fields[50] == original.fields[50] == "0"
+    assert result.fields[23] == original.fields[23] == "160,108303249097"
     assert result.fields[135] == original.fields[135]
     assert len(result.fields) == 200
+
+
+def test_changed_authoritative_input_recomputes_derived_fields(
+    template_rx38, tmp_path
+):
+    output = tmp_path / "changed-perimeter.rx38"
+    report = create_rx38_from_project_element(
+        _element(
+            heated_perimeter=Quantity.of("1600", Unit.MILLIMETER),
+            ptm=Quantity.of("6.925", Unit.MILLIMETER),
+            protected_area=Quantity.of("12.8", Unit.SQUARE_METER),
+        ),
+        template_rx38,
+        output,
+        template_mark="К1",
+        safety_context=_safety_context(),
+    )
+
+    changed = {change.index for change in report.changed_fields}
+    assert {21, 22, 23, 24, 25}.issubset(changed)
+    result = construction_records(read_rx38(output))[0]
+    assert Decimal(result.fields[23].replace(",", ".")) == (
+        Decimal(1000) * Decimal(1600) / Decimal(11080)
+    )
+
+
+def test_axial_force_preserves_declared_decimal_scale(template_rx38, tmp_path):
+    output = tmp_path / "n30.rx38"
+    create_rx38_from_project_element(
+        _element(N=Quantity.of("30.00", Unit.KILONEWTON)),
+        template_rx38,
+        output,
+        template_mark="К1",
+        safety_context=_safety_context(),
+    )
+
+    result = construction_records(read_rx38(output))[0]
+    assert result.fields[49] == "30,00"
+
+
+def test_verified_template_fingerprint_resolves_duplicate_mark(
+    template_rx38, tmp_path
+):
+    duplicate_template = tmp_path / "duplicate-mark.rx38"
+    with template_rx38.open("r", encoding="utf-8", newline="") as stream:
+        rows = list(csv.reader(stream, delimiter=";"))
+    duplicate = rows[1].copy()
+    duplicate[2] = "different opaque record"
+    rows.append(duplicate)
+    with duplicate_template.open("w", encoding="utf-8", newline="") as stream:
+        csv.writer(stream, delimiter=";", lineterminator="\r\n").writerows(rows)
+
+    context = _safety_context()
+    context = replace(
+        context,
+        template_evidence=replace(
+            context.template_evidence,
+            template_record_sha256=rx38_record_fingerprint(
+                construction_records(read_rx38(template_rx38))[0]
+            ),
+        ),
+    )
+    report = create_rx38_from_project_element(
+        _element(N=Quantity.of("25.00", Unit.KILONEWTON)),
+        duplicate_template,
+        tmp_path / "generated.rx38",
+        template_mark="К1",
+        safety_context=context,
+    )
+
+    assert report.target_record_position == 1
+    assert report.template_record_sha256 == (
+        context.template_evidence.template_record_sha256
+    )
+
+
+def test_explicit_verified_policy_recomputes_compatible_derived_fields(
+    template_rx38, tmp_path
+):
+    output = tmp_path / "recomputed.rx38"
+    report = create_rx38_from_project_element(
+        _element(),
+        template_rx38,
+        output,
+        template_mark="К1",
+        safety_context=_safety_context(),
+        derived_field_policy=DerivedFieldWritePolicy.RECOMPUTE_VERIFIED,
+    )
+
+    changed = {change.index for change in report.changed_fields}
+    assert 23 in changed
+    result = construction_records(read_rx38(output))[0]
+    assert Decimal(result.fields[23].replace(",", ".")) == (
+        Decimal(1000) * Decimal(1774) / Decimal(11080)
+    )
+
+
+def test_incompatible_derived_field_requires_explicit_recomputation(
+    template_rx38, tmp_path
+):
+    incompatible_template = tmp_path / "incompatible-template.rx38"
+    with template_rx38.open("r", encoding="utf-8", newline="") as stream:
+        rows = list(csv.reader(stream, delimiter=";"))
+    rows[1][23] = "999"
+    with incompatible_template.open("w", encoding="utf-8", newline="") as stream:
+        writer = csv.writer(stream, delimiter=";", lineterminator="\r\n")
+        writer.writerows(rows)
+
+    with pytest.raises(Rx38EngineeringConflictError, match="Derived field 23"):
+        create_rx38_from_project_element(
+            _element(),
+            incompatible_template,
+            tmp_path / "blocked.rx38",
+            template_mark="К1",
+            safety_context=_safety_context(),
+        )
+
+    report = create_rx38_from_project_element(
+        _element(),
+        incompatible_template,
+        tmp_path / "explicit.rx38",
+        template_mark="К1",
+        safety_context=_safety_context(),
+        derived_field_policy=DerivedFieldWritePolicy.RECOMPUTE_VERIFIED,
+    )
+    assert 23 in {change.index for change in report.changed_fields}
 
 
 def test_profile_mismatch_is_blocked(template_rx38, tmp_path):

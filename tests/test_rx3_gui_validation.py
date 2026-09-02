@@ -195,10 +195,15 @@ def test_prepare_bundle_and_classify_manual_rx3_changes(tmp_path: Path):
     instructions = bundle.instructions.read_text(encoding="utf-8")
     assert "calculated.rx38" in instructions
     assert "validate-rx3-result generated.rx38 calculated.rx38" in instructions
+    assert bundle.creation.output_record_sha256 in instructions
 
     calculated = bundle_dir / "calculated.rx38"
     _edit_rx38(bundle.generated, calculated)
-    report = validate_rx3_result_files(bundle.generated, calculated)
+    report = validate_rx3_result_files(
+        bundle.generated,
+        calculated,
+        target_record_positions=(1,),
+    )
 
     record = report.data["records"][0]
     assert {item["index"] for item in record["confirmed_changes"]} == {44, 54}
@@ -209,6 +214,7 @@ def test_prepare_bundle_and_classify_manual_rx3_changes(tmp_path: Path):
         "value": "675",
         "unit": "degC",
     }
+    assert report.data["target_resolution"]["resolved_positions"] == [1]
 
 
 def test_validation_artifacts_are_never_overwritten_implicitly(tmp_path: Path):

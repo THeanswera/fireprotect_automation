@@ -867,7 +867,7 @@ def build_rx3_input(
                 "component": "N",
                 "source": {"value": str(n.value), "unit": n.unit.value},
                 "target": {"value": str(n.value), "unit": n.unit.value},
-                "rule": "controlled_experiment_identity_not_verified",
+                "rule": "RX3_CONTROLLED_INPUT_CONVENTION",
                 "status": "UNVERIFIED_VALIDATION_EXCEPTION",
             },
         )
