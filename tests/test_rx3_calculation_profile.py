@@ -23,7 +23,7 @@ def test_unknown_fields_are_preserved_as_an_opaque_fingerprint():
     second = evaluate_calculation_profile(
         make_record(**{"135": "opaque"}), {82: "25"}, template_evidence()
     )
-    assert first.unknown_preserved_count == second.unknown_preserved_count == 131
+    assert first.unknown_preserved_count == second.unknown_preserved_count == 130
     assert first.unknown_fingerprint != second.unknown_fingerprint
     assert first.verified
 
@@ -38,7 +38,14 @@ def test_profile_evidence_must_cover_calculation_settings():
 
 def test_schema_counts_and_write_policies_remain_explicit():
     counts = Counter(field_spec(index).confidence for index in range(200))
-    assert counts == {"confirmed": 56, "probable": 13, "unknown": 131}
+    assert counts == {"confirmed": 56, "probable": 14, "unknown": 130}
+    assert field_spec(53).name == "beta_tem_modulus_reduction"
+    assert field_spec(53).write_policy is WritePolicy.FORBIDDEN
+    assert field_spec(53).controlled_experiment_ids == (
+        "RX3-EXP-01",
+        "RX3-EXP-01C",
+        "RX3-EXP-01D",
+    )
     assert field_spec(44).write_policy is WritePolicy.RESULT_ONLY
     assert field_spec(54).write_policy is WritePolicy.RESULT_ONLY
     assert field_spec(50).write_policy is WritePolicy.FORBIDDEN

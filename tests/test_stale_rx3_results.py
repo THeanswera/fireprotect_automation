@@ -208,12 +208,12 @@ def test_unknown_numeric_tokens_are_not_treated_as_semantically_equal(
 ):
     generated, calculated = _two_record_calculation(
         tmp_path,
-        target_changes={44: "675", 53: "0,500", 54: "18"},
+        target_changes={44: "675", 54: "18", 77: "0,500"},
     )
     with generated.open("r", encoding="utf-8", newline="") as stream:
         rows = list(csv.reader(stream, delimiter=";"))
     first = next(row for row in rows if row and row[0] == "Tconstr")
-    first[53] = "0,5"
+    first[77] = "0,5"
     with generated.open("w", encoding="utf-8", newline="") as stream:
         csv.writer(stream, delimiter=";", lineterminator="\r\n").writerows(rows)
 

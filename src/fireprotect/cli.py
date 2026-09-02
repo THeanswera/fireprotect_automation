@@ -12,7 +12,11 @@ from .rx3.gui_validation import (
     prepare_rx3_validation,
     validate_rx3_result_files,
 )
-from .rx3.experiment import prepare_rx3_experiment_phase_a
+from .rx3.experiment import (
+    load_bending_report_references,
+    prepare_rx3_bending_phase_a,
+    prepare_rx3_experiment_phase_a,
+)
 from .rx3.parser import Rx38Construction, construction_records, read_rx38
 from .rx3.profiles import ProfileRepository, list_tables
 from .rx3.safety import GuiExecutionEvidence, Rx3SafetyContext
@@ -161,6 +165,37 @@ def cmd_prepare_rx3_phase_a(args: argparse.Namespace) -> None:
     )
 
 
+def cmd_prepare_rx3_bending_phase_a(args: argparse.Namespace) -> None:
+    templates = sorted(args.templates_dir.rglob("*.rx38"))
+    references = load_bending_report_references(args.report_values)
+    bundle = prepare_rx3_bending_phase_a(
+        templates,
+        args.rx3_db,
+        references,
+        args.output_dir,
+        experiment_id=args.experiment_id,
+    )
+    print(
+        json.dumps(
+            {
+                "directory": str(bundle.directory),
+                "selected_source": str(bundle.selected_source),
+                "selected_mark": bundle.selected_mark,
+                "template": str(bundle.template),
+                "template_summary_json": str(bundle.template_summary_json),
+                "selection_report": str(bundle.selection_report),
+                "expected_report_values": str(bundle.expected_report_values),
+                "checklist": str(bundle.checklist),
+                "gui_instructions": str(bundle.gui_instructions),
+                "report_references": str(bundle.report_references),
+                "status": "WAITING_FOR_BENDING_TEMPLATE_GUI_OBSERVATION",
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+    )
+
+
 def cmd_validate_rx3_result(args: argparse.Namespace) -> None:
     report = validate_rx3_result_files(
         args.before,
@@ -287,6 +322,21 @@ def main() -> None:
     command.add_argument("--project-element-id", default="K1")
     command.add_argument("--heating-sides", type=int, default=4)
     command.set_defaults(func=cmd_prepare_rx3_phase_a)
+
+    command = subparsers.add_parser(
+        "prepare-rx3-bending-phase-a",
+        help="Rank bending templates and prepare a non-generating GUI observation bundle",
+    )
+    command.add_argument("--templates-dir", type=Path, required=True)
+    command.add_argument("--rx3-db", type=Path, required=True)
+    command.add_argument("--report-values", type=Path, required=True)
+    command.add_argument(
+        "--output-dir",
+        type=Path,
+        default=Path("validation/RX3-EXP-02_A_BENDING_OBSERVATION"),
+    )
+    command.add_argument("--experiment-id", default="RX3-EXP-02")
+    command.set_defaults(func=cmd_prepare_rx3_bending_phase_a)
 
     command = subparsers.add_parser(
         "validate-rx3-result",

@@ -34,17 +34,18 @@ GUI/help/report/database evidence и review не докажет однознач
 ## Матрица
 
 1. `RX3-EXP-01`: baseline pure axial.
-2. `RX3-EXP-02`: изменить только N.
-3. `RX3-EXP-03`: изменить только Mx.
-4. `RX3-EXP-04`: изменить только My.
-5. `RX3-EXP-05`: изменить только Qx.
-6. `RX3-EXP-06`: изменить только Qy.
-7. `RX3-EXP-07`: изменить только support condition.
-8. `RX3-EXP-08`: изменить только effective-length factor.
-9. `RX3-EXP-09`: изменить только fire regime.
-10. `RX3-EXP-10`: изменить только heating exposure.
-11. `RX3-EXP-11`: изменить только steel grade с согласованными свойствами.
-12. `RX3-EXP-12`: изменить только required R.
+2. `RX3-EXP-01C`: N=30 controlled axial perturbation.
+3. `RX3-EXP-01D`: N=25 bidirectional controlled axial perturbation.
+4. `RX3-EXP-02`: single-plane bending family; Phase A observation before any perturbation.
+5. `RX3-EXP-03`: изменить только My.
+6. `RX3-EXP-04`: изменить только Qx.
+7. `RX3-EXP-05`: изменить только Qy.
+8. `RX3-EXP-06`: изменить только support condition.
+9. `RX3-EXP-07`: изменить только effective-length factor.
+10. `RX3-EXP-08`: изменить только fire regime.
+11. `RX3-EXP-09`: изменить только heating exposure.
+12. `RX3-EXP-10`: изменить только steel grade с согласованными свойствами.
+13. `RX3-EXP-11`: изменить только required R.
 
 ## Первый реальный опыт
 
@@ -68,3 +69,33 @@ GUI/help/report/database evidence и review не докажет однознач
    `gui_execution_evidence`.
 8. Сверить fields 44/54, все неожиданные PROBABLE/UNKNOWN изменения и hashes.
 9. Приложить протокол к evidence; не повышать mapping по одному опыту.
+
+## Закрытие осевого MVP-пути
+
+`RX3-EXP-01C` и `RX3-EXP-01D` дали повторяемый двунаправленный отклик при
+изменении только field49. Для этого одного верифицированного axial-
+шаблона подтверждена цепочка parser → safe writer → GUI N → Calculate →
+Save to table → calculated RX38 → target-aware validator.
+
+`AXIAL_N_PATH_MVP_STATUS = VALIDATED` имеет только этот узкий смысл. Он не
+подтверждает LIRA sign convention, произвольные сжатые элементы,
+другие стали/закрепления/обогрев или нормативную эквивалентность. Чистые
+N-возмущения больше не планируются.
+
+Field53 по трём состояниям равен GUI `beta_tem` после округления, а
+встроенная справка связывает `beta_tem` с коэффициентом снижения E при
+температуре. Поэтому field53 повышен только до `PROBABLE`. Field76 также
+остаётся `PROBABLE` и не переименовывается, пока не проверены combined-stress
+случаи. Field77 остаётся `UNKNOWN`.
+
+Встроенная справка называет `beta_tem`, но локальной полной таблицы/
+интерполяции E(T) в repository evidence нет. `theta_cr_beta` не обнаружена
+отдельным RX38-токеном; формула не реализуется.
+
+## RX3-EXP-02 Phase A — bending observation
+
+`prepare-rx3-bending-phase-a` ранжирует только шаблоны с явным
+одноплоскостным изгибом, N=0, ненулевым probable field50, точным
+`rx3.rxdb` geometry match и явными внешними Mx/Q references. Если Q ненулевая,
+опыт не называется pure Mx. Phase A копирует шаблон и готовит только
+отчёт, checklist и GUI-инструкции; altered RX38 не создаётся.

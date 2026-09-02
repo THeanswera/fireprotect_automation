@@ -104,6 +104,38 @@ The command ranks every local `Tconstr`, copies the selected RX38 byte-for-byte,
 and creates summaries, an `UNVERIFIED` heating-evidence template, a draft
 `ProjectElement`, and `CHECKLIST_A.md`. It never creates `generated.rx38`.
 
+The next bending-family checkpoint is also observation-only. It requires an
+explicit JSON file binding existing GUI/report values to an exact source file
+and mark; the command uses those values for ranking without promoting RX38
+force mappings:
+
+```json
+{
+  "evidence_reference": "existing RX3 GUI/report evidence",
+  "candidates": [
+    {
+      "source_file": "rx3/example.rx38",
+      "mark": "B1",
+      "Mx_knm": "8.89",
+      "Q_kn": "2.32"
+    }
+  ]
+}
+```
+
+```powershell
+python -m fireprotect.cli prepare-rx3-bending-phase-a `
+  --templates-dir rx3 `
+  --rx3-db rx3/rx3.rxdb `
+  --report-values BENDING_REPORT_VALUES.json `
+  --output-dir validation/RX3-EXP-02_A_BENDING_OBSERVATION
+```
+
+This command copies the selected template and creates a candidate comparison,
+expected-value report, checklist, and GUI instructions. It never creates an
+altered RX38 and never starts RX3 calculation. A non-zero Q reference is
+reported as a confounder, so the observation is not labelled pure Mx.
+
 Post-calc validation always requires an explicit target. Prefer the exact
 BEFORE-record fingerprint or a 1-based `Tconstr` position; `--target-mark` is
 accepted only when the mark resolves uniquely. Required result changes are

@@ -1,19 +1,22 @@
 # RX38 Tconstr schema
 
-Версия карты: 2026-08-25. Корпус: 4 уникальных RX38-проекта, 46 конструкций; каждый `Tconstr` содержит ровно 200 полей (0–199). Индексы `unknown` не интерпретируются и сохраняются verbatim.
+Версия карты: 2026-09-02. Корпус: 4 уникальных RX38-проекта, 46 конструкций; каждый `Tconstr` содержит ровно 200 полей (0–199). Индексы `unknown` не интерпретируются и сохраняются verbatim.
 
 ## Уровень доказанности
 
 - `confirmed`: 56
-- `probable`: 13
-- `unknown`: 131
+- `probable`: 14
+- `unknown`: 130
 
 `probable` не входит в безопасный writable-набор. Semantic confidence теперь
 отделён от write safety. `WritePolicy` имеет значения `SAFE_DIRECT`,
 `SAFE_WITH_COMPATIBILITY_CHECK`, `RESULT_ONLY`, `READ_ONLY`, `EXPERIMENTAL` и
 `FORBIDDEN`. UNKNOWN/PROBABLE запрещены; confirmed output fields 44/54 имеют
 `RESULT_ONLY`; field 0 имеет `READ_ONLY`; остальные расчётные inputs требуют
-явной compatibility-проверки. Счётчики confidence не изменились.
+явной compatibility-проверки. Field 53 переведён из `unknown` в
+`probable` после двух двунаправленных осевых возмущений, трёх GUI-
+совпадений и сверки со встроенной справкой RX3; запись по-прежнему
+запрещена.
 
 `FieldSpec` также хранит evidence type/sources, controlled experiment ids,
 corpus count, признаки exact identity/report/database/help match и reviewer
@@ -76,7 +79,7 @@ note. Наличие CONFIRMED-семантики само по себе не д
 | 50 | major_axis_moment_knm | Bending moment about selected major axis | decimal | kN·m | input | conditional | RX38 differential values + RX3 help | probable | — |
 | 51 | effective_length_m | Effective/calculated member length | decimal | m | calculated | yes for steel Tconstr | Exact identity field14×field141 for supported compression records + RX3 report | confirmed | — |
 | 52 | load_level_mu0 | Load level used to determine critical temperature | decimal | 1 | calculated | yes for steel Tconstr | Exact EN 1993-1-2 critical-temperature relation with field44 + RX3 help | confirmed | — |
-| 53 | unknown_053 | Not established | unknown | — | unknown | unknown | No admissible evidence | unknown | Preserved verbatim; do not write through the typed API. |
+| 53 | beta_tem_modulus_reduction | RX3 beta_tem / elastic-modulus reduction coefficient at critical temperature | decimal | 1 | calculated | yes for steel Tconstr | RX3-EXP-01/01C/01D GUI equality + RX3 EN 1993-1-2 help | probable | Three controlled axial states equal GUI beta_tem after display rounding; broader stress-state applicability and a direct exported-report binding remain unverified. |
 | 54 | unprotected_fire_resistance_min | Calculated unprotected fire resistance | decimal | min | output | yes for steel Tconstr | RX38 values + RX3 report | confirmed | — |
 | 55 | required_fire_resistance_min | Required fire resistance R | decimal | min | input | yes for steel Tconstr | RX38 values + RX3 report/help | confirmed | — |
 | 56 | unknown_056 | Not established | unknown | — | unknown | unknown | No admissible evidence | unknown | Preserved verbatim; do not write through the typed API. |
@@ -99,7 +102,7 @@ note. Наличие CONFIRMED-семантики само по себе не д
 | 73 | unknown_073 | Not established | unknown | — | unknown | unknown | No admissible evidence | unknown | Preserved verbatim; do not write through the typed API. |
 | 74 | unknown_074 | Not established | unknown | — | unknown | unknown | No admissible evidence | unknown | Preserved verbatim; do not write through the typed API. |
 | 75 | unknown_075 | Not established | unknown | — | unknown | unknown | No admissible evidence | unknown | Preserved verbatim; do not write through the typed API. |
-| 76 | normal_stress_mpa | Calculated normal stress | decimal | MPa | calculated | yes for steel Tconstr | RX38 values + RX3 report | probable | Position needs a controlled UI export because combined-stress records are not uniquely attributable. |
+| 76 | normal_stress_mpa | Calculated normal stress | decimal | MPa | calculated | yes for steel Tconstr | RX38 values + RX3 report | probable | Three controlled axial states match the GUI stress value, but combined-stress records are not uniquely attributable. |
 | 77 | unknown_077 | Not established | unknown | — | unknown | unknown | No admissible evidence | unknown | Preserved verbatim; do not write through the typed API. |
 | 78 | unknown_078 | Not established | unknown | — | unknown | unknown | No admissible evidence | unknown | Preserved verbatim; do not write through the typed API. |
 | 79 | unknown_079 | Not established | unknown | — | unknown | unknown | No admissible evidence | unknown | Preserved verbatim; do not write through the typed API. |
@@ -233,6 +236,10 @@ note. Наличие CONFIRMED-семантики само по себе не д
 - `field20 × 10⁻⁶ × field14 × field32 = field66`; `field66 × field15 = field67`.
 - Геометрия и Ix/Iy/Wx/Wy сопоставлены с `rx3.rxdb` на совпадающих профилях, включая `30 К1`, `18 Б2`, `160x160x8`.
 - Позиции 35–41, 82–85, 104, 188–189 сопоставлены с именованными атрибутами `rx3.xml` и справкой.
+- Для одного осевого шаблона три состояния N=`25.00/27.85/30.00 kN`
+  дают двунаправленный GUI-отклик fields 44, 52, 53, 54, 76 и 77.
+  Fields 44/52/54 сохраняют `confirmed`; field53 и field76 остаются
+  `probable`; field77 остаётся `unknown`.
 
 ## Что пока не доказано
 
@@ -243,6 +250,11 @@ Mappings Mx/My/Qx/Qy остаются неподтверждёнными. Field 
 значение любого из четырёх компонентов блокирует генерацию до записи файла.
 Field 50=0 не доказывает, что шаблон осевой: нужен отдельный `AXIAL_ONLY`
 evidence для всего calculation profile.
+
+Field77 в трёх осевых состояниях точно пропорционален N с постоянным
+коэффициентом около `3609.86830159046` для этого профиля/длины/
+закрепления. Это только математическая гипотеза: физическое назначение и
+единицы не доказаны.
 
 Fields 44 и 54 могут физически сохранять значения старого шаблона, но они
 помечаются `STALE_TEMPLATE_RESULT`, исключены из `Rx3Input` и принимаются
