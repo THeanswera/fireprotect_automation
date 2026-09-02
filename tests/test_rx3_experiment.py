@@ -228,7 +228,12 @@ def _q3_previous_evidence(
     return directory
 
 
-def _complete_q3_observation(bundle_directory: Path) -> Path:
+def _complete_q3_observation(
+    bundle_directory: Path,
+    *,
+    beta_tem: str | None = None,
+    beta_related_theta_c: str | None = None,
+) -> Path:
     template = bundle_directory / "POSTCALC_OBSERVATION_TEMPLATE.json"
     payload = json.loads(template.read_text(encoding="utf-8"))
     payload["result"] = "PASS"
@@ -238,8 +243,8 @@ def _complete_q3_observation(bundle_directory: Path) -> Path:
             "M_utilisation": "0.433",
             "Q_utilisation": "0.036",
             "governing_gamma_tem": "0.433",
-            "beta_tem": "0.000",
-            "beta_related_theta_C": "1200",
+            "beta_tem": beta_tem,
+            "beta_related_theta_C": beta_related_theta_c,
             "governing_theta_cr_C": "542.34",
             "R0_min": "7.62",
             "displayed_stress_load_MPa": "105.99",
@@ -648,6 +653,67 @@ def test_bending_q3_postcalc_validator_classifies_token_normalization(
     )
     assert report.data["schema_mapping_promoted"] is False
     assert report.data["production_write_allowed"] is False
+    assert report.data["gui_observation"]["values"]["beta_tem"] is None
+    assert report.data["gui_observation"]["values"]["beta_related_theta_C"] is None
+
+
+def test_bending_q3_postcalc_accepts_finite_optional_beta_values(
+    tmp_path: Path,
+) -> None:
+    previous = _q3_previous_evidence(tmp_path)
+    bundle = prepare_rx3_bending_q3_validation(previous, tmp_path / "q3")
+    records = [
+        list(record.raw_tokens)
+        for record in construction_records(read_rx38(bundle.generated))
+    ]
+    records[-1][92] = "3"
+    calculated = bundle.directory / "calculated_Q3.rx38"
+    _rx38(calculated, records)
+    observation = _complete_q3_observation(
+        bundle.directory,
+        beta_tem="0.000",
+        beta_related_theta_c="1200",
+    )
+
+    report = validate_rx3_bending_q3_result(
+        bundle.directory, calculated, observation
+    )
+
+    assert report.data["gui_observation"]["values"]["beta_tem"] == "0.000"
+    assert report.data["gui_observation"]["values"]["beta_related_theta_C"] == (
+        "1200"
+    )
+
+
+@pytest.mark.parametrize(
+    ("beta_tem", "beta_related_theta_c", "field"),
+    [
+        ("not-a-number", None, "beta_tem"),
+        (None, "Infinity", "beta_related_theta_C"),
+    ],
+)
+def test_bending_q3_postcalc_rejects_malformed_optional_beta_values(
+    tmp_path: Path,
+    beta_tem: str | None,
+    beta_related_theta_c: str | None,
+    field: str,
+) -> None:
+    previous = _q3_previous_evidence(tmp_path)
+    bundle = prepare_rx3_bending_q3_validation(previous, tmp_path / "q3")
+    records = [
+        list(record.raw_tokens)
+        for record in construction_records(read_rx38(bundle.generated))
+    ]
+    calculated = bundle.directory / "calculated_Q3.rx38"
+    _rx38(calculated, records)
+    observation = _complete_q3_observation(
+        bundle.directory,
+        beta_tem=beta_tem,
+        beta_related_theta_c=beta_related_theta_c,
+    )
+
+    with pytest.raises(Rx3ExperimentPreparationError, match=field):
+        validate_rx3_bending_q3_result(bundle.directory, calculated, observation)
 
 
 def test_bending_q3_postcalc_validator_fails_on_non_target_mutation(

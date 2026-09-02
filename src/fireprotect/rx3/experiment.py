@@ -2403,7 +2403,8 @@ def prepare_rx3_bending_q3_validation(
             "- [ ] Profile 14Б2, one-plane bending and axis X-X are unchanged.",
             "- [ ] Mx is 8.89 kN*m and Q is 3.00 kN.",
             "- [ ] Heating is LEFT + RIGHT + BOTTOM; TOP is inactive; R60 is unchanged.",
-            "- [ ] Copy `POSTCALC_OBSERVATION_TEMPLATE.json` to `POSTCALC_OBSERVATION.json` and record all calculation values in the copy.",
+            "- [ ] Copy `POSTCALC_OBSERVATION_TEMPLATE.json` to `POSTCALC_OBSERVATION.json` and record all mandatory calculation values in the copy.",
+            "- [ ] Record beta_tem and beta-related theta only if this RX3 GUI displays them; otherwise leave both null.",
             "- [ ] Save to table, then Save As `calculated_Q3.rx38`.",
             "",
             "STOP on any mismatch. Do not continue to Save/validation.",
@@ -2417,7 +2418,7 @@ def prepare_rx3_bending_q3_validation(
             "1. Verify the SHA in `CHECKLIST_PRECALC.md` and open only `generated_Q3.rx38`.",
             "2. Open mark `Б1`; confirm Mx=8.89, Q=3.00 and every item in `EXPECTED_RX3_GUI_VALUES.md`.",
             "3. If anything differs, stop. Otherwise press Calculate manually.",
-            "4. Copy `POSTCALC_OBSERVATION_TEMPLATE.json` to `POSTCALC_OBSERVATION.json`; record M/Q utilisation, gamma_tem, beta_tem, beta-related theta, theta_cr, R0 and stress/load in the copy.",
+            "4. Copy `POSTCALC_OBSERVATION_TEMPLATE.json` to `POSTCALC_OBSERVATION.json`; record M/Q utilisation, gamma_tem, theta_cr, R0 and stress/load in the copy. Record beta_tem and beta-related theta only if displayed; otherwise leave them null.",
             "5. Save to table, then Save As `calculated_Q3.rx38` in this directory.",
             "6. Set the observation result/flags/evidence reference, then run:",
             "",
@@ -2471,6 +2472,20 @@ def _required_observed_decimal(
     if value is None:
         raise Rx3ExperimentPreparationError(
             f"{section}.{key} must be a finite observed number"
+        )
+    return value
+
+
+def _optional_observed_decimal(
+    payload: Mapping[str, Any], key: str, section: str
+) -> Decimal | None:
+    raw = payload.get(key)
+    if raw is None:
+        return None
+    value = _decimal(str(raw))
+    if value is None:
+        raise Rx3ExperimentPreparationError(
+            f"{section}.{key} must be null or a finite observed number"
         )
     return value
 
@@ -2602,24 +2617,31 @@ def validate_rx3_bending_q3_result(
         raise Rx3ExperimentPreparationError(
             "Manual Calculate / Save to table / Save As evidence is incomplete"
         )
-    observed_values = {
+    mandatory_observed_values = {
         key: _required_observed_decimal(calculation, key, "calculation")
         for key in (
             "M_utilisation",
             "Q_utilisation",
             "governing_gamma_tem",
-            "beta_tem",
-            "beta_related_theta_C",
             "governing_theta_cr_C",
             "R0_min",
             "displayed_stress_load_MPa",
         )
     }
-    if observed_values["M_utilisation"] != Decimal("0.433"):
+    observed_values: dict[str, Decimal | None] = {
+        **mandatory_observed_values,
+        "beta_tem": _optional_observed_decimal(
+            calculation, "beta_tem", "calculation"
+        ),
+        "beta_related_theta_C": _optional_observed_decimal(
+            calculation, "beta_related_theta_C", "calculation"
+        ),
+    }
+    if mandatory_observed_values["M_utilisation"] != Decimal("0.433"):
         raise Rx3ExperimentPreparationError(
             "Mx utilisation changed unexpectedly while Mx stayed fixed"
         )
-    if observed_values["Q_utilisation"] <= Decimal("0.028"):
+    if mandatory_observed_values["Q_utilisation"] <= Decimal("0.028"):
         raise Rx3ExperimentPreparationError(
             "Q utilisation did not react to the controlled Q increase"
         )
@@ -2698,7 +2720,10 @@ def validate_rx3_bending_q3_result(
             "path": str(observation_file),
             "sha256": _sha256(observation_file),
             "evidence_reference": evidence_reference,
-            "values": {key: str(value) for key, value in observed_values.items()},
+            "values": {
+                key: None if value is None else str(value)
+                for key, value in observed_values.items()
+            },
         },
         "field_observations": observations,
         "field92_persistence": {
