@@ -30,6 +30,14 @@ Default component convention — `UNKNOWN`; `ENGINEER_CONFIRMED` можно яв
 В этой итерации даже `VALIDATED` state не открывает writer: review result всегда
 имеет `rx38_force_generation_allowed=false`.
 
+`ENGINEER_CONFIRMED` может фиксировать подтверждённое инженером соответствие
+локальной оси и оси сечения при ещё неизвестном `sign_multiplier`. Такое
+состояние остаётся pre-validation и никогда не считается разрешённым для
+генерации. Evidence scope хранит точные стандарт/профиль, локальную исходную
+ось, целевую ось сечения, угол поворота и ссылки на evidence. Даже
+`VALIDATED` convention применим только при точном совпадении профиля и угла;
+нулевой угол не наследуется произвольными повёрнутыми элементами.
+
 Ниже описан более широкий исторически реализованный pipeline. Его RX38 stage
 остаётся закрытым production gates и не должен использовать scoped fields
 49/50/79/92 как универсальное LIRA mapping.

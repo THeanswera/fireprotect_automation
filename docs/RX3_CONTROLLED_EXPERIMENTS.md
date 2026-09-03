@@ -244,3 +244,13 @@ changes field78 to `0.51`. Field78 therefore remains only a probable
 persisted/display copy. No further broad RX38 force decoding is planned for the
 MVP. The next validation must start from one real exported LIRA row and its
 matching RX3 element.
+
+## Native LIRA axis evidence pre-validation
+
+The native convention model separates engineer-confirmed axis/profile evidence
+from sign and causal validation. `ENGINEER_CONFIRMED` may retain a proposed
+native component target with `sign_multiplier = null`; it is not `VALIDATED`
+and cannot make RX38 generation ready. The evidence scope binds the proposal to
+an exact profile standard/name and member rotation, so evidence at zero degrees
+does not apply to a nonzero rotation. Unmapped native components remain
+explicitly `UNKNOWN`.

@@ -17,6 +17,7 @@ from fireprotect.lira import (
     LiraMappingError,
     LiraRx3ComponentConvention,
     LiraRx3ConventionRegistry,
+    LiraRx3EvidenceScope,
     import_lira_batch,
     prepare_lira_review_bundle,
 )
@@ -317,6 +318,122 @@ def test_default_registry_rejects_old_aliases_and_blocks_rx38() -> None:
         )
     with pytest.raises(LiraConventionError, match="LIRA_RX3_FORCE_CONVENTION"):
         registry.require_rx38_generation_ready(available)
+
+
+def _synthetic_zero_rotation_scope() -> LiraRx3EvidenceScope:
+    return LiraRx3EvidenceScope(
+        profile_standard="SYNTHETIC STANDARD",
+        profile_name="SYNTHETIC PROFILE",
+        source_local_axis="y",
+        target_section_axis="X-X / strong axis",
+        member_rotation_degrees=Decimal("0"),
+        evidence_references=(
+            "synthetic force export",
+            "synthetic element/profile/axis evidence",
+        ),
+    )
+
+
+def test_scoped_axis_evidence_preserves_unknown_sign_without_abs() -> None:
+    scope = _synthetic_zero_rotation_scope()
+    proposed = LiraRx3ComponentConvention(
+        source_component="My",
+        target_rx3_component="RX3_MAJOR_AXIS_MOMENT",
+        sign_multiplier=None,
+        axis_interpretation="local y -> section X-X strong axis",
+        verification_status=ConventionStatus.ENGINEER_CONFIRMED,
+        evidence_reference="synthetic pre-validation evidence",
+        evidence_scope=scope,
+    )
+
+    assert proposed.verification_status is ConventionStatus.ENGINEER_CONFIRMED
+    assert proposed.sign_multiplier is None
+    assert proposed.resolved is False
+    assert proposed.resolved_for(
+        profile_standard="SYNTHETIC STANDARD",
+        profile_name="SYNTHETIC PROFILE",
+        member_rotation_degrees=Decimal("0"),
+    ) is False
+    assert proposed.as_dict()["sign_multiplier"] is None
+
+
+def test_profile_and_axis_evidence_never_promote_status_to_validated() -> None:
+    payload = {
+        name: {
+            "source_component": name,
+            "target_rx3_component": (
+                "RX3_MAJOR_AXIS_MOMENT" if name == "My" else "RX3_X_X_GUI_Q"
+            ),
+            "sign_multiplier": None,
+            "axis_interpretation": (
+                "local y -> section X-X strong axis"
+                if name == "My"
+                else "local z shear -> associated X-X GUI Q"
+            ),
+            "verification_status": "ENGINEER_CONFIRMED",
+            "evidence_reference": "synthetic pre-validation evidence",
+            "evidence_scope": _synthetic_zero_rotation_scope().as_dict(),
+        }
+        for name in ("My", "Qz")
+    }
+
+    registry = LiraRx3ConventionRegistry.from_dict(payload)
+
+    assert registry.components["My"].verification_status is (
+        ConventionStatus.ENGINEER_CONFIRMED
+    )
+    assert registry.components["Qz"].verification_status is (
+        ConventionStatus.ENGINEER_CONFIRMED
+    )
+    assert registry.components["My"].sign_multiplier is None
+    assert registry.components["Qz"].sign_multiplier is None
+    assert registry.components["Mz"].verification_status is ConventionStatus.UNKNOWN
+    assert registry.components["Qy"].verification_status is ConventionStatus.UNKNOWN
+    signed_values = {"My": Decimal("-2.5"), "Qz": Decimal("1.25")}
+    with pytest.raises(LiraConventionError, match="My, Qz"):
+        registry.require_rx38_generation_ready(
+            signed_values,
+            profile_standard="SYNTHETIC STANDARD",
+            profile_name="SYNTHETIC PROFILE",
+            member_rotation_degrees=Decimal("0"),
+        )
+    assert signed_values["My"] == Decimal("-2.5")
+
+
+def test_validated_zero_rotation_scope_does_not_apply_to_nonzero_rotation() -> None:
+    validated = LiraRx3ComponentConvention(
+        source_component="My",
+        target_rx3_component="RX3_MAJOR_AXIS_MOMENT",
+        sign_multiplier=Decimal("1"),
+        axis_interpretation="local y -> section X-X strong axis",
+        verification_status=ConventionStatus.VALIDATED,
+        evidence_reference="synthetic causal sign validation",
+        evidence_scope=_synthetic_zero_rotation_scope(),
+    )
+    registry = LiraRx3ConventionRegistry(
+        {
+            **LiraRx3ConventionRegistry.unresolved().components,
+            "My": validated,
+        }
+    )
+
+    assert validated.resolved_for(
+        profile_standard="SYNTHETIC STANDARD",
+        profile_name="SYNTHETIC PROFILE",
+        member_rotation_degrees=Decimal("0"),
+    ) is True
+    assert validated.resolved_for(
+        profile_standard="SYNTHETIC STANDARD",
+        profile_name="SYNTHETIC PROFILE",
+        member_rotation_degrees=Decimal("0.1"),
+    ) is False
+    with pytest.raises(LiraConventionError, match="unresolved components: My"):
+        registry.require_rx38_generation_ready(
+            {"My": Decimal("-2.5")},
+            profile_standard="SYNTHETIC STANDARD",
+            profile_name="SYNTHETIC PROFILE",
+            member_rotation_degrees=Decimal("0.1"),
+        )
 
 
 def test_review_bundle_is_complete_decimal_safe_and_exclusive(tmp_path: Path) -> None:

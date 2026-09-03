@@ -26,6 +26,7 @@ from .convention import (
     LiraConventionError,
     LiraRx3ComponentConvention,
     LiraRx3ConventionRegistry,
+    LiraRx3EvidenceScope,
 )
 from .importer import LiraForceImporter
 from .mapping import LiraColumnMapping
@@ -72,6 +73,7 @@ __all__ = [
     "LiraReviewBundle",
     "LiraRx3ComponentConvention",
     "LiraRx3ConventionRegistry",
+    "LiraRx3EvidenceScope",
     "LiraRowError",
     "LiraRowSource",
     "RawTableRow",
