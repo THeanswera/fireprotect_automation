@@ -232,25 +232,78 @@ broader X/Y/sign inference.
 
 ## MVP force-mapping stop point
 
-The controlled RX3 semantics stop at field49=N (narrow axial), field50=Mx
+The earlier RX3-only semantics stopped at field49=N (narrow axial), field50=Mx
 (one-plane X-X / Б1 only), field92=Q (one-plane X-X / Б1 / 14Б2 only), and
 field79=My (biaxial Кс1 / 20П only). All non-axial fields remain
-`EXPERIMENTAL`; none establishes a LIRA component, local axis, sign, or universal
-X/Y correspondence.
+`EXPERIMENTAL`. The later `LIRA-RX3-22P-XX-MAGNITUDE` evidence below establishes
+only two exact LIRA component transforms; it does not establish a universal X/Y
+correspondence or governing-result selector.
 
 RX3-EXP-04B specifically prevents a universal field50 claim: in the Кс1 biaxial
 record field50=`0`, field78=`0.507` before save while GUI Mx=`0.51`, and RX3 save
 changes field78 to `0.51`. Field78 therefore remains only a probable
 persisted/display copy. No further broad RX38 force decoding is planned for the
-MVP. The next validation must start from one real exported LIRA row and its
-matching RX3 element.
+MVP. The next validation after the matched real-element observation must address
+governing LIRA result selection rather than another field-identification guess.
 
 ## Native LIRA axis evidence pre-validation
 
 The native convention model separates engineer-confirmed axis/profile evidence
 from sign and causal validation. `ENGINEER_CONFIRMED` may retain a proposed
-native component target with `sign_multiplier = null`; it is not `VALIDATED`
+native component target with `value_transform = null`; it is not `VALIDATED`
 and cannot make RX38 generation ready. The evidence scope binds the proposal to
-an exact profile standard/name and member rotation, so evidence at zero degrees
-does not apply to a nonzero rotation. Unmapped native components remain
-explicitly `UNKNOWN`.
+an exact profile standard/name, RX3 template, stress state, length and member
+rotation, so evidence at zero degrees does not apply to a nonzero rotation.
+Unmapped native components remain explicitly `UNKNOWN`.
+
+## LIRA-RX3-22P-XX-MAGNITUDE
+
+The controlled real-member validation used element 597, untouched force-export
+row 778, load case 1, station 1, profile 22П / ГОСТ 8240-97, RX3 template Б2,
+length 3.00 m, zero local rotation and one-plane X-X bending. The signed source
+observations were retained exactly:
+
+- LIRA My raw `-3.1283999999999999E-2 tf*m`, normalized with `Decimal` to
+  `-0.30679123859999999019335 kN*m`;
+- LIRA Qz raw `4.1879E-2 tf`, normalized with `Decimal` to
+  `0.41069269535 kN`.
+
+RX3 rejected the signed negative My-derived Mx input and separately rejected a
+signed negative Q input of the same magnitude. It accepted positive
+Mx=`0.30679123859999999019335 kN*m` and Q=`0.41069269535 kN`. The calculation
+showed approximately 1172.02 C critical temperature, M utilisation 0.006, Q
+utilisation 0.003 and 273.37 min unprotected fire resistance.
+
+After Calculate, Save to table and Save As, only the target Б2 record changed.
+Its complete changed-field set was field44 `617.699045325423 ->
+1172.02236645233`, field50 `14.7987 -> 0.3067912386`, field52
+`0.269911622946781 -> 0.00559552670953388`, field54 `9.85 ->
+273.366666666667`, field76 `66.1283476219613 -> 1.3709040438358`, field78
+`14.7987 -> 0.3067912386`, and field92 `14.7151 -> 0.41069269535`. No unrelated
+target input changed and every non-target RX38 record was invariant.
+
+This evidence validates only these component transformations in the exact
+scope above:
+
+- LIRA My -> RX3 field50 maximum major-axis Mx with `MAGNITUDE`;
+- LIRA Qz -> RX3 field92 maximum Q with `MAGNITUDE`.
+
+`MAGNITUDE` transforms one explicitly selected signed observation; it does not
+select an observation. The source signed value, raw token, units, row and table
+provenance remain separate from the positive RX3 target value. No
+`max(abs(all_values))` envelope rule is inferred. Station/load-case/combinations
+selection, РСУ/РСН, arbitrary rotations, other profiles, Mz, Qy, Mk, Ry/Rz and
+combined stress states remain unresolved. Field50 and field92 retain
+`EXPERIMENTAL` write policy; field78 remains a `PROBABLE` derived/persisted copy
+and is absent from direct-writer targets.
+
+The required evidence chain is the untouched force export; element identity;
+stiffness/profile; nodes/length; local-axis GUI observation; section-stiffness
+axis correspondence; both negative-value rejections; positive Mx/Q acceptance;
+the persisted target-aware diff; and unrelated-input/non-target invariance. The
+private source files and validation artifacts are not repository content.
+
+Component validation does not open generation. The independent blocker
+`LIRA_GOVERNING_RESULT_SELECTION_UNRESOLVED` remains active,
+`rx38_force_generation_allowed=false`, and IssueReadiness remains
+`NOT_READY_FOR_ISSUE`.

@@ -10,6 +10,13 @@ The gate set includes exact heating-exposure binding, steel temperature profile
 compatibility, trusted Excel template identity and lookup-table content. Excel
 verification is linked to the selected technical-data entry and version.
 
+The scoped `My -> field50` and `Qz -> field92` magnitude transforms do not
+select a governing LIRA result. `LIRA_GOVERNING_RESULT_SELECTION_UNRESOLVED`
+therefore remains an independent generation blocker: station/load-case/РСУ/РСН
+and combination semantics must be validated before any LIRA-to-RX38 force
+generation. This keeps `rx38_force_generation_allowed=false` and does not alter
+`IssueReadiness`, which remains `NOT_READY_FOR_ISSUE`.
+
 ## Решение
 
 Центральный `IssueReadiness` содержит status, blockers, warnings и evidence.
@@ -32,6 +39,7 @@ blockers и явное положительное evidence по каждому �
 
 Коды blockers включают `UNVERIFIED_RX38_*_MAPPING`,
 `UNVERIFIED_FORCE_CONVENTION`, `STEEL_TEMPLATE_INCOMPATIBLE`,
+`LIRA_GOVERNING_RESULT_SELECTION_UNRESOLVED`,
 `RX3_TEMPLATE_PROFILE_UNVERIFIED`, `NORMATIVE_*`,
 `FIREPROOFING_TECHNICAL_DATA_UNVERIFIED`, `STALE_RX3_RESULT`,
 `RX3_GUI_RECALCULATION_UNVERIFIED`, `EXCEL_TEMPLATE_UNVERIFIED` и

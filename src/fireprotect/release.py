@@ -33,6 +33,9 @@ class BlockerCode(str, Enum):
     UNVERIFIED_RX38_QX_MAPPING = "UNVERIFIED_RX38_QX_MAPPING"
     UNVERIFIED_RX38_QY_MAPPING = "UNVERIFIED_RX38_QY_MAPPING"
     UNVERIFIED_FORCE_CONVENTION = "UNVERIFIED_FORCE_CONVENTION"
+    LIRA_GOVERNING_RESULT_SELECTION_UNRESOLVED = (
+        "LIRA_GOVERNING_RESULT_SELECTION_UNRESOLVED"
+    )
     STEEL_TEMPLATE_INCOMPATIBLE = "STEEL_TEMPLATE_INCOMPATIBLE"
     STEEL_STRENGTH_MAPPING_UNVERIFIED = "STEEL_STRENGTH_MAPPING_UNVERIFIED"
     RX3_TEMPLATE_PROFILE_UNVERIFIED = "RX3_TEMPLATE_PROFILE_UNVERIFIED"
@@ -59,6 +62,7 @@ REQUIRED_PRODUCTION_GATES = frozenset(
     {
         "rx3_action_mapping",
         "force_convention",
+        "lira_governing_result_selection",
         "steel_compatibility",
         "rx3_template_profile",
         "heating_exposure",
@@ -166,6 +170,9 @@ class ProductionEvidence:
         return {
             "rx3_action_mapping": actions_valid,
             "force_convention": force_valid,
+            # Component transforms cannot prove which LIRA row governs. No
+            # production evidence type for station/load/combo selection exists.
+            "lira_governing_result_selection": False,
             "steel_compatibility": steel_valid,
             "rx3_template_profile": profiles_valid,
             "heating_exposure": heating_valid,
@@ -256,6 +263,18 @@ def evaluate_issue_readiness(
                 ReleaseBlocker(
                     BlockerCode.STEEL_TEMPERATURE_MODEL_UNVERIFIED,
                     "Steel temperature model and thermal coefficients lack verified template compatibility",
+                )
+            )
+        if (
+            "lira_governing_result_selection" in missing_gates
+            and BlockerCode.LIRA_GOVERNING_RESULT_SELECTION_UNRESOLVED
+            not in existing_codes
+        ):
+            collected.append(
+                ReleaseBlocker(
+                    BlockerCode.LIRA_GOVERNING_RESULT_SELECTION_UNRESOLVED,
+                    "No validated rule selects the governing LIRA station, "
+                    "load case, РСУ/РСН result or combination",
                 )
             )
     status = (

@@ -18,6 +18,8 @@ from fireprotect.lira import (
     LiraRx3ComponentConvention,
     LiraRx3ConventionRegistry,
     LiraRx3EvidenceScope,
+    Rx3ForceTarget,
+    ValueTransform,
     import_lira_batch,
     prepare_lira_review_bundle,
 )
@@ -225,6 +227,7 @@ def test_profile_identity_and_unknown_convention_block_project_elements(
     assert "LIRA_MEMBER_PROFILE_IDENTITY_MISSING" in codes
     assert "LIRA_LOAD_COMBINATION_IDENTITY_MISSING" in codes
     assert "LIRA_RX3_FORCE_CONVENTION" in codes
+    assert "LIRA_GOVERNING_RESULT_SELECTION_UNRESOLVED" in codes
     assert result.project_elements == ()
     assert result.rx38_force_generation_allowed is False
     assert all(
@@ -311,7 +314,7 @@ def test_default_registry_rejects_old_aliases_and_blocks_rx38() -> None:
         LiraRx3ComponentConvention(
             source_component="Mx",
             target_rx3_component=None,
-            sign_multiplier=None,
+            value_transform=None,
             axis_interpretation=None,
             verification_status=ConventionStatus.UNKNOWN,
             evidence_reference=None,
@@ -326,6 +329,9 @@ def _synthetic_zero_rotation_scope() -> LiraRx3EvidenceScope:
         profile_name="SYNTHETIC PROFILE",
         source_local_axis="y",
         target_section_axis="X-X / strong axis",
+        rx3_template="SYNTHETIC TEMPLATE",
+        stress_state="ONE_PLANE_BENDING",
+        member_length_m=Decimal("3"),
         member_rotation_degrees=Decimal("0"),
         evidence_references=(
             "synthetic force export",
@@ -338,8 +344,8 @@ def test_scoped_axis_evidence_preserves_unknown_sign_without_abs() -> None:
     scope = _synthetic_zero_rotation_scope()
     proposed = LiraRx3ComponentConvention(
         source_component="My",
-        target_rx3_component="RX3_MAJOR_AXIS_MOMENT",
-        sign_multiplier=None,
+        target_rx3_component=Rx3ForceTarget.FIELD50_MAX_MAJOR_AXIS_MOMENT,
+        value_transform=None,
         axis_interpretation="local y -> section X-X strong axis",
         verification_status=ConventionStatus.ENGINEER_CONFIRMED,
         evidence_reference="synthetic pre-validation evidence",
@@ -347,14 +353,17 @@ def test_scoped_axis_evidence_preserves_unknown_sign_without_abs() -> None:
     )
 
     assert proposed.verification_status is ConventionStatus.ENGINEER_CONFIRMED
-    assert proposed.sign_multiplier is None
+    assert proposed.value_transform is None
     assert proposed.resolved is False
     assert proposed.resolved_for(
         profile_standard="SYNTHETIC STANDARD",
         profile_name="SYNTHETIC PROFILE",
+        rx3_template="SYNTHETIC TEMPLATE",
+        stress_state="ONE_PLANE_BENDING",
+        member_length_m=Decimal("3"),
         member_rotation_degrees=Decimal("0"),
     ) is False
-    assert proposed.as_dict()["sign_multiplier"] is None
+    assert proposed.as_dict()["value_transform"] is None
 
 
 def test_profile_and_axis_evidence_never_promote_status_to_validated() -> None:
@@ -362,9 +371,11 @@ def test_profile_and_axis_evidence_never_promote_status_to_validated() -> None:
         name: {
             "source_component": name,
             "target_rx3_component": (
-                "RX3_MAJOR_AXIS_MOMENT" if name == "My" else "RX3_X_X_GUI_Q"
+                Rx3ForceTarget.FIELD50_MAX_MAJOR_AXIS_MOMENT.value
+                if name == "My"
+                else Rx3ForceTarget.FIELD92_MAX_SHEAR_Q.value
             ),
-            "sign_multiplier": None,
+            "value_transform": None,
             "axis_interpretation": (
                 "local y -> section X-X strong axis"
                 if name == "My"
@@ -385,8 +396,8 @@ def test_profile_and_axis_evidence_never_promote_status_to_validated() -> None:
     assert registry.components["Qz"].verification_status is (
         ConventionStatus.ENGINEER_CONFIRMED
     )
-    assert registry.components["My"].sign_multiplier is None
-    assert registry.components["Qz"].sign_multiplier is None
+    assert registry.components["My"].value_transform is None
+    assert registry.components["Qz"].value_transform is None
     assert registry.components["Mz"].verification_status is ConventionStatus.UNKNOWN
     assert registry.components["Qy"].verification_status is ConventionStatus.UNKNOWN
     signed_values = {"My": Decimal("-2.5"), "Qz": Decimal("1.25")}
@@ -395,6 +406,9 @@ def test_profile_and_axis_evidence_never_promote_status_to_validated() -> None:
             signed_values,
             profile_standard="SYNTHETIC STANDARD",
             profile_name="SYNTHETIC PROFILE",
+            rx3_template="SYNTHETIC TEMPLATE",
+            stress_state="ONE_PLANE_BENDING",
+            member_length_m=Decimal("3"),
             member_rotation_degrees=Decimal("0"),
         )
     assert signed_values["My"] == Decimal("-2.5")
@@ -403,8 +417,8 @@ def test_profile_and_axis_evidence_never_promote_status_to_validated() -> None:
 def test_validated_zero_rotation_scope_does_not_apply_to_nonzero_rotation() -> None:
     validated = LiraRx3ComponentConvention(
         source_component="My",
-        target_rx3_component="RX3_MAJOR_AXIS_MOMENT",
-        sign_multiplier=Decimal("1"),
+        target_rx3_component=Rx3ForceTarget.FIELD50_MAX_MAJOR_AXIS_MOMENT,
+        value_transform=ValueTransform.MAGNITUDE,
         axis_interpretation="local y -> section X-X strong axis",
         verification_status=ConventionStatus.VALIDATED,
         evidence_reference="synthetic causal sign validation",
@@ -420,11 +434,17 @@ def test_validated_zero_rotation_scope_does_not_apply_to_nonzero_rotation() -> N
     assert validated.resolved_for(
         profile_standard="SYNTHETIC STANDARD",
         profile_name="SYNTHETIC PROFILE",
+        rx3_template="SYNTHETIC TEMPLATE",
+        stress_state="ONE_PLANE_BENDING",
+        member_length_m=Decimal("3"),
         member_rotation_degrees=Decimal("0"),
     ) is True
     assert validated.resolved_for(
         profile_standard="SYNTHETIC STANDARD",
         profile_name="SYNTHETIC PROFILE",
+        rx3_template="SYNTHETIC TEMPLATE",
+        stress_state="ONE_PLANE_BENDING",
+        member_length_m=Decimal("3"),
         member_rotation_degrees=Decimal("0.1"),
     ) is False
     with pytest.raises(LiraConventionError, match="unresolved components: My"):
@@ -432,6 +452,9 @@ def test_validated_zero_rotation_scope_does_not_apply_to_nonzero_rotation() -> N
             {"My": Decimal("-2.5")},
             profile_standard="SYNTHETIC STANDARD",
             profile_name="SYNTHETIC PROFILE",
+            rx3_template="SYNTHETIC TEMPLATE",
+            stress_state="ONE_PLANE_BENDING",
+            member_length_m=Decimal("3"),
             member_rotation_degrees=Decimal("0.1"),
         )
 

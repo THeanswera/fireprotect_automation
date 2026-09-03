@@ -59,6 +59,7 @@ def test_schema_counts_and_write_policies_remain_explicit():
     assert field_spec(50).controlled_experiment_ids == (
         "RX3-EXP-02",
         "RX3-EXP-02B",
+        "LIRA-RX3-22P-XX-MAGNITUDE",
     )
     assert field_spec(78).confidence == "probable"
     assert field_spec(78).write_policy is WritePolicy.FORBIDDEN
@@ -78,6 +79,7 @@ def test_schema_counts_and_write_policies_remain_explicit():
         "RX3-EXP-02",
         "RX3-EXP-02B",
         "RX3-EXP-03",
+        "LIRA-RX3-22P-XX-MAGNITUDE",
     )
     assert field_spec(135).write_policy is WritePolicy.FORBIDDEN
 

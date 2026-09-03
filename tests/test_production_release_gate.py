@@ -25,6 +25,11 @@ def test_boolean_self_certification_cannot_make_production_ready():
         blocker.code is BlockerCode.HEATING_EXPOSURE_UNVERIFIED
         for blocker in readiness.blockers
     )
+    assert any(
+        blocker.code
+        is BlockerCode.LIRA_GOVERNING_RESULT_SELECTION_UNRESOLVED
+        for blocker in readiness.blockers
+    )
     assert not any(readiness.evidence["production_gate_evidence"].values())
 
 

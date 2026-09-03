@@ -24,9 +24,13 @@ from .batch import (
 from .convention import (
     ConventionStatus,
     LiraConventionError,
+    LiraGoverningSelectionError,
     LiraRx3ComponentConvention,
     LiraRx3ConventionRegistry,
     LiraRx3EvidenceScope,
+    LiraRx3TransformedValue,
+    Rx3ForceTarget,
+    ValueTransform,
 )
 from .importer import LiraForceImporter
 from .mapping import LiraColumnMapping
@@ -58,6 +62,7 @@ __all__ = [
     "HtmlTableSource",
     "LiraColumnMapping",
     "LiraConventionError",
+    "LiraGoverningSelectionError",
     "LiraDependencyError",
     "LiraForceImporter",
     "LiraForceRow",
@@ -74,10 +79,13 @@ __all__ = [
     "LiraRx3ComponentConvention",
     "LiraRx3ConventionRegistry",
     "LiraRx3EvidenceScope",
+    "LiraRx3TransformedValue",
     "LiraRowError",
     "LiraRowSource",
     "RawTableRow",
+    "Rx3ForceTarget",
     "SourceForceValues",
+    "ValueTransform",
     "XlsxTableSource",
     "apply_lira_force_row",
     "import_lira_batch",

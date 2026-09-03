@@ -95,6 +95,15 @@
   нулевым, все шесть non-target records token-identical. Field79 promoted как
   GUI My только для Кс1 / 20П biaxial; write policy остаётся `EXPERIMENTAL`,
   production закрыт. `MY_BIAXIAL_PATH_MVP_STATUS = VALIDATED`.
+- **VALIDATED (exact controlled scope):** `LIRA-RX3-22P-XX-MAGNITUDE`
+  establishes LIRA `My -> field50` and `Qz -> field92` with the explicit
+  `MAGNITUDE` transform only for Б2 / 22П / ГОСТ 8240-97 / L=3.00 m / zero
+  rotation / one-plane X-X and an already selected source row. Signed source
+  values remain auditable. This does not validate an envelope selector;
+  `LIRA_GOVERNING_RESULT_SELECTION_UNRESOLVED` keeps
+  `rx38_force_generation_allowed=false`. Field50/92 remain `EXPERIMENTAL`,
+  field78 remains a non-writable `PROBABLE` persisted copy, and Mk/Mz/Qy/Ry/Rz
+  remain unresolved.
 - **UNKNOWN:** индекс толщины огнезащиты в RX38 не доказан, поэтому
   `fireproofing_thickness` остаётся `null`.
 - **BLOCKED:** production-расширение за пределы верифицированного
@@ -125,8 +134,9 @@
   верифицированного осевого шаблона. Это не закрывает LIRA sign
   convention, другие профили/закрепления/обогрев и нормативную
   эквивалентность.
-- **BLOCKED:** реальные mappings native `N/Mk/My/Mz/Qy/Qz` в RX3, sign/axis
-  convention, member profile identity, steel field 33,
+- **BLOCKED:** governing LIRA result selection across stations, load cases,
+  РСУ/РСН and combinations; native N/Mk/Mz/Qy and Ry/Rz mappings; arbitrary
+  rotations/profiles/stress states; steel field 33,
   GUI smoke-test, Excel recalculation и primary manufacturer data всё ещё
   требуют внешних доказательств.
 
@@ -143,8 +153,8 @@
 является прямым контрпримером универсальности field50: в biaxial Кс1 field50=`0`,
 field78=`0,507` до save при GUI Mx=`0,51`, затем field78=`0,51` после save.
 Поэтому field78 остаётся `PROBABLE` persisted/display copy, а глобальные Mx/X/Y
-семантики не установлены. Native LIRA export теперь структурно проверен, но не
-сопоставлен с RX3. Следующий минимальный validation должен независимо установить
-profile/mark identity для одного выбранного элемента и получить инженерно
-зафиксированные local-axis/sign evidence; новых широких RX38 экспериментов для
-MVP не планируется.
+семантики не установлены. Exact 22П / Б2 mapping теперь подтверждён для
+`My/Qz -> field50/92 / MAGNITUDE`, но только для заранее выбранной строки.
+Следующий минимальный validation должен установить governing-result selection
+между stations/load cases/РСУ/РСН/combinations; новых широких RX38
+экспериментов или production writer для MVP не планируется.

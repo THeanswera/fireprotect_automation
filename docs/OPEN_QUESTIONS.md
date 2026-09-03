@@ -8,11 +8,12 @@
    верифицированного axial-шаблона и field49? Осевой контролируемый
    случай RX3-EXP-01C/01D открылся, рассчитался и сохранился, но это
    не доказывает общую production-совместимость.
-4. Field50 причинно подтверждён только как GUI Mx для one-plane X-X / Б1,
-   field92 — как GUI Q в том же узком семействе, field79 — как GUI My для
-   biaxial Кс1 / 20П. Какие LIRA-компоненты, локальные оси и знаки соответствуют
-   этим scoped RX3 semantics? Field50 не является универсальным Mx; field78
-   остаётся только `PROBABLE` persisted/display copy.
+4. `My -> field50` и `Qz -> field92` с `MAGNITUDE` подтверждены только для
+   Б2 / 22П / ГОСТ 8240-97 / L=3.00 m / rotation=0 / one-plane X-X и заранее
+   выбранной source row. Как выбирать governing row между station 1/2, load
+   cases, РСУ/РСН и combinations? Остальные профили/повороты/stress states и
+   компоненты N/Mk/Mz/Qy/Ry/Rz остаются открыты; field78 остаётся только
+   `PROBABLE` persisted/display copy.
 5. Какая техническая документация и редакция являются источником таблиц
    `Толщина ОЗ` и `Расход ОЗ` в Excel, и относятся ли названия «ОБМ»,
    «Expert» и `DEFENDER M solvent` к одному продукту?
@@ -64,10 +65,10 @@ field77 остаётся `unknown`; fields 50/79/92 scoped-confirmed, но ос�
   пересчёта и сравнить формулы/итоги с контрольной копией.
 
 Полная последовательность и идентификаторы опытов зафиксированы в
-`docs/RX3_CONTROLLED_EXPERIMENTS.md`. Осевой N, Mx X-X, GUI Q и biaxial GUI My
-MVP-пути подтверждены только в узких опытных областях. Реальная таблица native
-LIRA теперь разобрана без семантических догадок. Следующее минимальное действие —
-для одного `CANDIDATE_ONLY` элемента независимо подтвердить member profile/mark,
-локальные оси и знаковую конвенцию, затем сопоставить его с точным RX3 element.
-До этих evidence не создавать `ProjectElement`, не писать RX38 и не начинать
-новый широкий эксперимент RX38.
+`docs/RX3_CONTROLLED_EXPERIMENTS.md`. Осевой N, scoped RX3 inputs и точные
+`My/Qz -> field50/92 / MAGNITUDE` для 22П подтверждены только в перечисленных
+узких областях. Следующее минимальное внешнее действие — выгрузить или получить
+официальное описание LIRA result-selection semantics и на одном элементе
+зафиксировать все station/load-case/РСУ/РСН/combinations candidates вместе с
+GUI-selected governing result. До подтверждения этого selector не применять
+`max(abs(all_values))`, не писать RX38 и не начинать общий LIRA->RX38 writer.

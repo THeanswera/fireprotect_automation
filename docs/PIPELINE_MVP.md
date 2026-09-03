@@ -31,12 +31,23 @@ Default component convention — `UNKNOWN`; `ENGINEER_CONFIRMED` можно яв
 имеет `rx38_force_generation_allowed=false`.
 
 `ENGINEER_CONFIRMED` может фиксировать подтверждённое инженером соответствие
-локальной оси и оси сечения при ещё неизвестном `sign_multiplier`. Такое
+локальной оси и оси сечения при ещё неизвестном `value_transform`. Такое
 состояние остаётся pre-validation и никогда не считается разрешённым для
-генерации. Evidence scope хранит точные стандарт/профиль, локальную исходную
-ось, целевую ось сечения, угол поворота и ссылки на evidence. Даже
-`VALIDATED` convention применим только при точном совпадении профиля и угла;
-нулевой угол не наследуется произвольными повёрнутыми элементами.
+генерации. `SIGNED_LINEAR` сохраняет знак выбранного source value, а
+`MAGNITUDE` применяет точный `Decimal` absolute value, сохраняя исходное
+знаковое значение в provenance. Evidence scope хранит точные стандарт/профиль,
+RX3 template, stress state, length, локальную исходную ось, целевую ось сечения,
+угол поворота и ссылки на evidence. Даже `VALIDATED` convention применим только
+при полном совпадении scope; нулевой угол не наследуется произвольными
+повёрнутыми элементами.
+
+Для `Б2 / 22П / ГОСТ 8240-97 / L=3.00 m / rotation=0 / one-plane X-X`
+контролируемая цепочка валидировала `My -> field50` и `Qz -> field92` с
+`MAGNITUDE`. Это преобразование только уже выбранной строки, не envelope rule.
+Генерация остаётся закрыта отдельным blocker
+`LIRA_GOVERNING_RESULT_SELECTION_UNRESOLVED`: station/load case/РСУ/РСН и
+governing combination ещё не имеют валидированного selector. Поэтому review
+summary по-прежнему содержит `rx38_force_generation_allowed=false`.
 
 Ниже описан более широкий исторически реализованный pipeline. Его RX38 stage
 остаётся закрытым production gates и не должен использовать scoped fields

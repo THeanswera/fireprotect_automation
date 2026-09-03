@@ -540,6 +540,7 @@ class LiraBatchImportResult:
             "warnings": len(self.warnings),
             "engineering_blockers": len(self.engineering_blockers),
             "project_elements": len(self.project_elements),
+            "governing_result_selection_validated": False,
             "rx38_force_generation_allowed": False,
             "issue_readiness": "NOT_READY_FOR_ISSUE",
         }
@@ -906,6 +907,13 @@ def import_lira_batch(
                 f"unresolved for {', '.join(unresolved)}",
             )
         )
+    issues.append(
+        LiraImportIssue(
+            "LIRA_GOVERNING_RESULT_SELECTION_UNRESOLVED",
+            "RX38 generation blocked; no validated rule selects the governing "
+            "load case, combination and station from native LIRA results",
+        )
+    )
     for record in records:
         if record.section_station is None:
             issues.append(
