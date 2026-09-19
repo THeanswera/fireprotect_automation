@@ -35,6 +35,16 @@ from .convention import (
 from .importer import LiraForceImporter
 from .mapping import LiraColumnMapping
 from .project import apply_lira_force_row
+from .selection import (
+    CANDIDATE_STATUS,
+    DECLARATION_KIND,
+    LiraGoverningCandidate,
+    LiraSelectionBundle,
+    LiraSelectionReport,
+    prepare_lira_selection_bundle,
+    read_candidates,
+    validate_lira_governing_selection,
+)
 from .sources import CsvTableSource, HtmlTableSource, XlsxTableSource
 from .types import (
     CANONICAL_FIELDS,
@@ -50,8 +60,10 @@ from .types import (
 
 __all__ = [
     "BATCH_FIELDS",
+    "CANDIDATE_STATUS",
     "CANONICAL_FIELDS",
     "ConventionStatus",
+    "DECLARATION_KIND",
     "FORCE_FIELDS",
     "IDENTIFIER_FIELDS",
     "LIRA_NATIVE_FORCE_COMPONENTS",
@@ -67,6 +79,7 @@ __all__ = [
     "LiraForceImporter",
     "LiraForceRow",
     "LiraFormatError",
+    "LiraGoverningCandidate",
     "LiraImportError",
     "LiraImportIssue",
     "LiraMappingError",
@@ -76,6 +89,8 @@ __all__ = [
     "LiraNativeForceRecord",
     "LiraNativeValue",
     "LiraReviewBundle",
+    "LiraSelectionBundle",
+    "LiraSelectionReport",
     "LiraRx3ComponentConvention",
     "LiraRx3ConventionRegistry",
     "LiraRx3EvidenceScope",
@@ -90,4 +105,7 @@ __all__ = [
     "apply_lira_force_row",
     "import_lira_batch",
     "prepare_lira_review_bundle",
+    "prepare_lira_selection_bundle",
+    "read_candidates",
+    "validate_lira_governing_selection",
 ]

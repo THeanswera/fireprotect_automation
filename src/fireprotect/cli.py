@@ -5,7 +5,11 @@ import json
 from pathlib import Path
 
 from .execution import ExecutionMode
-from .lira import prepare_lira_review_bundle
+from .lira import (
+    prepare_lira_review_bundle,
+    prepare_lira_selection_bundle,
+    validate_lira_governing_selection,
+)
 from .project_io import read_project_element_json
 from .pipeline import run_pipeline, rx3_safety_context_from_dict
 from .rx3.project_adapter import create_rx38_from_project_element
@@ -451,6 +455,22 @@ def cmd_prepare_lira_review(args: argparse.Namespace) -> None:
     print(json.dumps(bundle.as_dict(), ensure_ascii=False, indent=2))
 
 
+def cmd_prepare_lira_selection(args: argparse.Namespace) -> None:
+    bundle = prepare_lira_selection_bundle(args.forces, args.output_dir)
+    print(json.dumps(bundle.as_dict(), ensure_ascii=False, indent=2))
+
+
+def cmd_validate_lira_selection(args: argparse.Namespace) -> None:
+    report = validate_lira_governing_selection(args.candidates, args.selection)
+    payload = report.as_dict()
+    if args.report is not None:
+        target = _new_report_path(args.report, args.candidates, args.selection)
+        target.write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+        )
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(prog="fireprotect")
     subparsers = parser.add_subparsers(required=True)
@@ -710,6 +730,23 @@ def main() -> None:
         help="Optional existing ProjectElement JSON; repeat for multiple elements",
     )
     command.set_defaults(func=cmd_prepare_lira_review)
+
+    command = subparsers.add_parser(
+        "prepare-lira-selection",
+        help="Enumerate governing-result candidates from a review bundle",
+    )
+    command.add_argument("--forces", type=Path, required=True)
+    command.add_argument("--output-dir", type=Path, required=True)
+    command.set_defaults(func=cmd_prepare_lira_selection)
+
+    command = subparsers.add_parser(
+        "validate-lira-selection",
+        help="Resolve an explicit governing-result declaration against candidates",
+    )
+    command.add_argument("--candidates", type=Path, required=True)
+    command.add_argument("--selection", type=Path, required=True)
+    command.add_argument("--report", type=Path)
+    command.set_defaults(func=cmd_validate_lira_selection)
 
     args = parser.parse_args()
     args.func(args)

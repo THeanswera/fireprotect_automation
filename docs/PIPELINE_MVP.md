@@ -49,6 +49,43 @@ RX3 template, stress state, length, локальную исходную ось, 
 governing combination ещё не имеют валидированного selector. Поэтому review
 summary по-прежнему содержит `rx38_force_generation_allowed=false`.
 
+## Перечисление кандидатов governing result
+
+`prepare-lira-selection` превращает уже существующий review bundle в новый
+read-only набор кандидатов. Он не выбирает расчётную строку: правило вида
+`max(abs(all_values))` не реализовано, потому что envelope по несвязанным
+station, load case и сочетаниям не является доказанной семантикой.
+
+```powershell
+python -m fireprotect.cli prepare-lira-selection `
+  --forces <review-bundle>\forces.json `
+  --output-dir <new-directory>
+```
+
+Набор содержит `manifest.json`, `candidates.json` (Decimal-safe, авторитетный),
+`candidates.csv` (читаемый), `selection_template.json` и `README_SELECTION.md`.
+Каждая запись имеет статус `CANDIDATE_ONLY` и сохраняет raw token, точный
+`Decimal`, исходные и нормализованные единицы, ячейку и строку источника.
+Каталог создаётся только новым; source bundle не перезаписывается.
+
+Инженер заполняет `selection_template.json` (`declared_by`, `basis` и один
+`candidate_id` на элемент) и проверяет его:
+
+```powershell
+python -m fireprotect.cli validate-lira-selection `
+  --candidates <new-directory>\candidates.json `
+  --selection <filled.json>
+```
+
+Проверка разрешает объявление ровно в одного существующего кандидата и
+блокирует неизвестный элемент, неизвестного кандидата, несовпадение элемента,
+повторное объявление элемента и неоднозначность. Она **никогда** не выдаёт
+`governing_result_selection_validated = true` и не открывает RX38: объявление
+инженера — это решение, а не независимое доказательство. Blocker
+`LIRA_GOVERNING_RESULT_SELECTION_UNRESOLVED` остаётся активным, а отсутствие
+`combination` в источнике или единственный кандидат на элемент выдаются как
+warnings, потому что такой источник не может подтвердить правило выбора.
+
 Ниже описан более широкий исторически реализованный pipeline. Его RX38 stage
 остаётся закрытым production gates и не должен использовать scoped fields
 49/50/79/92 как универсальное LIRA mapping.
