@@ -1,0 +1,48 @@
+{
+  "source_model": "LIRA_NATIVE_BAR_FORCES",
+  "format": "xlsx",
+  "options": {
+    "sheet_name": " ",
+    "header_row": 3,
+    "data_only": true
+  },
+  "columns": {
+    "element_id": "№ элем",
+    "node_id": null,
+    "member_id": null,
+    "section_station": "№ сечен",
+    "mark": null,
+    "profile": null,
+    "load_case": "№ загруж",
+    "element_type": "Тип элем",
+    "composition": "Составл",
+    "combination": null
+  },
+  "native_forces": {
+    "N": "N\n(т)",
+    "Mk": "Mk\n(т*м)",
+    "My": "My\n(т*м)",
+    "Mz": "Mz\n(т*м)",
+    "Qy": "Qy\n(т)",
+    "Qz": "Qz\n(т)"
+  },
+  "native_force_units": {
+    "N": "т",
+    "Mk": "т*м",
+    "My": "т*м",
+    "Mz": "т*м",
+    "Qy": "т",
+    "Qz": "т"
+  },
+  "native_results": {
+    "Ry": "Ry\n(т/м)",
+    "Rz": "Rz\n(т/м)"
+  },
+  "native_result_units": {
+    "Ry": "т/м",
+    "Rz": "т/м"
+  },
+  "decimal_separator": ".",
+  "thousands_separator": null,
+  "convention": null
+}
