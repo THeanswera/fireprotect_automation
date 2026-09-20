@@ -6,6 +6,7 @@ from pathlib import Path
 
 from .execution import ExecutionMode
 from .lira import (
+    prepare_lira_model_bundle,
     prepare_lira_review_bundle,
     prepare_lira_selection_bundle,
     validate_lira_governing_selection,
@@ -460,6 +461,23 @@ def cmd_prepare_lira_selection(args: argparse.Namespace) -> None:
     print(json.dumps(bundle.as_dict(), ensure_ascii=False, indent=2))
 
 
+def cmd_prepare_lira_model(args: argparse.Namespace) -> None:
+    assembly = prepare_lira_model_bundle(
+        stiffness_path=args.stiffness,
+        element_path=args.elements,
+        node_path=args.nodes,
+        output_dir=args.output_dir,
+        forces_path=args.forces,
+        stiffness_sheet=args.stiffness_sheet,
+        stiffness_header_row=args.stiffness_header_row,
+        element_sheet=args.element_sheet,
+        element_header_row=args.element_header_row,
+        node_sheet=args.node_sheet,
+        node_header_row=args.node_header_row,
+    )
+    print(json.dumps(assembly.as_dict(), ensure_ascii=False, indent=2))
+
+
 def cmd_validate_lira_selection(args: argparse.Namespace) -> None:
     report = validate_lira_governing_selection(args.candidates, args.selection)
     payload = report.as_dict()
@@ -738,6 +756,27 @@ def main() -> None:
     command.add_argument("--forces", type=Path, required=True)
     command.add_argument("--output-dir", type=Path, required=True)
     command.set_defaults(func=cmd_prepare_lira_selection)
+
+    command = subparsers.add_parser(
+        "prepare-lira-model",
+        help="Join LIRA stiffness, element, node and force tables into one model",
+    )
+    command.add_argument("--stiffness", type=Path, required=True)
+    command.add_argument("--elements", type=Path, required=True)
+    command.add_argument("--nodes", type=Path, required=True)
+    command.add_argument(
+        "--forces",
+        type=Path,
+        help="Optional review-bundle forces.json; attaches every candidate row",
+    )
+    command.add_argument("--output-dir", type=Path, required=True)
+    command.add_argument("--stiffness-sheet", default="Лист1")
+    command.add_argument("--stiffness-header-row", type=int, default=2)
+    command.add_argument("--element-sheet", default=" ")
+    command.add_argument("--element-header-row", type=int, default=3)
+    command.add_argument("--node-sheet", default=" ")
+    command.add_argument("--node-header-row", type=int, default=3)
+    command.set_defaults(func=cmd_prepare_lira_model)
 
     command = subparsers.add_parser(
         "validate-lira-selection",
