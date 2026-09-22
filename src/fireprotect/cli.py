@@ -6,10 +6,12 @@ from pathlib import Path
 
 from .execution import ExecutionMode
 from .lira import (
+    import_rsu_xls_bundle,
     prepare_lira_model_bundle,
     prepare_lira_review_bundle,
     prepare_lira_selection_bundle,
     validate_lira_governing_selection,
+    validate_rsu_reconstruction,
 )
 from .project_io import read_project_element_json
 from .pipeline import run_pipeline, rx3_safety_context_from_dict
@@ -489,6 +491,34 @@ def cmd_validate_lira_selection(args: argparse.Namespace) -> None:
     print(json.dumps(payload, ensure_ascii=False, indent=2))
 
 
+def cmd_validate_lira_rsu(args: argparse.Namespace) -> None:
+    bundle = import_rsu_xls_bundle(
+        forces_path=args.forces,
+        published_path=args.published,
+        coefficients_path=args.coefficients,
+        parameters_path=args.parameters,
+    )
+    report = validate_rsu_reconstruction(bundle)
+    payload = {
+        "status": report.status.value,
+        "force_records": len(bundle.force_records),
+        "published_records": len(bundle.published_records),
+        "component_comparisons": report.component_comparisons,
+        "matching_components": report.matching_components,
+        "blockers": list(report.blockers),
+        "rx38_force_generation_allowed": False,
+        "issue_readiness": "NOT_READY_FOR_ISSUE",
+    }
+    if args.report is not None:
+        target = _new_report_path(
+            args.report, args.forces, args.published, args.coefficients, args.parameters
+        )
+        target.write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+        )
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(prog="fireprotect")
     subparsers = parser.add_subparsers(required=True)
@@ -786,6 +816,17 @@ def main() -> None:
     command.add_argument("--selection", type=Path, required=True)
     command.add_argument("--report", type=Path)
     command.set_defaults(func=cmd_validate_lira_selection)
+
+    command = subparsers.add_parser(
+        "validate-lira-rsu",
+        help="Read legacy XLS exports and reconstruct published native RSU vectors",
+    )
+    command.add_argument("--forces", type=Path, required=True)
+    command.add_argument("--published", type=Path, required=True)
+    command.add_argument("--coefficients", type=Path, required=True)
+    command.add_argument("--parameters", type=Path, required=True)
+    command.add_argument("--report", type=Path)
+    command.set_defaults(func=cmd_validate_lira_rsu)
 
     args = parser.parse_args()
     args.func(args)
