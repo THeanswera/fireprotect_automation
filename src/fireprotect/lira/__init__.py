@@ -80,6 +80,7 @@ from .rsu import (
     import_rsu_xls_bundle,
     validate_rsu_reconstruction,
 )
+from .rsu_review import prepare_rsu_review_bundle, rsu_evidence, validate_rsu_selection
 from .types import (
     CANONICAL_FIELDS,
     FORCE_FIELDS,
@@ -172,6 +173,9 @@ __all__ = [
     "iter_nonempty_cells",
     "read_xls_workbook",
     "validate_rsu_reconstruction",
+    "prepare_rsu_review_bundle",
+    "rsu_evidence",
+    "validate_rsu_selection",
     "prepare_lira_review_bundle",
     "prepare_lira_selection_bundle",
     "read_candidates",

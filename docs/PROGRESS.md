@@ -37,6 +37,12 @@
 - **CONFIRMED:** при отсутствующем profile/mark identity действует blocker
   `LIRA_MEMBER_PROFILE_IDENTITY_MISSING`; native-to-RX3 convention остаётся
   `UNKNOWN`, а ranked elements имеют только статус `CANDIDATE_ONLY`.
+- **CONFIRMED (контрольный набор XLS):** read-only реконструкция опубликованных
+  РСУ сверила 16 полных native-векторов, 96/96 компонентов с нулевыми остатками.
+  Новый review bundle сохраняет четыре SHA, строки/ячейки, коэффициенты и
+  слагаемые; выбор одной строки фиксируется отдельным решением инженера.
+  Пустые или дублирующиеся параметры загружений блокируют валидацию.
+  Governing selection и RX38 generation остаются закрыты.
 - **CONFIRMED:** изучены все 5 листов исходной Excel-книги и 579 формул;
   `fireprotect.excel` создаёт только копию OOXML, защищает формулы и стили и
   проверяет SHA-256 исходника.

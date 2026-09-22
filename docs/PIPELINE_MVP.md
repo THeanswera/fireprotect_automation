@@ -49,6 +49,37 @@ RX3 template, stress state, length, локальную исходную ось, 
 governing combination ещё не имеют валидированного selector. Поэтому review
 summary по-прежнему содержит `rx38_force_generation_allowed=false`.
 
+## Контроль опубликованных РСУ и выбор одной строки
+
+Для одного набора из четырёх бинарных XLS команда ниже сверяет все шесть native
+компонентов опубликованных РСУ с исходными загружениями и явными столбцами
+коэффициентов. Она создаёт новый каталог с `rsu_evidence.json` (SHA четырёх
+источников, полные векторы, слагаемые, коэффициенты, остатки и адреса ячеек),
+`rsu_rows.csv` для просмотра и `selection_template.json`:
+
+```powershell
+python -m fireprotect.cli validate-lira-rsu `
+  --forces <усилия.xls> --published <РСУ.xls> `
+  --coefficients <коэффициенты.xls> --parameters <параметры.xls> `
+  --output-dir <новый-каталог>
+```
+
+Инженер сверяет строку с GUI ЛИРА и заполняет в **копии** шаблона только
+`declared_by`, `basis`, `lira_gui_reference`, `element_id` и `rsu_row_id`.
+Числа и состав сочетания программа берёт из привязанного к SHA evidence:
+
+```powershell
+python -m fireprotect.cli validate-lira-rsu-selection `
+  --evidence <новый-каталог>\rsu_evidence.json `
+  --selection <заполненная-копия.json>
+```
+
+Проверка требует полного совпадения всех компонентов, актуальных SHA исходных
+XLS, одного существующего ID и соответствия элемента. Её результат фиксирует
+решение инженера `ENGINEER_DECLARED_UNVALIDATED`; он не доказывает общий алгоритм
+governing selection и не разрешает генерацию RX38. Пустые и дублирующиеся строки
+параметров загружений блокируют реконструкцию.
+
 ## Соединение четырёх выгрузок ЛИРА в одну модель
 
 `prepare-lira-model` читает таблицы жёсткостей, элементов и узлов и

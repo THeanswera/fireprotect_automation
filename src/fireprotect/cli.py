@@ -10,8 +10,10 @@ from .lira import (
     prepare_lira_model_bundle,
     prepare_lira_review_bundle,
     prepare_lira_selection_bundle,
+    prepare_rsu_review_bundle,
     validate_lira_governing_selection,
     validate_rsu_reconstruction,
+    validate_rsu_selection,
 )
 from .project_io import read_project_element_json
 from .pipeline import run_pipeline, rx3_safety_context_from_dict
@@ -499,7 +501,7 @@ def cmd_validate_lira_rsu(args: argparse.Namespace) -> None:
         parameters_path=args.parameters,
     )
     report = validate_rsu_reconstruction(bundle)
-    payload = {
+    payload: dict[str, object] = {
         "status": report.status.value,
         "force_records": len(bundle.force_records),
         "published_records": len(bundle.published_records),
@@ -509,10 +511,24 @@ def cmd_validate_lira_rsu(args: argparse.Namespace) -> None:
         "rx38_force_generation_allowed": False,
         "issue_readiness": "NOT_READY_FOR_ISSUE",
     }
+    if args.output_dir is not None:
+        payload["review_bundle"] = prepare_rsu_review_bundle(
+            bundle, report, args.output_dir
+        )
     if args.report is not None:
         target = _new_report_path(
             args.report, args.forces, args.published, args.coefficients, args.parameters
         )
+        target.write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+        )
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+
+
+def cmd_validate_lira_rsu_selection(args: argparse.Namespace) -> None:
+    payload = validate_rsu_selection(args.evidence, args.selection)
+    if args.report is not None:
+        target = _new_report_path(args.report, args.evidence, args.selection)
         target.write_text(
             json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
         )
@@ -826,7 +842,17 @@ def main() -> None:
     command.add_argument("--coefficients", type=Path, required=True)
     command.add_argument("--parameters", type=Path, required=True)
     command.add_argument("--report", type=Path)
+    command.add_argument("--output-dir", type=Path, help="New read-only RSU review bundle")
     command.set_defaults(func=cmd_validate_lira_rsu)
+
+    command = subparsers.add_parser(
+        "validate-lira-rsu-selection",
+        help="Check one engineer-declared published RSU row against its evidence bundle",
+    )
+    command.add_argument("--evidence", type=Path, required=True)
+    command.add_argument("--selection", type=Path, required=True)
+    command.add_argument("--report", type=Path)
+    command.set_defaults(func=cmd_validate_lira_rsu_selection)
 
     args = parser.parse_args()
     args.func(args)

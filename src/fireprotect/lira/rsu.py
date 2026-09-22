@@ -508,7 +508,9 @@ def validate_rsu_reconstruction(
     coefficient_index: dict[tuple[str, int], list[RsuCoefficient]] = {}
     for item in bundle.coefficients:
         coefficient_index.setdefault((item.load_case_id, item.column_number), []).append(item)
-    parameter_ids = {item.load_case_id for item in bundle.parameters}
+    parameter_index: dict[str, list[RsuLoadParameter]] = {}
+    for parameter in bundle.parameters:
+        parameter_index.setdefault(parameter.load_case_id, []).append(parameter)
     results: list[RsuReconstructionResult] = []
     report_blockers: list[str] = []
     matching_components = 0
@@ -539,8 +541,12 @@ def validate_rsu_reconstruction(
             if len(coefficients) != 1:
                 blockers.append(f"RSU_COEFFICIENT_AMBIGUOUS:{load_case}")
                 continue
-            if parameter_ids and load_case not in parameter_ids:
+            parameters = parameter_index.get(load_case, [])
+            if not parameters:
                 blockers.append(f"RSU_LOAD_PARAMETER_MISSING:{load_case}")
+                continue
+            if len(parameters) != 1:
+                blockers.append(f"RSU_LOAD_PARAMETER_AMBIGUOUS:{load_case}")
                 continue
             source_rows.append((matches[0], coefficients[0]))
         components: list[RsuComponentDifference] = []

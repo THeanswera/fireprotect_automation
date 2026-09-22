@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import replace
 from decimal import Decimal
 from hashlib import sha256
+import json
 from pathlib import Path
 
 import pytest
@@ -14,8 +15,10 @@ from fireprotect.lira import (
     RsuValidationStatus,
     RsuXlsMapping,
     import_rsu_xls_bundle,
+    prepare_rsu_review_bundle,
     read_xls_workbook,
     validate_rsu_reconstruction,
+    validate_rsu_selection,
 )
 
 
@@ -223,3 +226,124 @@ def test_mapping_fingerprint_and_safety_gates(tmp_path: Path) -> None:
     assert not hasattr(bundle, "rx38")
     altered = replace(mapping, coefficient_columns={1: "1 основ."})
     assert altered.fingerprint != mapping.fingerprint
+
+
+def test_missing_and_duplicate_load_parameters_block(tmp_path: Path) -> None:
+    paths = _write_bundle(tmp_path / "missing")
+    _write_table(paths[3], [(" ", [["title"], [], ["№ загр.", "Взаимоискл."]])])
+    report = validate_rsu_reconstruction(_import(paths))
+    assert report.status is RsuValidationStatus.BLOCKED
+    assert "RSU_LOAD_PARAMETER_MISSING:1" in report.blockers
+    assert report.component_comparisons == 0
+
+    paths = _write_bundle(tmp_path / "duplicate")
+    _write_table(paths[3], [(" ", [
+        ["title"], [], ["№ загр.", "Взаимоискл."],
+        [1, ""], [1, ""], [2, ""], [3, 1], [4, 1],
+    ])])
+    report = validate_rsu_reconstruction(_import(paths))
+    assert report.status is RsuValidationStatus.BLOCKED
+    assert "RSU_LOAD_PARAMETER_AMBIGUOUS:1" in report.blockers
+
+
+def test_rsu_review_bundle_and_explicit_single_row_selection(tmp_path: Path) -> None:
+    paths = _write_bundle(tmp_path / "input")
+    bundle = _import(paths)
+    report = validate_rsu_reconstruction(bundle)
+    prepared = prepare_rsu_review_bundle(bundle, report, tmp_path / "review")
+    evidence_path = Path(str(prepared["evidence"]))
+    evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+    assert len(evidence["rows"]) == 4
+    assert evidence["sources"]["forces"]["sha256"] == sha256(paths[0].read_bytes()).hexdigest()
+    row = evidence["rows"][1]
+    assert row["row_id"] == "R0002"
+    assert row["identity"]["load_case_membership"] == ["1", "2"]
+    assert set(row["published_vector"]) == {"N", "Mk", "My", "Mz", "Qy", "Qz"}
+    assert row["published_vector"]["My"]["value"] == "4.35"
+    assert row["published_vector"]["My"]["raw_token"] is None
+    assert row["published_vector"]["My"]["decimal_provenance"] == (
+        "BIFF_NUMERIC_VALUE_DECODED_NO_RAW_DECIMAL_TOKEN"
+    )
+    assert row["reconstruction"]["My"]["difference"] == "0.000"
+    assert len(row["source_terms"]) == 2
+    assert row["source_terms"][0]["forces"]["My"]["cell"] == "E4"
+    assert evidence["rows"][3]["published_vector"]["My"]["value"] == "-4.5"
+    assert prepared["rx38_force_generation_allowed"] is False
+
+    template = json.loads(Path(str(prepared["selection_template"])).read_text(encoding="utf-8"))
+    template.update({
+        "declared_by": "Engineer A",
+        "basis": "Selected in LIRA from the published RSU table",
+        "lira_gui_reference": "LIRA screenshot 2026-09-22",
+        "element_id": "1",
+        "rsu_row_id": "R0002",
+    })
+    selection_path = tmp_path / "selection.json"
+    selection_path.write_text(json.dumps(template, ensure_ascii=False), encoding="utf-8")
+    selection = validate_rsu_selection(evidence_path, selection_path)
+    assert selection["selected_row"]["identity"] == row["identity"]
+    assert selection["governing_result_selection_validated"] is False
+    assert selection["rx38_force_generation_allowed"] is False
+    assert selection["issue_readiness"] == "NOT_READY_FOR_ISSUE"
+    with pytest.raises(LiraFormatError, match="already exists"):
+        prepare_rsu_review_bundle(bundle, report, tmp_path / "review")
+
+
+def test_rsu_selection_rejects_drift_and_wrong_identity(tmp_path: Path) -> None:
+    paths = _write_bundle(tmp_path / "input")
+    bundle = _import(paths)
+    prepared = prepare_rsu_review_bundle(
+        bundle, validate_rsu_reconstruction(bundle), tmp_path / "review"
+    )
+    evidence_path = Path(str(prepared["evidence"]))
+    template = json.loads(Path(str(prepared["selection_template"])).read_text(encoding="utf-8"))
+    template.update({
+        "declared_by": "Engineer A", "basis": "LIRA result",
+        "lira_gui_reference": "screenshot", "element_id": "9", "rsu_row_id": "R0002",
+    })
+    selection_path = tmp_path / "selection.json"
+    selection_path.write_text(json.dumps(template), encoding="utf-8")
+    with pytest.raises(LiraMappingError, match="another element"):
+        validate_rsu_selection(evidence_path, selection_path)
+
+    template["element_id"] = "1"
+    template["rsu_row_id"] = "R9999"
+    selection_path.write_text(json.dumps(template), encoding="utf-8")
+    with pytest.raises(LiraMappingError, match="does not resolve uniquely"):
+        validate_rsu_selection(evidence_path, selection_path)
+
+    template["rsu_row_id"] = "R0002"
+    template["rows"] = ["R0003"]
+    selection_path.write_text(json.dumps(template), encoding="utf-8")
+    with pytest.raises(LiraMappingError, match="exactly one row declaration"):
+        validate_rsu_selection(evidence_path, selection_path)
+    del template["rows"]
+
+    template["lira_gui_reference"] = None
+    selection_path.write_text(json.dumps(template), encoding="utf-8")
+    with pytest.raises(LiraMappingError, match="lira_gui_reference"):
+        validate_rsu_selection(evidence_path, selection_path)
+
+    template["lira_gui_reference"] = "screenshot"
+    selection_path.write_text(json.dumps(template), encoding="utf-8")
+    paths[0].write_bytes(paths[0].read_bytes() + b"changed")
+    with pytest.raises(LiraMappingError, match="source changed"):
+        validate_rsu_selection(evidence_path, selection_path)
+
+
+def test_rsu_selection_rejects_blocked_reconstruction(tmp_path: Path) -> None:
+    paths = _write_bundle(tmp_path / "input")
+    _write_table(paths[3], [(" ", [["title"], [], ["№ загр.", "Взаимоискл."]])])
+    bundle = _import(paths)
+    prepared = prepare_rsu_review_bundle(
+        bundle, validate_rsu_reconstruction(bundle), tmp_path / "review"
+    )
+    template = json.loads(Path(str(prepared["selection_template"])).read_text(encoding="utf-8"))
+    template.update({
+        "declared_by": "Engineer A", "basis": "LIRA result",
+        "lira_gui_reference": "screenshot", "element_id": "1", "rsu_row_id": "R0002",
+    })
+    selection_path = tmp_path / "selection.json"
+    selection_path.write_text(json.dumps(template), encoding="utf-8")
+    with pytest.raises(LiraMappingError, match="fully verified"):
+        validate_rsu_selection(prepared["evidence"], selection_path)
