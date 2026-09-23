@@ -35,8 +35,9 @@ from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 from .errors import LiraFormatError
-from .sources import XlsxTableSource
+from .sources import XlsTableSource, XlsxTableSource
 from .types import RawTableRow
+from .xls import BIFF_NUMERIC_PROVENANCE
 
 # Exact headers as LIRA-SAPR writes them. A table whose headers differ is a
 # different export and must be mapped deliberately, not parsed optimistically.
@@ -138,6 +139,64 @@ def _decimal_from_token(token: str, *, context: str) -> Decimal:
         raise LiraFormatError(f"{context}: token {token!r} is not a number") from exc
 
 
+def _identifier(value: object, *, context: str) -> str | None:
+    """Normalize an identifier token so ``1`` and ``1.0`` join to one key.
+
+    A BIFF numeric cell is a decoded IEEE-754 double, so an exported id ``1``
+    arrives as ``Decimal("1.0")`` while a text cell (for example a node list)
+    carries ``"1"``.  Integral numbers are reduced to their canonical integer
+    string and every other token keeps its stripped text, so joins never split
+    on a trailing ``.0``.
+    """
+
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        raise LiraFormatError(f"{context}: identifier must not be a boolean")
+    text = str(value).strip()
+    if not text:
+        return None
+    try:
+        number = Decimal(text)
+    except InvalidOperation:
+        return text
+    if number == number.to_integral_value():
+        return str(number.to_integral_value())
+    return text
+
+
+def _read_table_rows(
+    path: str | Path,
+    *,
+    sheet_name: str,
+    header_row: int,
+) -> list[RawTableRow]:
+    """Read one LIRA table from either a legacy ``.xls`` or an ``.xlsx``.
+
+    Both sources produce the same header-addressable ``RawTableRow`` list, so
+    the three table readers below do not branch on the file format.
+    """
+
+    if Path(path).suffix.casefold() == ".xls":
+        return XlsTableSource(
+            path=path, sheet_name=sheet_name, header_row=header_row
+        ).read_rows()
+    return XlsxTableSource(
+        path=path, sheet_name=sheet_name, header_row=header_row
+    ).read_rows()
+
+
+def _source_format(path: Path) -> dict[str, str]:
+    """Record the table format and the BIFF numeric-provenance limitation."""
+
+    if path.suffix.casefold() == ".xls":
+        return {
+            "format": "xls",
+            "numeric_provenance": BIFF_NUMERIC_PROVENANCE,
+        }
+    return {"format": "xlsx"}
+
+
 @dataclass(frozen=True, slots=True)
 class LiraStiffness:
     """One stiffness type with the section name exactly as LIRA wrote it."""
@@ -150,6 +209,7 @@ class LiraStiffness:
     parameters: tuple[str, ...]
     source_row: int
     source_cell: str | None
+    parameter_headers: tuple[str, ...] = ()
 
     @property
     def has_profile_identity(self) -> bool:
@@ -163,6 +223,7 @@ class LiraStiffness:
             "designation": self.designation,
             "mark": self.mark,
             "parameters": list(self.parameters),
+            "parameter_headers": list(self.parameter_headers),
             "source": {"row": self.source_row, "cell": self.source_cell},
         }
 
@@ -175,6 +236,7 @@ class LiraNode:
     z: Decimal | None
     supports: Mapping[str, str]
     source_row: int
+    source_cell: str | None = None
 
     def as_dict(self) -> dict[str, object]:
         return {
@@ -185,7 +247,7 @@ class LiraNode:
                 "z": None if self.z is None else str(self.z),
             },
             "supports": dict(self.supports),
-            "source_row": self.source_row,
+            "source": {"row": self.source_row, "cell": self.source_cell},
         }
 
 
@@ -200,6 +262,7 @@ class LiraElement:
     rigid_insert_end: str | None
     node_ids: tuple[str, ...]
     source_row: int
+    source_cell: str | None = None
 
     def as_dict(self) -> dict[str, object]:
         return {
@@ -215,7 +278,7 @@ class LiraElement:
             "rigid_insert_start": self.rigid_insert_start,
             "rigid_insert_end": self.rigid_insert_end,
             "node_ids": list(self.node_ids),
-            "source_row": self.source_row,
+            "source": {"row": self.source_row, "cell": self.source_cell},
         }
 
 
@@ -386,9 +449,7 @@ def read_stiffness_table(
     """Read the stiffness table, keeping its multi-row parameter blocks."""
 
     rows = _require_rows(
-        XlsxTableSource(
-            path=path, sheet_name=sheet_name, header_row=header_row
-        ).read_rows(),
+        _read_table_rows(path, sheet_name=sheet_name, header_row=header_row),
         path=path,
         table="stiffness table",
     )
@@ -404,7 +465,10 @@ def read_stiffness_table(
     collected: OrderedDict[str, dict[str, Any]] = OrderedDict()
     current: str | None = None
     for row in rows:
-        type_id = _text(row, type_header)
+        type_id = _identifier(
+            row.values.get(type_header),
+            context=f"{path} row {row.row_number} stiffness type id",
+        )
         raw_name = _text(row, name_header)
         if type_id is not None:
             if type_id in collected:
@@ -447,6 +511,7 @@ def read_stiffness_table(
                     if payload["source_cell"] is None
                     else str(payload["source_cell"])
                 ),
+                parameter_headers=tuple(parameter_headers),
             )
         )
     return tuple(result)
@@ -464,9 +529,7 @@ def read_element_table(
     header_row: int,
 ) -> tuple[LiraElement, ...]:
     rows = _require_rows(
-        XlsxTableSource(
-            path=path, sheet_name=sheet_name, header_row=header_row
-        ).read_rows(),
+        _read_table_rows(path, sheet_name=sheet_name, header_row=header_row),
         path=path,
         table="element table",
     )
@@ -478,7 +541,10 @@ def read_element_table(
     result: list[LiraElement] = []
     seen: dict[str, int] = {}
     for row in rows:
-        element_id = _text(row, ELEMENT_COLUMNS["element_id"])
+        element_id = _identifier(
+            row.values.get(ELEMENT_COLUMNS["element_id"]),
+            context=f"{path} row {row.row_number} element id",
+        )
         if element_id is None:
             raise LiraFormatError(f"{path}: row {row.row_number} has no element id")
         if element_id in seen:
@@ -502,14 +568,24 @@ def read_element_table(
         result.append(
             LiraElement(
                 element_id=element_id,
-                element_type=_text(row, ELEMENT_COLUMNS["element_type"]),
-                section_count=_text(row, ELEMENT_COLUMNS["section_count"]),
-                stiffness_type=_text(row, ELEMENT_COLUMNS["stiffness_type"]),
+                element_type=_identifier(
+                    row.values.get(ELEMENT_COLUMNS["element_type"]),
+                    context=f"{path} row {row.row_number} element type",
+                ),
+                section_count=_identifier(
+                    row.values.get(ELEMENT_COLUMNS["section_count"]),
+                    context=f"{path} row {row.row_number} section count",
+                ),
+                stiffness_type=_identifier(
+                    row.values.get(ELEMENT_COLUMNS["stiffness_type"]),
+                    context=f"{path} row {row.row_number} stiffness type",
+                ),
                 rotation_angle_degrees=angle,
                 rigid_insert_start=_text(row, ELEMENT_COLUMNS["rigid_insert_start"]),
                 rigid_insert_end=_text(row, ELEMENT_COLUMNS["rigid_insert_end"]),
                 node_ids=node_ids,
                 source_row=row.row_number,
+                source_cell=row.cells.get(ELEMENT_COLUMNS["element_id"]),
             )
         )
     return tuple(result)
@@ -522,9 +598,7 @@ def read_node_table(
     header_row: int,
 ) -> tuple[LiraNode, ...]:
     rows = _require_rows(
-        XlsxTableSource(
-            path=path, sheet_name=sheet_name, header_row=header_row
-        ).read_rows(),
+        _read_table_rows(path, sheet_name=sheet_name, header_row=header_row),
         path=path,
         table="node table",
     )
@@ -536,7 +610,10 @@ def read_node_table(
     result: list[LiraNode] = []
     seen: dict[str, int] = {}
     for row in rows:
-        node_id = _text(row, NODE_COLUMNS["node_id"])
+        node_id = _identifier(
+            row.values.get(NODE_COLUMNS["node_id"]),
+            context=f"{path} row {row.row_number} node id",
+        )
         if node_id is None:
             raise LiraFormatError(f"{path}: row {row.row_number} has no node id")
         if node_id in seen:
@@ -575,6 +652,7 @@ def read_node_table(
                 z=coordinates["z"],
                 supports=supports,
                 source_row=row.row_number,
+                source_cell=row.cells.get(NODE_COLUMNS["node_id"]),
             )
         )
     return tuple(result)
@@ -826,18 +904,21 @@ def prepare_lira_model_bundle(
             "sha256": _sha256_file(stiffness_file),
             "sheet": stiffness_sheet,
             "header_row": str(stiffness_header_row),
+            **_source_format(stiffness_file),
         },
         "elements": {
             "path": str(element_file),
             "sha256": _sha256_file(element_file),
             "sheet": element_sheet,
             "header_row": str(element_header_row),
+            **_source_format(element_file),
         },
         "nodes": {
             "path": str(node_file),
             "sha256": _sha256_file(node_file),
             "sheet": node_sheet,
             "header_row": str(node_header_row),
+            **_source_format(node_file),
         },
     }
 
@@ -894,6 +975,8 @@ def prepare_lira_model_bundle(
         f"- Stiffness types: {len(stiffnesses)}\n"
         f"- Nodes: {len(nodes)}\n"
         f"- Elements with a computed length: {len(lengths)}\n"
+        "- Length is the geometric straight-line distance between the end nodes;\n"
+        "  it is not a buckling/stability effective length.\n"
         f"- Force candidates attached: {force_total}\n"
         f"- Elements without any force row: {len(without_forces)}\n"
         f"- Marks: {', '.join(sorted({item.mark for item in assembled if item.mark}, key=_mark_key)) or 'none'}\n"

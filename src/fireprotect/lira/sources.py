@@ -192,3 +192,83 @@ class XlsxTableSource:
             source=f"{self.path}:{self.sheet_name}",
             sheet=self.sheet_name,
         )
+
+
+@dataclass(frozen=True, slots=True)
+class XlsTableSource:
+    """A legacy binary XLS (BIFF) table read through ``xls.read_xls_workbook``.
+
+    LIRA-SAPR exports tables as ``.xls`` for some workflows and ``.xlsx`` for
+    others.  This source keeps the exact same ``RawTableRow`` contract as
+    :class:`XlsxTableSource` so the assembly readers stay format-agnostic, while
+    numeric cells keep their ``Decimal`` value and BIFF provenance rather than a
+    fabricated raw decimal token.
+    """
+
+    path: str | Path
+    sheet_name: str
+    header_row: int = 1
+    encoding_override: str | None = "cp1251"
+
+    def read_rows(self) -> list[RawTableRow]:
+        from .xls import read_xls_workbook
+
+        if isinstance(self.header_row, bool) or not isinstance(self.header_row, int):
+            raise LiraFormatError("XLS header_row must be an integer")
+        if self.header_row < 1:
+            raise LiraFormatError("XLS header_row must be one-based")
+        if not isinstance(self.sheet_name, str) or self.sheet_name == "":
+            raise LiraFormatError("XLS import requires an explicit sheet_name")
+
+        source = Path(self.path).resolve(strict=True)
+        book = read_xls_workbook(source, encoding_override=self.encoding_override)
+        sheet = next(
+            (item for item in book.worksheets if item.name == self.sheet_name), None
+        )
+        if sheet is None:
+            raise LiraFormatError(f"{source}: sheet {self.sheet_name!r} not found")
+        if len(sheet.rows) < self.header_row:
+            raise LiraFormatError(
+                f"{source}:{self.sheet_name}: header row {self.header_row} does not exist"
+            )
+
+        header_cells = list(sheet.rows[self.header_row - 1])
+        while header_cells and header_cells[-1].value is None:
+            header_cells.pop()
+        headers = _validate_headers(
+            [cell.value for cell in header_cells],
+            source=f"{source}:{self.sheet_name}",
+        )
+
+        rows: list[RawTableRow] = []
+        for row in sheet.rows[self.header_row :]:
+            overflow = [
+                cell.value
+                for cell in row[len(headers) :]
+                if cell.value is not None and str(cell.value).strip()
+            ]
+            if overflow:
+                raise LiraFormatError(
+                    f"{source}:{self.sheet_name}: row {row[0].row_number} has more "
+                    "values than the header"
+                )
+            if not any(
+                cell.value is not None and str(cell.value).strip()
+                for cell in row[: len(headers)]
+            ):
+                continue
+            rows.append(
+                RawTableRow(
+                    values={
+                        header: row[index].value
+                        for index, header in enumerate(headers)
+                    },
+                    row_number=row[0].row_number,
+                    sheet=sheet.name,
+                    cells={
+                        header: row[index].cell_reference
+                        for index, header in enumerate(headers)
+                    },
+                )
+            )
+        return rows

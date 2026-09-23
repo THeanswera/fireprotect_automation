@@ -16,6 +16,11 @@ from typing import Iterator
 
 from .errors import LiraDependencyError, LiraFormatError
 
+# BIFF numeric cells are decoded IEEE-754 doubles: there is no raw decimal
+# token (unlike an OOXML ``<v>`` element), so this limitation is recorded
+# instead of inventing a token.
+BIFF_NUMERIC_PROVENANCE = "BIFF_NUMERIC_VALUE_DECODED_NO_RAW_DECIMAL_TOKEN"
+
 
 @dataclass(frozen=True, slots=True)
 class XlsCell:
@@ -78,7 +83,7 @@ def _cell_value(cell: object, *, xlrd: object) -> tuple[object, str | None, Deci
         return token, token, None, None
     if cell_type == xlrd.XL_CELL_NUMBER:  # type: ignore[attr-defined]
         decimal_value = Decimal(str(value))
-        return decimal_value, None, decimal_value, "BIFF_NUMERIC_VALUE_DECODED_NO_RAW_DECIMAL_TOKEN"
+        return decimal_value, None, decimal_value, BIFF_NUMERIC_PROVENANCE
     if cell_type == xlrd.XL_CELL_BOOLEAN:  # type: ignore[attr-defined]
         token = "1" if bool(value) else "0"
         return bool(value), token, None, None
