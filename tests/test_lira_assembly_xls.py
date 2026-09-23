@@ -131,6 +131,28 @@ def test_biff_numeric_ids_link_across_tables(tmp_path: Path) -> None:
             blocker.startswith("LIRA_NODE_NOT_FOUND") for blocker in item.blockers
         )
         assert "LIRA_STIFFNESS_NAME_WITHOUT_MARK" in item.blockers
+    # element 1 starts at node 1 (X/Z constrained) and ends at node 3 (free):
+    # both end nodes must keep their own support signs
+    first = assembly.elements[0]
+    assert first.supports_start == {
+        "x": "+", "y": "-", "z": "+", "ux": "-", "uy": "-", "uz": "-"
+    }
+    assert first.supports_end == {
+        "x": "-", "y": "-", "z": "-", "ux": "-", "uy": "-", "uz": "-"
+    }
+    assert first.as_dict()["geometry"]["supports"] == {
+        "start": {
+            "node_id": "1",
+            "signs": {"x": "+", "y": "-", "z": "+", "ux": "-", "uy": "-", "uz": "-"},
+        },
+        "end": {
+            "node_id": "3",
+            "signs": {"x": "-", "y": "-", "z": "-", "ux": "-", "uy": "-", "uz": "-"},
+        },
+    }
+    second = assembly.elements[1]
+    assert second.supports_start["z"] == "-"
+    assert second.supports_end["z"] == "+"
 
 
 def test_biff_manifest_records_format_and_numeric_provenance(tmp_path: Path) -> None:

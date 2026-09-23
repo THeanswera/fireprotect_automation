@@ -311,7 +311,12 @@ class LiraForceCandidateView:
 
 @dataclass(frozen=True, slots=True)
 class LiraAssembledElement:
-    """One element joined to its stiffness, its nodes, its length and forces."""
+    """One element joined to its stiffness, its nodes, its length and forces.
+
+    ``supports_start`` holds the original support signs of ``node_ids[0]`` and
+    ``supports_end`` those of ``node_ids[1]``; they are kept per node and never
+    merged into a single bar-wide support description.
+    """
 
     element_id: str
     element_type: str | None
@@ -323,7 +328,8 @@ class LiraAssembledElement:
     rotation_angle_degrees: Decimal | None
     node_ids: tuple[str, ...]
     length_m: Decimal | None
-    supports: Mapping[str, str]
+    supports_start: Mapping[str, str]
+    supports_end: Mapping[str, str]
     blockers: tuple[str, ...]
     source_rows: Mapping[str, int]
     force_candidates: tuple[LiraForceCandidateView, ...] = ()
@@ -352,7 +358,16 @@ class LiraAssembledElement:
                     if self.rotation_angle_degrees is None
                     else str(self.rotation_angle_degrees)
                 ),
-                "supports": dict(self.supports),
+                "supports": {
+                    "start": {
+                        "node_id": self.node_ids[0] if self.node_ids else None,
+                        "signs": dict(self.supports_start),
+                    },
+                    "end": {
+                        "node_id": self.node_ids[1] if len(self.node_ids) > 1 else None,
+                        "signs": dict(self.supports_end),
+                    },
+                },
             },
             "force_candidates": [item.as_dict() for item in self.force_candidates],
             "blockers": list(self.blockers),
@@ -767,11 +782,12 @@ def assemble_lira_model(
         elif len(element.node_ids) > 2:
             blockers.append("LIRA_ELEMENT_NOT_A_TWO_NODE_BAR")
 
-        supports: dict[str, str] = {}
-        if len(element.node_ids) == 2 and all(resolved_nodes):
-            end_node = resolved_nodes[1]
-            if end_node is not None:
-                supports = dict(end_node.supports)
+        supports_start: dict[str, str] = {}
+        supports_end: dict[str, str] = {}
+        if element.node_ids and resolved_nodes[0] is not None:
+            supports_start = dict(resolved_nodes[0].supports)
+        if len(element.node_ids) > 1 and resolved_nodes[1] is not None:
+            supports_end = dict(resolved_nodes[1].supports)
 
         result.append(
             LiraAssembledElement(
@@ -785,7 +801,8 @@ def assemble_lira_model(
                 rotation_angle_degrees=element.rotation_angle_degrees,
                 node_ids=element.node_ids,
                 length_m=length,
-                supports=supports,
+                supports_start=supports_start,
+                supports_end=supports_end,
                 blockers=tuple(dict.fromkeys(blockers)),
                 source_rows={
                     "element": element.source_row,
@@ -810,6 +827,19 @@ _MODEL_FILES = (
 )
 
 
+def _node_supports_csv(node_id: str | None, signs: Mapping[str, str]) -> str:
+    """Render one end node's supports as ``<node_id>:<axis>=<sign>;...``.
+
+    The node identifier prefix ties the signs to the concrete node so that the
+    CSV cannot be misread as a property of the whole bar.
+    """
+
+    body = ";".join(f"{key}={value}" for key, value in sorted(signs.items()))
+    if node_id is None:
+        return body
+    return f"{node_id}:{body}"
+
+
 def _element_csv_rows(
     elements: Sequence[LiraAssembledElement],
 ) -> tuple[list[str], list[list[str]]]:
@@ -825,7 +855,8 @@ def _element_csv_rows(
         "node_end",
         "length_m",
         "rotation_angle_degrees",
-        "supports",
+        "supports_start",
+        "supports_end",
         "status",
         "blockers",
     ]
@@ -848,7 +879,14 @@ def _element_csv_rows(
                     if item.rotation_angle_degrees is None
                     else str(item.rotation_angle_degrees)
                 ),
-                ";".join(f"{k}={v}" for k, v in sorted(item.supports.items())),
+                _node_supports_csv(
+                    item.node_ids[0] if item.node_ids else None,
+                    item.supports_start,
+                ),
+                _node_supports_csv(
+                    item.node_ids[1] if len(item.node_ids) > 1 else None,
+                    item.supports_end,
+                ),
                 "ASSEMBLED" if item.passed else "BLOCKED",
                 ";".join(item.blockers),
             ]

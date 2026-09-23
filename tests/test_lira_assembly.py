@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from decimal import Decimal
 from pathlib import Path
+from typing import Mapping
 
 import openpyxl
 import pytest
@@ -55,13 +56,20 @@ def _element(
     )
 
 
-def _node(node_id: str, x: str | None, y: str | None, z: str | None) -> LiraNode:
+def _node(
+    node_id: str,
+    x: str | None,
+    y: str | None,
+    z: str | None,
+    *,
+    supports: Mapping[str, str] | None = None,
+) -> LiraNode:
     return LiraNode(
         node_id=node_id,
         x=None if x is None else Decimal(x),
         y=None if y is None else Decimal(y),
         z=None if z is None else Decimal(z),
-        supports={"x": "+", "y": "+"},
+        supports={"x": "+", "y": "+"} if supports is None else supports,
         source_row=4,
     )
 
@@ -144,8 +152,38 @@ def test_assembly_joins_stiffness_nodes_and_length() -> None:
     assert item.kind_word == "Двутавр"
     assert item.designation == "30К1"
     assert item.length_m == Decimal("4.5")
-    assert item.supports == {"x": "+", "y": "+"}
+    assert item.supports_start == {"x": "+", "y": "+"}
+    assert item.supports_end == {"x": "+", "y": "+"}
+    assert item.as_dict()["geometry"]["supports"] == {
+        "start": {"node_id": "4", "signs": {"x": "+", "y": "+"}},
+        "end": {"node_id": "58", "signs": {"x": "+", "y": "+"}},
+    }
     assert item.as_dict()["status"] == "ASSEMBLED"
+
+
+def test_assembly_keeps_start_and_end_node_supports_separately() -> None:
+    stiffnesses = (_stiffness("1", "Двутавр 30К1 (К1)"),)
+    elements = (_element("6", nodes=("4", "58")),)
+    nodes = (
+        _node("4", "0", "0", "0", supports={"x": "+", "z": "+"}),
+        _node("58", "0", "0", "4.5", supports={"y": "-"}),
+    )
+    assembled = assemble_lira_model(
+        stiffnesses=stiffnesses, elements=elements, nodes=nodes
+    )
+    item = assembled[0]
+    assert item.node_ids == ("4", "58")
+    assert item.supports_start == {"x": "+", "z": "+"}
+    assert item.supports_end == {"y": "-"}
+    payload = item.as_dict()
+    assert payload["geometry"]["supports"]["start"] == {
+        "node_id": "4",
+        "signs": {"x": "+", "z": "+"},
+    }
+    assert payload["geometry"]["supports"]["end"] == {
+        "node_id": "58",
+        "signs": {"y": "-"},
+    }
 
 
 def test_assembly_blocks_an_unknown_stiffness_type() -> None:
