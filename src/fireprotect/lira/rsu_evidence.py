@@ -716,8 +716,22 @@ def _recheck_against_sources(
             f"{source}: evidence records {len(parameters)} load parameters but "
             f"the re-read parameters XLS contains {len(reimported_parameters)}"
         )
-    for entry in parameters:
-        load_case_id = require_text(entry, "load_case_id", str(source))
+    json_load_ids = [
+        require_text(entry, "load_case_id", str(source)) for entry in parameters
+    ]
+    if len(set(json_load_ids)) != len(json_load_ids):
+        raise LiraFormatError(
+            f"{source}: load_parameters contains a duplicate load_case_id "
+            f"({json_load_ids!r})"
+        )
+    if set(json_load_ids) != set(reimported_parameters):
+        raise LiraFormatError(
+            f"{source}: load_parameters load_case_ids in evidence are "
+            f"{sorted(json_load_ids)!r} but the re-read parameters XLS has "
+            f"{sorted(reimported_parameters)!r}"
+        )
+    for index, entry in enumerate(parameters):
+        load_case_id = json_load_ids[index]
         matched_parameter = reimported_parameters.get(load_case_id)
         if matched_parameter is None:
             raise LiraMappingError(

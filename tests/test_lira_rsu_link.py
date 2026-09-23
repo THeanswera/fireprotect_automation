@@ -193,6 +193,8 @@ def _write_rsu_biff(
                     ["№ загр.", "Имя загружения", "Взаимоискл."],
                     [1, "G_DOWN", ""],
                     [2, "Q_LONG_DOWN", ""],
+                    [3, "Q_ALT_DOWN", ""],
+                    [4, "Q_ALT_UP", ""],
                 ],
             )
         ],
@@ -406,6 +408,28 @@ def _evidence_payload(
                 },
                 "sheet": " ",
                 "row": 5,
+                "source_sha256": str(sources["parameters"]["sha256"]),
+            },
+            {
+                "load_case_id": "3",
+                "values": {
+                    "№ загр.": "3.0",
+                    "Имя загружения": "Q_ALT_DOWN",
+                    "Взаимоискл.": None,
+                },
+                "sheet": " ",
+                "row": 6,
+                "source_sha256": str(sources["parameters"]["sha256"]),
+            },
+            {
+                "load_case_id": "4",
+                "values": {
+                    "№ загр.": "4.0",
+                    "Имя загружения": "Q_ALT_UP",
+                    "Взаимоискл.": None,
+                },
+                "sheet": " ",
+                "row": 7,
                 "source_sha256": str(sources["parameters"]["sha256"]),
             },
         ],
@@ -960,6 +984,27 @@ def test_load_parameter_provenance_tamper_rejected(tmp_path: Path) -> None:
 
     _edit_evidence(evidence, mutate)
     with pytest.raises(LiraMappingError, match="provenance"):
+        _link(tmp_path, package, evidence)
+
+
+def test_duplicate_load_parameter_id_rejected(tmp_path: Path) -> None:
+    """Replacing the last parameter with a copy of the first is rejected.
+
+    The record count stays the same and the copied entry matches its own XLS
+    row, so only the uniqueness and exact-set checks can expose the edit.
+    """
+
+    package, _ = _write_model_package(tmp_path)
+    plan, pair_row = _rsu_plan()
+    sources = _write_rsu_biff(tmp_path, plan, pair_row)
+    evidence = _write_evidence(tmp_path, _evidence_payload(plan, pair_row, sources))
+
+    def mutate(payload: dict) -> None:
+        parameters = payload["load_parameters"]
+        parameters[-1] = json.loads(json.dumps(parameters[0]))
+
+    _edit_evidence(evidence, mutate)
+    with pytest.raises(LiraFormatError, match="duplicate load_case_id"):
         _link(tmp_path, package, evidence)
 
 
