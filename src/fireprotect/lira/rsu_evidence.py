@@ -42,6 +42,7 @@ from .errors import LiraFormatError, LiraMappingError
 from .rsu import (
     RsuCoefficient,
     RsuLoadForceRecord,
+    RsuLoadParameter,
     RsuPublishedRecord,
     RsuReconstructionResult,
     RsuSourceValue,
@@ -401,6 +402,11 @@ def _parse_row(
             f"({'; '.join(blockers) or 'no reason recorded'}); a blocked "
             "reconstruction is never linked as a candidate"
         )
+    if blockers:
+        raise LiraFormatError(
+            f"{row_context}: a VERIFIED row must record no blockers, "
+            f"got {blockers!r}"
+        )
     identity = require_mapping(entry.get("identity"), "identity", row_context)
     element_id = require_text(identity, "element_id", row_context)
     membership = identity.get("load_case_membership")
@@ -579,6 +585,12 @@ def _compare_value(
             f"{value.sheet!r} but the re-read source XLS locates it on sheet "
             f"{source_value.source_sheet!r}"
         )
+    if value.source_sha256 != source_value.source_sha256:
+        raise LiraMappingError(
+            f"{context}: {what} component {component} source_sha256 in evidence "
+            f"is {value.source_sha256!r} but the re-read source XLS records "
+            f"{source_value.source_sha256!r}"
+        )
     if value.header != source_value.source_header:
         raise LiraMappingError(
             f"{context}: {what} component {component} header in evidence is "
@@ -606,11 +618,37 @@ def _count(root: Mapping[str, Any], field: str, context: str) -> int:
     return value
 
 
+def _parameter_values_equal(
+    json_value: object, source_value: object, *, context: str
+) -> bool:
+    """Compare one JSON load-parameter value with the re-read XLS value."""
+
+    if json_value is None:
+        return source_value is None
+    if not isinstance(json_value, str):
+        raise LiraFormatError(
+            f"{context}: load parameter values must be strings or null"
+        )
+    if source_value is None:
+        return False
+    if isinstance(source_value, str):
+        return json_value == source_value
+    if isinstance(source_value, Decimal):
+        return (
+            parse_finite_decimal(
+                json_value, field="parameter value", context=context
+            )
+            == source_value
+        )
+    return False
+
+
 def _recheck_against_sources(
     source: Path,
     root: Mapping[str, Any],
     sources_block: Mapping[str, Any],
     rows: tuple[RsuEvidenceRow, ...],
+    parameters: tuple[Mapping[str, object], ...],
 ) -> dict[str, object]:
     """Re-read the four source XLS and prove the accepted JSON rows against them.
 
@@ -665,6 +703,59 @@ def _recheck_against_sources(
                 f"{source}: recorded {name} = {recorded_counts[name]} does not "
                 f"match the re-read sources ({actual_counts[name]})"
             )
+    reimported_parameters: dict[str, RsuLoadParameter] = {}
+    for parameter in bundle.parameters:
+        if parameter.load_case_id in reimported_parameters:
+            raise LiraFormatError(
+                f"{source}: the re-read parameters XLS contains two rows for "
+                f"load case {parameter.load_case_id!r}"
+            )
+        reimported_parameters[parameter.load_case_id] = parameter
+    if len(parameters) != len(reimported_parameters):
+        raise LiraFormatError(
+            f"{source}: evidence records {len(parameters)} load parameters but "
+            f"the re-read parameters XLS contains {len(reimported_parameters)}"
+        )
+    for entry in parameters:
+        load_case_id = require_text(entry, "load_case_id", str(source))
+        matched_parameter = reimported_parameters.get(load_case_id)
+        if matched_parameter is None:
+            raise LiraMappingError(
+                f"{source}: load parameter {load_case_id!r} in evidence does "
+                "not exist in the re-read parameters XLS"
+            )
+        if (
+            optional_text(entry, "sheet", str(source))
+            != matched_parameter.source_sheet
+            or require_positive_int(entry, "row", str(source))
+            != matched_parameter.source_row
+            or require_text(entry, "source_sha256", str(source))
+            != matched_parameter.source_sha256
+        ):
+            raise LiraMappingError(
+                f"{source}: load parameter {load_case_id!r} provenance in "
+                "evidence does not match the re-read parameters XLS"
+            )
+        json_values = require_mapping(
+            entry.get("values"), "values", str(source)
+        )
+        if set(json_values) != set(matched_parameter.values):
+            raise LiraMappingError(
+                f"{source}: load parameter {load_case_id!r} value headers in "
+                f"evidence are {sorted(json_values)!r} but the re-read "
+                f"parameters XLS has {sorted(matched_parameter.values)!r}"
+            )
+        for key, json_value in json_values.items():
+            if not _parameter_values_equal(
+                json_value,
+                matched_parameter.values[key],
+                context=f"{source} load parameter {load_case_id} {key}",
+            ):
+                raise LiraMappingError(
+                    f"{source}: load parameter {load_case_id!r} value {key!r} "
+                    f"in evidence is {json_value!r} but the re-read parameters "
+                    f"XLS has {matched_parameter.values[key]!r}"
+                )
     published_by_source: dict[tuple[str, int], RsuPublishedRecord] = {}
     for published_record in bundle.published_records:
         published_key = (published_record.source_sheet, published_record.source_row)
@@ -827,6 +918,24 @@ def _recheck_against_sources(
                     "coefficient provenance in evidence does not match the "
                     "re-read coefficients XLS"
                 )
+            if term.coefficient_raw_token != coefficient.raw_token:
+                raise LiraMappingError(
+                    f"{source}: row {row.row_id} term {term.load_case_id} "
+                    f"coefficient raw_token in evidence is "
+                    f"{term.coefficient_raw_token!r} but the re-read "
+                    f"coefficients XLS carries {coefficient.raw_token!r}"
+                )
+            if (
+                term.coefficient_decimal_provenance
+                != coefficient.decimal_provenance
+            ):
+                raise LiraMappingError(
+                    f"{source}: row {row.row_id} term {term.load_case_id} "
+                    "coefficient decimal_provenance in evidence is "
+                    f"{term.coefficient_decimal_provenance!r} but the re-read "
+                    f"coefficients XLS carries "
+                    f"{coefficient.decimal_provenance!r}"
+                )
         result = results_by_source[source_key]
         components = {item.component: item for item in result.components}
         for component in RSU_COMPONENTS:
@@ -966,7 +1075,7 @@ def read_rsu_evidence(path: str | Path) -> RsuEvidenceBundle:
     if not rows:
         raise LiraFormatError(f"{source}: the evidence bundle contains no rows")
     source_recheck = _recheck_against_sources(
-        source, root, sources_block, tuple(rows)
+        source, root, sources_block, tuple(rows), parameters
     )
     return RsuEvidenceBundle(
         path=source,

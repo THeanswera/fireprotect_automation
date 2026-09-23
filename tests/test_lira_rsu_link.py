@@ -388,14 +388,22 @@ def _evidence_payload(
         "load_parameters": [
             {
                 "load_case_id": "1",
-                "values": {},
+                "values": {
+                    "№ загр.": "1.0",
+                    "Имя загружения": "G_DOWN",
+                    "Взаимоискл.": None,
+                },
                 "sheet": " ",
                 "row": 4,
                 "source_sha256": str(sources["parameters"]["sha256"]),
             },
             {
                 "load_case_id": "2",
-                "values": {},
+                "values": {
+                    "№ загр.": "2.0",
+                    "Имя загружения": "Q_LONG_DOWN",
+                    "Взаимоискл.": None,
+                },
                 "sheet": " ",
                 "row": 5,
                 "source_sha256": str(sources["parameters"]["sha256"]),
@@ -852,6 +860,106 @@ def test_verified_bundle_with_recorded_blockers_rejected(tmp_path: Path) -> None
 
     _edit_evidence(evidence, mutate)
     with pytest.raises(LiraFormatError, match="must record no blockers"):
+        _link(tmp_path, package, evidence)
+
+
+def test_verified_row_with_blockers_rejected(tmp_path: Path) -> None:
+    """A VERIFIED row carrying blockers is a contradiction and is rejected."""
+
+    package, _ = _write_model_package(tmp_path)
+    plan, pair_row = _rsu_plan()
+    sources = _write_rsu_biff(tmp_path, plan, pair_row)
+    evidence = _write_evidence(tmp_path, _evidence_payload(plan, pair_row, sources))
+
+    def mutate(payload: dict) -> None:
+        payload["rows"][0]["blockers"] = ["TEST_CONTRADICTION"]
+
+    _edit_evidence(evidence, mutate)
+    with pytest.raises(LiraFormatError, match="no blockers"):
+        _link(tmp_path, package, evidence)
+
+
+def test_published_component_sha_tamper_rejected(tmp_path: Path) -> None:
+    """A published component pointing at another source file is rejected."""
+
+    package, _ = _write_model_package(tmp_path)
+    plan, pair_row = _rsu_plan()
+    sources = _write_rsu_biff(tmp_path, plan, pair_row)
+    evidence = _write_evidence(tmp_path, _evidence_payload(plan, pair_row, sources))
+
+    def mutate(payload: dict) -> None:
+        payload["rows"][0]["published_vector"]["My"]["source_sha256"] = "0" * 64
+
+    _edit_evidence(evidence, mutate)
+    with pytest.raises(LiraMappingError, match="source_sha256"):
+        _link(tmp_path, package, evidence)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    (("raw_token", "999"), ("decimal_provenance", "FORGED")),
+)
+def test_coefficient_provenance_tamper_rejected(
+    tmp_path: Path, field: str, value: str
+) -> None:
+    """Coefficient raw_token/decimal_provenance must match the re-read XLS.
+
+    A null raw_token for a BIFF numeric cell stays accepted; a fabricated
+    token does not.
+    """
+
+    package, _ = _write_model_package(tmp_path)
+    plan, pair_row = _rsu_plan()
+    sources = _write_rsu_biff(tmp_path, plan, pair_row)
+    evidence = _write_evidence(tmp_path, _evidence_payload(plan, pair_row, sources))
+
+    def mutate(payload: dict) -> None:
+        payload["rows"][0]["source_terms"][0]["coefficient_source"][field] = value
+
+    _edit_evidence(evidence, mutate)
+    with pytest.raises(LiraMappingError, match="coefficient"):
+        _link(tmp_path, package, evidence)
+
+
+def test_empty_load_parameters_rejected(tmp_path: Path) -> None:
+    package, _ = _write_model_package(tmp_path)
+    plan, pair_row = _rsu_plan()
+    sources = _write_rsu_biff(tmp_path, plan, pair_row)
+    evidence = _write_evidence(tmp_path, _evidence_payload(plan, pair_row, sources))
+
+    def mutate(payload: dict) -> None:
+        payload["load_parameters"] = []
+
+    _edit_evidence(evidence, mutate)
+    with pytest.raises(LiraFormatError, match="load parameters"):
+        _link(tmp_path, package, evidence)
+
+
+def test_load_parameter_value_tamper_rejected(tmp_path: Path) -> None:
+    package, _ = _write_model_package(tmp_path)
+    plan, pair_row = _rsu_plan()
+    sources = _write_rsu_biff(tmp_path, plan, pair_row)
+    evidence = _write_evidence(tmp_path, _evidence_payload(plan, pair_row, sources))
+
+    def mutate(payload: dict) -> None:
+        payload["load_parameters"][0]["values"]["Имя загружения"] = "HACKED"
+
+    _edit_evidence(evidence, mutate)
+    with pytest.raises(LiraMappingError, match="load parameter"):
+        _link(tmp_path, package, evidence)
+
+
+def test_load_parameter_provenance_tamper_rejected(tmp_path: Path) -> None:
+    package, _ = _write_model_package(tmp_path)
+    plan, pair_row = _rsu_plan()
+    sources = _write_rsu_biff(tmp_path, plan, pair_row)
+    evidence = _write_evidence(tmp_path, _evidence_payload(plan, pair_row, sources))
+
+    def mutate(payload: dict) -> None:
+        payload["load_parameters"][0]["row"] = 99
+
+    _edit_evidence(evidence, mutate)
+    with pytest.raises(LiraMappingError, match="provenance"):
         _link(tmp_path, package, evidence)
 
 
