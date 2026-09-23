@@ -5,6 +5,11 @@ The join is explicit and narrow:
 * exactly one model package and one RSU evidence file are compared, and the
   pair, their file hashes and the join basis are written into the produced
   control set;
+* the recorded source tables of both packages are re-read with the existing
+  importers and the accepted JSON is proven against them — identifiers,
+  vectors, units, coefficients, membership, provenance, geometry, section
+  identity and both-end supports; a hash match of a changed JSON is not
+  accepted as proof of correspondence to the XLS;
 * rows are joined to elements by ``element_id`` **inside this pair only** — an
   equal element number in another LIRA project proves no shared model, and the
   produced bundle records ``historical_origin_claim`` accordingly;
@@ -28,11 +33,19 @@ from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
+from .assembly import (
+    LiraAssembledElement,
+    assemble_lira_model,
+    read_element_table,
+    read_node_table,
+    read_stiffness_table,
+)
 from .errors import LiraFormatError, LiraMappingError
 from .rsu_evidence import (
     RSU_COMPONENTS,
     RsuEvidenceBundle,
     RsuEvidenceRow,
+    parse_finite_decimal,
     read_json_object,
     read_rsu_evidence,
     require_mapping,
@@ -115,14 +128,239 @@ class RsuModelLinkReport:
         }
 
 
+def _identity_text(identity: Mapping[str, Any], field: str, context: str) -> str | None:
+    value = identity.get(field)
+    if value is not None and not isinstance(value, str):
+        raise LiraFormatError(f"{context}: identity.{field} must be a string or null")
+    return value
+
+
+def _verify_element_against_sources(
+    payload: Mapping[str, object],
+    assembled: LiraAssembledElement,
+    *,
+    context: str,
+) -> None:
+    """Prove one elements.json entry against the re-read source tables."""
+
+    identity = require_mapping(payload.get("identity"), "identity", context)
+    for field in (
+        "element_type",
+        "stiffness_type",
+        "section_count",
+        "kind_word",
+        "designation",
+        "mark",
+    ):
+        json_value = _identity_text(identity, field, context)
+        source_value = getattr(assembled, field)
+        if json_value != source_value:
+            raise LiraMappingError(
+                f"{context}: identity.{field} in elements.json is {json_value!r} "
+                f"but the re-read source tables produce {source_value!r}"
+            )
+    geometry = require_mapping(payload.get("geometry"), "geometry", context)
+    json_nodes = geometry.get("node_ids")
+    if not isinstance(json_nodes, list):
+        raise LiraFormatError(f"{context}: geometry.node_ids must be a list")
+    if list(json_nodes) != list(assembled.node_ids):
+        raise LiraMappingError(
+            f"{context}: geometry.node_ids in elements.json is {json_nodes!r} "
+            f"but the re-read source tables produce {list(assembled.node_ids)!r}"
+        )
+    json_length = geometry.get("length_m")
+    json_length_decimal = (
+        None
+        if json_length is None
+        else parse_finite_decimal(
+            json_length, field="length_m", context=f"{context} geometry"
+        )
+    )
+    if (json_length_decimal is None) != (assembled.length_m is None) or (
+        json_length_decimal is not None
+        and assembled.length_m is not None
+        and json_length_decimal != assembled.length_m
+    ):
+        raise LiraMappingError(
+            f"{context}: geometry.length_m in elements.json is "
+            f"{json_length!r} but the re-read source tables produce "
+            f"{assembled.length_m}"
+        )
+    json_rotation = geometry.get("rotation_angle_degrees")
+    json_rotation_decimal = (
+        None
+        if json_rotation is None
+        else parse_finite_decimal(
+            json_rotation,
+            field="rotation_angle_degrees",
+            context=f"{context} geometry",
+        )
+    )
+    if (json_rotation_decimal is None) != (
+        assembled.rotation_angle_degrees is None
+    ) or (
+        json_rotation_decimal is not None
+        and assembled.rotation_angle_degrees is not None
+        and json_rotation_decimal != assembled.rotation_angle_degrees
+    ):
+        raise LiraMappingError(
+            f"{context}: geometry.rotation_angle_degrees in elements.json is "
+            f"{json_rotation!r} but the re-read source tables produce "
+            f"{assembled.rotation_angle_degrees}"
+        )
+    supports = geometry.get("supports")
+    if not isinstance(supports, Mapping):
+        raise LiraFormatError(f"{context}: geometry.supports must be an object")
+    for side, signs, index in (
+        ("start", assembled.supports_start, 0),
+        ("end", assembled.supports_end, 1),
+    ):
+        block = require_mapping(supports.get(side), f"supports.{side}", context)
+        expected_node = assembled.node_ids[index] if len(assembled.node_ids) > index else None
+        if block.get("node_id") != expected_node:
+            raise LiraMappingError(
+                f"{context}: geometry.supports.{side}.node_id in elements.json "
+                f"is {block.get('node_id')!r} but the re-read source tables "
+                f"produce {expected_node!r}"
+            )
+        signs_block = require_mapping(
+            block.get("signs"), f"supports.{side}.signs", context
+        )
+        if any(
+            not isinstance(key, str) or not isinstance(value, str)
+            for key, value in signs_block.items()
+        ):
+            raise LiraFormatError(
+                f"{context}: geometry.supports.{side}.signs must map axes to "
+                "sign strings"
+            )
+        if dict(signs_block) != dict(signs):
+            raise LiraMappingError(
+                f"{context}: geometry.supports.{side}.signs in elements.json "
+                f"is {dict(signs_block)!r} but the re-read source tables "
+                f"produce {dict(signs)!r}"
+            )
+    status = payload.get("status")
+    expected_status = "ASSEMBLED" if assembled.passed else "BLOCKED"
+    if status != expected_status:
+        raise LiraMappingError(
+            f"{context}: status in elements.json is {status!r} but the re-read "
+            f"source tables produce {expected_status!r}"
+        )
+    blockers = payload.get("blockers")
+    if not isinstance(blockers, list) or any(
+        not isinstance(item, str) for item in blockers
+    ):
+        raise LiraFormatError(f"{context}: blockers must be a list of strings")
+    if list(blockers) != list(assembled.blockers):
+        raise LiraMappingError(
+            f"{context}: blockers in elements.json are {list(blockers)!r} but "
+            f"the re-read source tables produce {list(assembled.blockers)!r}"
+        )
+    source_rows = payload.get("source_rows")
+    if not isinstance(source_rows, Mapping):
+        raise LiraFormatError(f"{context}: source_rows must be an object")
+    if dict(source_rows) != dict(assembled.source_rows):
+        raise LiraMappingError(
+            f"{context}: source_rows in elements.json are {dict(source_rows)!r} "
+            f"but the re-read source tables produce "
+            f"{dict(assembled.source_rows)!r}"
+        )
+
+
+def _reread_model_sources(
+    manifest_path: Path,
+    sources_block: Mapping[str, Any],
+    json_elements: list[Mapping[str, object]],
+) -> dict[str, object]:
+    """Re-read the three model tables and verify the JSON elements against them.
+
+    The recorded sheet and header row of each source are used verbatim; a
+    missing or unusable setting is refused instead of guessed.
+    """
+
+    settings: dict[str, tuple[Path, str, int]] = {}
+    for name in _MODEL_SOURCE_NAMES:
+        entry = require_mapping(sources_block.get(name), name, str(manifest_path))
+        path_token = entry.get("path")
+        sheet_token = entry.get("sheet")
+        header_token = entry.get("header_row")
+        if not isinstance(path_token, str) or not path_token.strip():
+            raise LiraFormatError(
+                f"{manifest_path}: source {name!r} has no usable path"
+            )
+        if not isinstance(sheet_token, str) or not sheet_token:
+            raise LiraFormatError(
+                f"{manifest_path}: source {name!r} has no usable sheet setting; "
+                "refusing to guess table settings"
+            )
+        if isinstance(header_token, int) and not isinstance(header_token, bool):
+            header = header_token
+        elif isinstance(header_token, str) and header_token.strip().isdigit():
+            header = int(header_token.strip())
+        else:
+            header = 0
+        if header < 1:
+            raise LiraFormatError(
+                f"{manifest_path}: source {name!r} has no usable header_row; "
+                "refusing to guess table settings"
+            )
+        settings[name] = (Path(path_token), sheet_token, header)
+
+    stiffnesses = read_stiffness_table(
+        settings["stiffness"][0],
+        sheet_name=settings["stiffness"][1],
+        header_row=settings["stiffness"][2],
+    )
+    elements = read_element_table(
+        settings["elements"][0],
+        sheet_name=settings["elements"][1],
+        header_row=settings["elements"][2],
+    )
+    nodes = read_node_table(
+        settings["nodes"][0],
+        sheet_name=settings["nodes"][1],
+        header_row=settings["nodes"][2],
+    )
+    assembled = assemble_lira_model(
+        stiffnesses=stiffnesses, elements=elements, nodes=nodes
+    )
+    if len(json_elements) != len(assembled):
+        raise LiraMappingError(
+            f"{manifest_path}: elements.json lists {len(json_elements)} elements "
+            f"but the re-read source tables produce {len(assembled)}"
+        )
+    by_id = {item.element_id: item for item in assembled}
+    for payload in json_elements:
+        element_id = require_text(payload, "element_id", str(manifest_path))
+        item = by_id.get(element_id)
+        if item is None:
+            raise LiraMappingError(
+                f"{manifest_path}: element {element_id!r} in elements.json is "
+                "not produced by the recorded source tables"
+            )
+        _verify_element_against_sources(
+            payload, item, context=f"{manifest_path} element {element_id}"
+        )
+    return {
+        "elements": len(assembled),
+        "nodes": len(nodes),
+        "stiffness_types": len(stiffnesses),
+        "geometry_verified": True,
+        "supports_verified": True,
+        "identity_verified": True,
+    }
+
+
 def _read_model_package(
     model_dir: Path,
 ) -> tuple[
     list[Mapping[str, object]],
     Mapping[str, Mapping[str, object]],
     Mapping[str, Any],
+    Mapping[str, object],
 ]:
-    """Read one model package and re-verify its recorded source XLS hashes."""
+    """Read one model package and re-verify its elements against the XLS."""
 
     manifest_path = model_dir / "manifest.json"
     elements_path = model_dir / "elements.json"
@@ -183,7 +421,8 @@ def _read_model_package(
                 "be a list of strings"
             )
         result.append(dict(entry))
-    return result, rechecked, manifest
+    model_facts = _reread_model_sources(manifest_path, sources_block, result)
+    return result, rechecked, manifest, model_facts
 
 
 def _section_count(element_id: str, token: str | None) -> int:
@@ -365,14 +604,23 @@ def _readme_text(
         "(жёсткости/элементы/узлы) и четыре файла РСУ (усилия/опубликованные "
         "РСУ/коэффициенты/параметры). Несовпадение — ошибка, пакет не "
         "создаётся.\n"
+        "- Хеши — не доказательство содержания: все семь исходных таблиц "
+        "**повторно прочитаны** существующими импортерами с явными "
+        "настройками из манифестов, и каждое значение, принятое из JSON, "
+        "сверено с результатом чтения исходников — идентификаторы, полные "
+        "векторы, единицы, коэффициенты, составы сочетаний, ячейки, геометрия, "
+        "идентичность сечения и закрепления обоих узлов.\n"
         "- Записанный статус VERIFIED не принимается на веру: каждый из шести "
         "компонентов каждой строки пересчитан по слагаемым "
         "(усилие × коэффициент) точной десятичной арифметикой и должен "
-        "совпасть с опубликованным значением, включая знак.\n"
+        "совпасть с опубликованным значением, включая знак; общий статус "
+        "BLOCKED, записанные блокировки и противоречивые статусы строк "
+        "отклоняются.\n"
         "- `section_station` каждой строки проверен против `section_count` "
         "элемента.\n"
         "- Неизвестный элемент, повторяющийся `row_id`, неполный вектор, "
-        "недопустимое сечение или изменённый источник дают явную ошибку.\n\n"
+        "недопустимое сечение, изменённый источник или JSON, не "
+        "соответствующий исходным таблицам, дают явную ошибку.\n\n"
         "## Что НЕ сделано\n\n"
         "- Строки РСУ — это строки сочетаний с составом "
         "`load_case_membership`, а не одиночные загружения; они лежат в "
@@ -408,7 +656,9 @@ def prepare_linked_rsu_bundle(
             f"{destination}"
         )
 
-    elements, model_sources, model_manifest = _read_model_package(model)
+    elements, model_sources, model_manifest, model_facts = _read_model_package(
+        model
+    )
     bundle = read_rsu_evidence(evidence)
     linked, without = link_rsu_rows_to_elements(elements, bundle)
 
@@ -435,6 +685,10 @@ def prepare_linked_rsu_bundle(
                 name: dict(value)
                 for name, value in bundle.source_files_rechecked.items()
             },
+        },
+        "source_reread": {
+            "model": dict(model_facts),
+            "rsu": dict(bundle.source_recheck),
         },
     }
     blocked_model_elements = [

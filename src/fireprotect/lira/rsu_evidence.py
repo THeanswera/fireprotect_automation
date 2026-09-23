@@ -9,8 +9,19 @@ re-verifies the bundle before any row may be linked to a model:
   with exact ``Decimal`` arithmetic from the recorded source terms (load-case
   force value times the RSU coefficient column) and must equal the published
   value, including the sign;
-* a row recorded as ``BLOCKED`` is never imported: a blocked reconstruction is
-  a verification failure, not a lesser-quality row.
+* the four source XLS are then re-read with the existing importers and the
+  reconstruction validator, and every identifier, vector value, unit,
+  coefficient, membership and source location accepted from the JSON is
+  compared against the re-read tables — self-consistency of the JSON is not
+  accepted as proof against the sources;
+* a bundle-level ``status = BLOCKED``, any recorded blocker or a row recorded
+  as ``BLOCKED`` is rejected outright: a blocked reconstruction is a
+  verification failure, not a lesser-quality row.
+
+The table settings used for the re-read are explicit: the recorded
+``mapping_fingerprint`` must match the fingerprint of the one mapping
+configuration this module knows; anything else is refused instead of being
+guessed from the data.
 
 Rows stay RSU combination rows with their ``load_case_membership`` and their
 source terms; nothing in this module turns an RSU row into an ordinary single
@@ -28,7 +39,17 @@ from types import MappingProxyType
 from typing import Any, Mapping
 
 from .errors import LiraFormatError, LiraMappingError
-from .rsu import RsuValidationStatus
+from .rsu import (
+    RsuCoefficient,
+    RsuLoadForceRecord,
+    RsuPublishedRecord,
+    RsuReconstructionResult,
+    RsuSourceValue,
+    RsuValidationStatus,
+    RsuXlsMapping,
+    import_rsu_xls_bundle,
+    validate_rsu_reconstruction,
+)
 from .types import LIRA_NATIVE_FORCE_COMPONENTS
 
 EVIDENCE_KIND = "READ_ONLY_LIRA_RSU_EVIDENCE"
@@ -260,6 +281,7 @@ class RsuEvidenceBundle:
     source_files_rechecked: Mapping[str, Mapping[str, object]]
     load_parameters: tuple[Mapping[str, object], ...]
     rows: tuple[RsuEvidenceRow, ...]
+    source_recheck: Mapping[str, object]
 
     @property
     def components_preserved(self) -> int:
@@ -520,6 +542,338 @@ def _parse_row(
     )
 
 
+def _compare_value(
+    component: str,
+    value: RsuEvidenceValue,
+    source_value: RsuSourceValue,
+    *,
+    what: str,
+    context: str,
+) -> None:
+    if value.value != source_value.value:
+        raise LiraMappingError(
+            f"{context}: {what} component {component} in evidence is "
+            f"{value.value} but the re-read source XLS contains {source_value.value}"
+        )
+    if value.unit != source_value.source_unit:
+        raise LiraMappingError(
+            f"{context}: {what} component {component} unit in evidence is "
+            f"{value.unit!r} but the re-read source XLS declares "
+            f"{source_value.source_unit!r}"
+        )
+    if value.cell != source_value.source_cell:
+        raise LiraMappingError(
+            f"{context}: {what} component {component} cell in evidence is "
+            f"{value.cell!r} but the re-read source XLS locates it at "
+            f"{source_value.source_cell!r}"
+        )
+    if value.row != source_value.source_row:
+        raise LiraMappingError(
+            f"{context}: {what} component {component} row in evidence is "
+            f"{value.row} but the re-read source XLS locates it at row "
+            f"{source_value.source_row}"
+        )
+    if value.sheet != source_value.source_sheet:
+        raise LiraMappingError(
+            f"{context}: {what} component {component} sheet in evidence is "
+            f"{value.sheet!r} but the re-read source XLS locates it on sheet "
+            f"{source_value.source_sheet!r}"
+        )
+    if value.header != source_value.source_header:
+        raise LiraMappingError(
+            f"{context}: {what} component {component} header in evidence is "
+            f"{value.header!r} but the re-read source XLS uses "
+            f"{source_value.source_header!r}"
+        )
+    if value.raw_token != source_value.raw_token:
+        raise LiraMappingError(
+            f"{context}: {what} component {component} raw_token in evidence is "
+            f"{value.raw_token!r} but the re-read source XLS carries "
+            f"{source_value.raw_token!r}"
+        )
+    if value.decimal_provenance != source_value.decimal_provenance:
+        raise LiraMappingError(
+            f"{context}: {what} component {component} decimal_provenance in "
+            f"evidence is {value.decimal_provenance!r} but the re-read source "
+            f"XLS carries {source_value.decimal_provenance!r}"
+        )
+
+
+def _count(root: Mapping[str, Any], field: str, context: str) -> int:
+    value = root.get(field)
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise LiraFormatError(f"{context}: {field} must be a non-negative integer")
+    return value
+
+
+def _recheck_against_sources(
+    source: Path,
+    root: Mapping[str, Any],
+    sources_block: Mapping[str, Any],
+    rows: tuple[RsuEvidenceRow, ...],
+) -> dict[str, object]:
+    """Re-read the four source XLS and prove the accepted JSON rows against them.
+
+    This is the counter-measure against a JSON bundle that was edited while its
+    recorded hashes stayed valid: every number accepted from the JSON is
+    compared with the value the existing importers read from the XLS itself.
+    """
+
+    mapping = RsuXlsMapping()
+    recorded_fingerprint = require_text(root, "mapping_fingerprint", str(source))
+    if mapping.fingerprint != recorded_fingerprint:
+        raise LiraMappingError(
+            f"{source}: evidence was produced with mapping fingerprint "
+            f"{recorded_fingerprint}, but the only explicit table settings known "
+            f"here have fingerprint {mapping.fingerprint}; refusing to guess "
+            "table settings from the data"
+        )
+    bundle = import_rsu_xls_bundle(
+        forces_path=str(require_text(sources_block["forces"], "path", str(source))),
+        published_path=str(
+            require_text(sources_block["published"], "path", str(source))
+        ),
+        coefficients_path=str(
+            require_text(sources_block["coefficients"], "path", str(source))
+        ),
+        parameters_path=str(
+            require_text(sources_block["parameters"], "path", str(source))
+        ),
+        mapping=mapping,
+    )
+    report = validate_rsu_reconstruction(bundle)
+    if report.status is not RsuValidationStatus.VERIFIED:
+        raise LiraFormatError(
+            f"{source}: re-reading the source XLS does not reproduce every "
+            f"published row: {'; '.join(report.blockers)}"
+        )
+    recorded_counts = {
+        "force_records": _count(root, "force_records", str(source)),
+        "published_records": _count(root, "published_records", str(source)),
+        "component_comparisons": _count(root, "component_comparisons", str(source)),
+        "matching_components": _count(root, "matching_components", str(source)),
+    }
+    actual_counts = {
+        "force_records": len(bundle.force_records),
+        "published_records": len(bundle.published_records),
+        "component_comparisons": report.component_comparisons,
+        "matching_components": report.matching_components,
+    }
+    for name in recorded_counts:
+        if recorded_counts[name] != actual_counts[name]:
+            raise LiraFormatError(
+                f"{source}: recorded {name} = {recorded_counts[name]} does not "
+                f"match the re-read sources ({actual_counts[name]})"
+            )
+    published_by_source: dict[tuple[str, int], RsuPublishedRecord] = {}
+    for published_record in bundle.published_records:
+        published_key = (published_record.source_sheet, published_record.source_row)
+        if published_key in published_by_source:
+            raise LiraFormatError(
+                f"{source}: the re-read published XLS contains two rows at "
+                f"sheet {published_key[0]!r} row {published_key[1]}"
+            )
+        published_by_source[published_key] = published_record
+    force_by_key: dict[tuple[str, str, str], RsuLoadForceRecord] = {}
+    for force_record in bundle.force_records:
+        force_key_name = (
+            force_record.element_id,
+            force_record.section_station,
+            force_record.load_case_id,
+        )
+        if force_key_name in force_by_key:
+            raise LiraFormatError(
+                f"{source}: the re-read forces XLS contains two rows for "
+                f"element {force_key_name[0]} section {force_key_name[1]} "
+                f"load case {force_key_name[2]}"
+            )
+        force_by_key[force_key_name] = force_record
+    coefficients_by_key: dict[tuple[str, int], RsuCoefficient] = {}
+    for coefficient_item in bundle.coefficients:
+        coefficient_key = (
+            coefficient_item.load_case_id,
+            coefficient_item.column_number,
+        )
+        if coefficient_key in coefficients_by_key:
+            raise LiraFormatError(
+                f"{source}: the re-read coefficients XLS contains two rows for "
+                f"load case {coefficient_key[0]} column {coefficient_key[1]}"
+            )
+        coefficients_by_key[coefficient_key] = coefficient_item
+    results_by_source: dict[tuple[str, int], RsuReconstructionResult] = {}
+    for reconstruction_result in report.results:
+        reconstruction_key = (
+            reconstruction_result.published_record.source_sheet,
+            reconstruction_result.published_record.source_row,
+        )
+        results_by_source[reconstruction_key] = reconstruction_result
+
+    used_sources: set[tuple[str, int]] = set()
+    for row in rows:
+        if row.source_sheet is None:
+            raise LiraFormatError(
+                f"{source}: row {row.row_id} has no source sheet and cannot be "
+                "matched to the re-read published XLS"
+            )
+        source_key = (row.source_sheet, row.source_row)
+        record = published_by_source.get(source_key)
+        if record is None:
+            raise LiraMappingError(
+                f"{source}: row {row.row_id} claims sheet {row.source_sheet!r} "
+                f"row {row.source_row}, which the re-read published XLS does "
+                "not contain"
+            )
+        if source_key in used_sources:
+            raise LiraFormatError(
+                f"{source}: two evidence rows claim the same source location "
+                f"sheet {source_key[0]!r} row {source_key[1]}"
+            )
+        used_sources.add(source_key)
+        if record.element_id != row.element_id:
+            raise LiraMappingError(
+                f"{source}: row {row.row_id} element_id in evidence is "
+                f"{row.element_id!r} but the re-read source XLS says "
+                f"{record.element_id!r}"
+            )
+        if record.section_station != row.section_station:
+            raise LiraMappingError(
+                f"{source}: row {row.row_id} section_station in evidence is "
+                f"{row.section_station!r} but the re-read source XLS says "
+                f"{record.section_station!r}"
+            )
+        if record.rsu_group != row.rsu_group:
+            raise LiraMappingError(
+                f"{source}: row {row.row_id} rsu_group in evidence is "
+                f"{row.rsu_group!r} but the re-read source XLS says "
+                f"{record.rsu_group!r}"
+            )
+        if record.rsu_criterion != row.rsu_criterion:
+            raise LiraMappingError(
+                f"{source}: row {row.row_id} rsu_criterion in evidence is "
+                f"{row.rsu_criterion!r} but the re-read source XLS says "
+                f"{record.rsu_criterion!r}"
+            )
+        if record.rsu_column_number != row.rsu_column_number:
+            raise LiraMappingError(
+                f"{source}: row {row.row_id} rsu_column_number in evidence is "
+                f"{row.rsu_column_number} but the re-read source XLS says "
+                f"{record.rsu_column_number}"
+            )
+        if tuple(record.load_case_membership) != row.load_case_membership:
+            raise LiraMappingError(
+                f"{source}: row {row.row_id} load_case_membership in evidence "
+                f"is {list(row.load_case_membership)} but the re-read source "
+                f"XLS says {list(record.load_case_membership)}"
+            )
+        for component in RSU_COMPONENTS:
+            _compare_value(
+                component,
+                row.published_vector[component],
+                record.vector.values[component],
+                what="published vector",
+                context=f"{source} row {row.row_id}",
+            )
+        for term in row.source_terms:
+            force_key = (row.element_id, row.section_station, term.load_case_id)
+            matched_force = force_by_key.get(force_key)
+            if matched_force is None:
+                raise LiraMappingError(
+                    f"{source}: row {row.row_id} term {term.load_case_id} "
+                    "references a force row the re-read forces XLS does not "
+                    "contain"
+                )
+            if (
+                term.force_sheet != matched_force.source_sheet
+                or term.force_row != matched_force.source_row
+            ):
+                raise LiraMappingError(
+                    f"{source}: row {row.row_id} term {term.load_case_id} "
+                    f"locates its force row at sheet {term.force_sheet!r} row "
+                    f"{term.force_row}, but the re-read forces XLS has it at "
+                    f"sheet {matched_force.source_sheet!r} row "
+                    f"{matched_force.source_row}"
+                )
+            for component in RSU_COMPONENTS:
+                _compare_value(
+                    component,
+                    term.forces[component],
+                    matched_force.vector.values[component],
+                    what=f"term {term.load_case_id} force",
+                    context=f"{source} row {row.row_id}",
+                )
+            coefficient = coefficients_by_key.get(
+                (term.load_case_id, row.rsu_column_number)
+            )
+            if coefficient is None:
+                raise LiraMappingError(
+                    f"{source}: row {row.row_id} term {term.load_case_id} "
+                    f"column {row.rsu_column_number} has no coefficient in the "
+                    "re-read coefficients XLS"
+                )
+            if term.coefficient != coefficient.coefficient:
+                raise LiraMappingError(
+                    f"{source}: row {row.row_id} term {term.load_case_id} "
+                    f"coefficient in evidence is {term.coefficient} but the "
+                    f"re-read coefficients XLS says {coefficient.coefficient}"
+                )
+            if (
+                term.coefficient_sheet != coefficient.source_sheet
+                or term.coefficient_row != coefficient.source_row
+                or term.coefficient_cell != coefficient.source_cell
+                or term.coefficient_header != coefficient.source_header
+            ):
+                raise LiraMappingError(
+                    f"{source}: row {row.row_id} term {term.load_case_id} "
+                    "coefficient provenance in evidence does not match the "
+                    "re-read coefficients XLS"
+                )
+        result = results_by_source[source_key]
+        components = {item.component: item for item in result.components}
+        for component in RSU_COMPONENTS:
+            difference = components[component]
+            recorded = row.reconstruction[component]
+            if parse_finite_decimal(
+                recorded["published"],
+                field="published",
+                context=f"{source} row {row.row_id} {component}",
+            ) != difference.published:
+                raise LiraMappingError(
+                    f"{source}: row {row.row_id} recorded reconstruction "
+                    f"published value for {component} does not match the "
+                    "re-read sources"
+                )
+            if parse_finite_decimal(
+                recorded["reconstructed"],
+                field="reconstructed",
+                context=f"{source} row {row.row_id} {component}",
+            ) != difference.reconstructed:
+                raise LiraMappingError(
+                    f"{source}: row {row.row_id} recorded reconstruction "
+                    f"reconstructed value for {component} does not match the "
+                    "re-read sources"
+                )
+            if parse_finite_decimal(
+                recorded["difference"],
+                field="difference",
+                context=f"{source} row {row.row_id} {component}",
+            ) != difference.difference:
+                raise LiraMappingError(
+                    f"{source}: row {row.row_id} recorded reconstruction "
+                    f"residual for {component} does not match the re-read "
+                    "sources"
+                )
+    return {
+        "mapping_fingerprint": mapping.fingerprint,
+        "published_rows": len(bundle.published_records),
+        "force_records": len(bundle.force_records),
+        "coefficients": len(bundle.coefficients),
+        "load_parameters": len(bundle.parameters),
+        "reconstruction_status": report.status.value,
+        "component_comparisons": report.component_comparisons,
+        "matching_components": report.matching_components,
+    }
+
+
 def read_rsu_evidence(path: str | Path) -> RsuEvidenceBundle:
     """Read and re-verify one RSU evidence bundle, fail-closed."""
 
@@ -530,11 +884,17 @@ def read_rsu_evidence(path: str | Path) -> RsuEvidenceBundle:
             f"{source}: kind must be {EVIDENCE_KIND!r}, got {root.get('kind')!r}"
         )
     status_token = root.get("status")
-    if status_token not in (
-        RsuValidationStatus.VERIFIED.value,
-        RsuValidationStatus.BLOCKED.value,
-    ):
-        raise LiraFormatError(f"{source}: unknown RSU evidence status {status_token!r}")
+    if status_token != RsuValidationStatus.VERIFIED.value:
+        raise LiraFormatError(
+            f"{source}: RSU evidence status must be VERIFIED for a read-only "
+            f"link, got {status_token!r}; a globally BLOCKED bundle is rejected"
+        )
+    recorded_blockers = root.get("blockers")
+    if not isinstance(recorded_blockers, list) or recorded_blockers:
+        raise LiraFormatError(
+            f"{source}: a VERIFIED RSU evidence bundle must record no blockers, "
+            f"got {recorded_blockers!r}"
+        )
     mapping_fingerprint = require_text(root, "mapping_fingerprint", str(source))
     sources_block = require_mapping(root.get("sources"), "sources", str(source))
     if set(sources_block) != set(EVIDENCE_SOURCE_NAMES):
@@ -576,6 +936,16 @@ def read_rsu_evidence(path: str | Path) -> RsuEvidenceBundle:
         raise LiraFormatError(
             f"{source}: component_comparisons does not match rows x components"
         )
+    matching = root.get("matching_components")
+    if (
+        isinstance(matching, bool)
+        or not isinstance(matching, int)
+        or matching != comparisons
+    ):
+        raise LiraFormatError(
+            f"{source}: matching_components must equal component_comparisons "
+            "for a VERIFIED bundle"
+        )
     expected_hashes = {
         name: str(rechecked[name]["sha256"]) for name in EVIDENCE_SOURCE_NAMES
     }
@@ -595,6 +965,9 @@ def read_rsu_evidence(path: str | Path) -> RsuEvidenceBundle:
         rows.append(row)
     if not rows:
         raise LiraFormatError(f"{source}: the evidence bundle contains no rows")
+    source_recheck = _recheck_against_sources(
+        source, root, sources_block, tuple(rows)
+    )
     return RsuEvidenceBundle(
         path=source,
         sha256=sha256_file(source),
@@ -606,4 +979,5 @@ def read_rsu_evidence(path: str | Path) -> RsuEvidenceBundle:
         source_files_rechecked=MappingProxyType(rechecked),
         load_parameters=parameters,
         rows=tuple(rows),
+        source_recheck=MappingProxyType(source_recheck),
     )
