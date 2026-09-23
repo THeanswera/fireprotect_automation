@@ -10,6 +10,7 @@ from .lira import (
     prepare_lira_model_bundle,
     prepare_lira_review_bundle,
     prepare_lira_selection_bundle,
+    prepare_linked_rsu_bundle,
     prepare_rsu_review_bundle,
     validate_lira_governing_selection,
     validate_rsu_reconstruction,
@@ -535,6 +536,15 @@ def cmd_validate_lira_rsu_selection(args: argparse.Namespace) -> None:
     print(json.dumps(payload, ensure_ascii=False, indent=2))
 
 
+def cmd_link_lira_model_rsu(args: argparse.Namespace) -> None:
+    report = prepare_linked_rsu_bundle(
+        model_dir=args.model_dir,
+        evidence_path=args.evidence,
+        output_dir=args.output_dir,
+    )
+    print(json.dumps(report.as_dict(), ensure_ascii=False, indent=2))
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(prog="fireprotect")
     subparsers = parser.add_subparsers(required=True)
@@ -853,6 +863,15 @@ def main() -> None:
     command.add_argument("--selection", type=Path, required=True)
     command.add_argument("--report", type=Path)
     command.set_defaults(func=cmd_validate_lira_rsu_selection)
+
+    command = subparsers.add_parser(
+        "link-lira-model-rsu",
+        help="Link a read-only LIRA model package with re-verified RSU evidence rows",
+    )
+    command.add_argument("--model-dir", type=Path, required=True)
+    command.add_argument("--evidence", type=Path, required=True)
+    command.add_argument("--output-dir", type=Path, required=True)
+    command.set_defaults(func=cmd_link_lira_model_rsu)
 
     args = parser.parse_args()
     args.func(args)

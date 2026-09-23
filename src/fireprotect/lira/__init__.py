@@ -81,6 +81,22 @@ from .rsu import (
     validate_rsu_reconstruction,
 )
 from .rsu_review import prepare_rsu_review_bundle, rsu_evidence, validate_rsu_selection
+from .rsu_evidence import (
+    EVIDENCE_KIND,
+    RsuEvidenceBundle,
+    RsuEvidenceRow,
+    RsuEvidenceTerm,
+    RsuEvidenceValue,
+    read_rsu_evidence,
+    verify_recorded_sha256,
+)
+from .rsu_link import (
+    LINK_STATUS,
+    LinkedModelElement,
+    RsuModelLinkReport,
+    link_rsu_rows_to_elements,
+    prepare_linked_rsu_bundle,
+)
 from .types import (
     CANONICAL_FIELDS,
     FORCE_FIELDS,
@@ -180,4 +196,16 @@ __all__ = [
     "prepare_lira_selection_bundle",
     "read_candidates",
     "validate_lira_governing_selection",
+    "EVIDENCE_KIND",
+    "LINK_STATUS",
+    "LinkedModelElement",
+    "RsuEvidenceBundle",
+    "RsuEvidenceRow",
+    "RsuEvidenceTerm",
+    "RsuEvidenceValue",
+    "RsuModelLinkReport",
+    "link_rsu_rows_to_elements",
+    "prepare_linked_rsu_bundle",
+    "read_rsu_evidence",
+    "verify_recorded_sha256",
 ]
