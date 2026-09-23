@@ -99,8 +99,10 @@ from .rsu_link import (
 )
 from .experiment_input import (
     BarExperimentDeclaration,
+    declaration_template,
     prepare_bar_experiment_input,
     read_bar_declaration,
+    write_declaration_template,
 )
 from .types import (
     CANONICAL_FIELDS,
@@ -214,6 +216,8 @@ __all__ = [
     "read_rsu_evidence",
     "verify_recorded_sha256",
     "BarExperimentDeclaration",
+    "declaration_template",
     "prepare_bar_experiment_input",
     "read_bar_declaration",
+    "write_declaration_template",
 ]

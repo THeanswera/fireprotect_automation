@@ -364,6 +364,27 @@ def declaration_template() -> dict[str, object]:
     }
 
 
+def write_declaration_template(output_path: str | Path) -> Path:
+    """Write a blank declaration template to a new file.
+
+    Reuses :func:`declaration_template` so the schema lives in exactly one
+    place. An existing file is never overwritten; no package is prepared and
+    no RX38 is created.
+    """
+
+    target = Path(output_path).resolve(strict=False)
+    if target.exists():
+        raise LiraFormatError(
+            f"declaration template already exists; refusing to overwrite: {target}"
+        )
+    target.parent.mkdir(parents=True, exist_ok=True)
+    _write_new(
+        target,
+        json.dumps(declaration_template(), ensure_ascii=False, indent=2) + "\n",
+    )
+    return target
+
+
 @dataclass(frozen=True, slots=True)
 class BarChain:
     """One connected straight chain of finite elements."""
@@ -497,11 +518,18 @@ def _build_bar_chain(
             )
         element_id = candidates[0]
         element = by_id[element_id]
-        other = (
-            element.node_ids[1]
-            if element.node_ids[0] == current
-            else element.node_ids[0]
-        )
+        if element.node_ids[0] == current:
+            other = element.node_ids[1]
+        elif element.node_ids[1] == current:
+            raise LiraMappingError(
+                f"{context}: element {element_id!r} is oriented opposite to the "
+                f"declared bar direction (source nodes {element.node_ids[1]!r} → "
+                f"{element.node_ids[0]!r}); node order is never rewritten"
+            )
+        else:
+            raise LiraMappingError(
+                f"{context}: element {element_id!r} does not touch node {current!r}"
+            )
         used.add(element_id)
         ordered.append(element)
         current = other
@@ -522,18 +550,13 @@ def _build_bar_chain(
                 f"{context}: interior node {node_id!r} is not shared by exactly "
                 "two elements"
             )
-    # Straightness: consecutive element direction vectors (ordered along the
-    # traversal) must be parallel and point the same way.
+    # Straightness: consecutive element direction vectors (in the original
+    # source node order, which the traversal above proved consistent) must be
+    # parallel and point the same way.
     directions: list[Vector3] = []
-    current = start
     for element in ordered:
-        other = (
-            element.node_ids[1]
-            if element.node_ids[0] == current
-            else element.node_ids[0]
-        )
-        start_xyz = node_coordinates[current]
-        end_xyz = node_coordinates[other]
+        start_xyz = node_coordinates[element.node_ids[0]]
+        end_xyz = node_coordinates[element.node_ids[1]]
         directions.append(
             (
                 end_xyz[0] - start_xyz[0],
@@ -541,7 +564,6 @@ def _build_bar_chain(
                 end_xyz[2] - start_xyz[2],
             )
         )
-        current = other
     for first, second in zip(directions, directions[1:]):
         cross, dot = _cross_and_dot(first, second)
         first_norm_sq = first[0] ** 2 + first[1] ** 2 + first[2] ** 2
@@ -788,8 +810,9 @@ def prepare_bar_experiment_input(
     if declaration.linked_manifest_sha256 != actual_linked_sha:
         raise LiraMappingError(
             f"{declaration_file}: linked_manifest_sha256 does not match "
-            f"{linked / 'manifest.json'}; the declaration is bound to a "
-            "different evidence revision"
+            f"{linked / 'manifest.json'} (declared "
+            f"{declaration.linked_manifest_sha256}, actual {actual_linked_sha}); "
+            "the declaration is bound to a different evidence revision"
         )
     basis = require_mapping(
         linked_manifest.get("link_basis"), "link_basis", str(linked)
@@ -816,6 +839,18 @@ def prepare_bar_experiment_input(
 
     _, _, model_manifest, _, assembled = read_model_package(model_path)
     bundle = read_rsu_evidence(evidence_path)
+    recorded_evidence_sha = evidence_block.get("sha256")
+    if not isinstance(recorded_evidence_sha, str) or not recorded_evidence_sha.strip():
+        raise LiraMappingError(
+            f"{linked}: link_basis.rsu_evidence has no usable sha256; refusing "
+            "to bind the declaration to an unidentified evidence revision"
+        )
+    if bundle.sha256 != recorded_evidence_sha.strip():
+        raise LiraMappingError(
+            f"{linked}: the linked package no longer matches its recorded RSU "
+            f"evidence revision (recorded {recorded_evidence_sha.strip()}, "
+            f"actual {bundle.sha256})"
+        )
     # Re-verify every evidence row against the model package elements.
     link_rsu_rows_to_elements(
         tuple(item.as_dict() for item in assembled), bundle

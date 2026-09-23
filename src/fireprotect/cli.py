@@ -16,6 +16,7 @@ from .lira import (
     validate_lira_governing_selection,
     validate_rsu_reconstruction,
     validate_rsu_selection,
+    write_declaration_template,
 )
 from .project_io import read_project_element_json
 from .pipeline import run_pipeline, rx3_safety_context_from_dict
@@ -555,6 +556,26 @@ def cmd_prepare_lira_bar_experiment(args: argparse.Namespace) -> None:
     print(json.dumps(manifest, ensure_ascii=False, indent=2))
 
 
+def cmd_new_lira_bar_experiment_declaration(args: argparse.Namespace) -> None:
+    target = write_declaration_template(args.output)
+    print(
+        json.dumps(
+            {
+                "declaration_template": str(target),
+                "declaration_kind": "LIRA_BAR_EXPERIMENT_DECLARATION",
+                "note": (
+                    "Fill the confirmed values and the author fields, leave "
+                    "unknowns null, then run prepare-lira-bar-experiment."
+                ),
+                "rx38_created": False,
+                "release_forbidden": True,
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+    )
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(prog="fireprotect")
     subparsers = parser.add_subparsers(required=True)
@@ -891,6 +912,13 @@ def main() -> None:
     command.add_argument("--declaration", type=Path, required=True)
     command.add_argument("--output-dir", type=Path, required=True)
     command.set_defaults(func=cmd_prepare_lira_bar_experiment)
+
+    command = subparsers.add_parser(
+        "new-lira-bar-experiment-declaration",
+        help="Write a blank bar-experiment declaration template; prepares no package",
+    )
+    command.add_argument("--output", type=Path, required=True)
+    command.set_defaults(func=cmd_new_lira_bar_experiment_declaration)
 
     args = parser.parse_args()
     args.func(args)

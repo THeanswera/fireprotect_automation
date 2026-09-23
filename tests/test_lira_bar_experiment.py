@@ -13,11 +13,13 @@ from fireprotect.lira import (
     LiraMappingError,
     RsuXlsMapping,
     assemble_lira_model,
+    declaration_template,
     prepare_bar_experiment_input,
     prepare_linked_rsu_bundle,
     read_element_table,
     read_node_table,
     read_stiffness_table,
+    write_declaration_template,
 )
 
 COMPONENTS = ("N", "Mk", "My", "Mz", "Qy", "Qz")
@@ -831,3 +833,87 @@ def test_refuses_existing_output_dir(tmp_path: Path) -> None:
             declaration_path=declaration,
             output_dir=output,
         )
+
+
+def test_evidence_row_id_swap_rejected(tmp_path: Path) -> None:
+    """Swapping two correct row_ids changes the evidence revision.
+
+    Both rows stay individually consistent with the unchanged XLS, so only the
+    recorded evidence SHA-256 can expose the swap.
+    """
+
+    linked, _ = _make_linked(tmp_path)
+    declaration = _write_declaration(
+        tmp_path, _declaration_payload(linked)
+    )
+    linked_manifest = json.loads(
+        (linked / "manifest.json").read_text(encoding="utf-8")
+    )
+    evidence_path = Path(linked_manifest["link_basis"]["rsu_evidence"]["path"])
+    payload = json.loads(evidence_path.read_text(encoding="utf-8"))
+    rows = payload["rows"]
+    rows[0]["row_id"], rows[1]["row_id"] = rows[1]["row_id"], rows[0]["row_id"]
+    evidence_path.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+    )
+    output = tmp_path / "experiment"
+    with pytest.raises(LiraMappingError, match="RSU evidence"):
+        _run(tmp_path, linked, declaration)
+    assert not output.exists()
+
+
+def test_missing_recorded_evidence_sha_rejected(tmp_path: Path) -> None:
+    linked, _ = _make_linked(tmp_path)
+    manifest_path = linked / "manifest.json"
+    payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    del payload["link_basis"]["rsu_evidence"]["sha256"]
+    manifest_path.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+    )
+    declaration = _write_declaration(
+        tmp_path, _declaration_payload(linked)
+    )
+    with pytest.raises(LiraMappingError, match="no usable sha256"):
+        _run(tmp_path, linked, declaration)
+
+
+def test_reversed_element_orientation_rejected(tmp_path: Path) -> None:
+    """A chain 1→3, 2→3 keeps connectivity but reverses one source element."""
+
+    package, _ = _make_steel_model(
+        tmp_path,
+        element_rows=[
+            [1, 10, 2, 1, 0, "-", "-", "1,3"],
+            [2, 10, 2, 1, 0, "-", "-", "2,3"],
+        ],
+    )
+    plan, _ = _default_plan()
+    sources = _write_rsu_biff(tmp_path, plan)
+    evidence = _write_evidence(tmp_path, _evidence_payload(plan, sources))
+    linked_report = prepare_linked_rsu_bundle(
+        model_dir=package, evidence_path=evidence, output_dir=tmp_path / "linked"
+    )
+    declaration = _write_declaration(
+        tmp_path, _declaration_payload(linked_report.output_dir)
+    )
+    with pytest.raises(LiraMappingError, match="opposite"):
+        _run(tmp_path, linked_report.output_dir, declaration)
+
+
+def test_write_declaration_template_and_no_overwrite(tmp_path: Path) -> None:
+    target = tmp_path / "declaration.json"
+    written = write_declaration_template(target)
+    assert written == target.resolve()
+    payload = json.loads(target.read_text(encoding="utf-8"))
+    assert payload == declaration_template()
+    assert payload["declaration_kind"] == "LIRA_BAR_EXPERIMENT_DECLARATION"
+    assert payload["linked_manifest_sha256"] == ""
+    assert payload["bar"]["element_ids"] == []
+    assert payload["bar"]["confirmed_by"] == ""
+    assert payload["profile"]["confirmed_by"] == ""
+    assert payload["profile"]["stress_state"] is None
+    assert all(
+        value is None for value in payload["design_conditions"].values()
+    )
+    with pytest.raises(LiraFormatError, match="refusing to overwrite"):
+        write_declaration_template(target)
