@@ -97,6 +97,11 @@ from .rsu_link import (
     link_rsu_rows_to_elements,
     prepare_linked_rsu_bundle,
 )
+from .experiment_input import (
+    BarExperimentDeclaration,
+    prepare_bar_experiment_input,
+    read_bar_declaration,
+)
 from .types import (
     CANONICAL_FIELDS,
     FORCE_FIELDS,
@@ -208,4 +213,7 @@ __all__ = [
     "prepare_linked_rsu_bundle",
     "read_rsu_evidence",
     "verify_recorded_sha256",
+    "BarExperimentDeclaration",
+    "prepare_bar_experiment_input",
+    "read_bar_declaration",
 ]

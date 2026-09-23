@@ -272,7 +272,7 @@ def _reread_model_sources(
     manifest_path: Path,
     sources_block: Mapping[str, Any],
     json_elements: list[Mapping[str, object]],
-) -> dict[str, object]:
+) -> tuple[tuple[LiraAssembledElement, ...], dict[str, object]]:
     """Re-read the three model tables and verify the JSON elements against them.
 
     The recorded sheet and header row of each source are used verbatim; a
@@ -342,7 +342,7 @@ def _reread_model_sources(
         _verify_element_against_sources(
             payload, item, context=f"{manifest_path} element {element_id}"
         )
-    return {
+    facts: dict[str, object] = {
         "elements": len(assembled),
         "nodes": len(nodes),
         "stiffness_types": len(stiffnesses),
@@ -350,15 +350,17 @@ def _reread_model_sources(
         "supports_verified": True,
         "identity_verified": True,
     }
+    return assembled, facts
 
 
-def _read_model_package(
+def read_model_package(
     model_dir: Path,
 ) -> tuple[
     list[Mapping[str, object]],
     Mapping[str, Mapping[str, object]],
     Mapping[str, Any],
     Mapping[str, object],
+    tuple[LiraAssembledElement, ...],
 ]:
     """Read one model package and re-verify its elements against the XLS."""
 
@@ -421,8 +423,10 @@ def _read_model_package(
                 "be a list of strings"
             )
         result.append(dict(entry))
-    model_facts = _reread_model_sources(manifest_path, sources_block, result)
-    return result, rechecked, manifest, model_facts
+    assembled, model_facts = _reread_model_sources(
+        manifest_path, sources_block, result
+    )
+    return result, rechecked, manifest, model_facts, assembled
 
 
 def _section_count(element_id: str, token: str | None) -> int:
@@ -656,7 +660,7 @@ def prepare_linked_rsu_bundle(
             f"{destination}"
         )
 
-    elements, model_sources, model_manifest, model_facts = _read_model_package(
+    elements, model_sources, model_manifest, model_facts, _ = read_model_package(
         model
     )
     bundle = read_rsu_evidence(evidence)

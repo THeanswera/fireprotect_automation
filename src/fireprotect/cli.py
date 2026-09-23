@@ -7,6 +7,7 @@ from pathlib import Path
 from .execution import ExecutionMode
 from .lira import (
     import_rsu_xls_bundle,
+    prepare_bar_experiment_input,
     prepare_lira_model_bundle,
     prepare_lira_review_bundle,
     prepare_lira_selection_bundle,
@@ -545,6 +546,15 @@ def cmd_link_lira_model_rsu(args: argparse.Namespace) -> None:
     print(json.dumps(report.as_dict(), ensure_ascii=False, indent=2))
 
 
+def cmd_prepare_lira_bar_experiment(args: argparse.Namespace) -> None:
+    manifest = prepare_bar_experiment_input(
+        linked_dir=args.linked,
+        declaration_path=args.declaration,
+        output_dir=args.output_dir,
+    )
+    print(json.dumps(manifest, ensure_ascii=False, indent=2))
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(prog="fireprotect")
     subparsers = parser.add_subparsers(required=True)
@@ -872,6 +882,15 @@ def main() -> None:
     command.add_argument("--evidence", type=Path, required=True)
     command.add_argument("--output-dir", type=Path, required=True)
     command.set_defaults(func=cmd_link_lira_model_rsu)
+
+    command = subparsers.add_parser(
+        "prepare-lira-bar-experiment",
+        help="Prepare the input package of one controlled LIRA->RX3 bar experiment",
+    )
+    command.add_argument("--linked", type=Path, required=True)
+    command.add_argument("--declaration", type=Path, required=True)
+    command.add_argument("--output-dir", type=Path, required=True)
+    command.set_defaults(func=cmd_prepare_lira_bar_experiment)
 
     args = parser.parse_args()
     args.func(args)
