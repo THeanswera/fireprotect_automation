@@ -117,6 +117,28 @@
   `rx38_force_generation_allowed=false`. Field50/92 remain `EXPERIMENTAL`,
   field78 remains a non-writable `PROBABLE` persisted copy, and Mk/Mz/Qy/Ry/Rz
   remain unresolved.
+- **CONFIRMED:** `prepare-lira-bar-run` сводит подготовку одного опыта к
+  четырём входным значениям (пакет, `row_id`, постановка, каталог вывода).
+  Источники, настройки чтения, геометрия, точные десятичные значения, хеши и
+  происхождение выводятся программой. Есть `--dry-run` без записи, повторный
+  запуск даёт `RUN_ALREADY_PREPARED` без дублирования, изменённые исходные XLS
+  дают `SOURCE_DRIFT_DETECTED` и требуют явного `--accept-current-sources`.
+- **CONFIRMED:** декларация опыта теперь имеет два явных состояния:
+  `ENGINEER_SIGNED` (непустые `confirmed_by`/`selected_by`) и
+  `DRAFT_UNSIGNED`, где подписи обязаны быть `null`, а каждое решение несёт
+  роль (`USER_STATEMENT`, `SOURCE_DOCUMENT`, `PACKAGE_EVIDENCE`,
+  `ASSISTANT_SELECTION`). Роль `ENGINEER_CONFIRMED` в черновике запрещена.
+  Production-гейты и `IssueReadiness` не изменены.
+- **CONFIRMED (узкая область):** `prepare-rx3-lira-bar` — VALIDATION-only
+  подготовка расчётного файла RX3 для записи Б2 / 22П / ГОСТ 8240-97 / 3.00 м
+  / rotation 0 / one-plane X-X. Меняются ровно поля 50 и 92 из уже
+  проверенной строки через `MAGNITUDE`; после записи файл перечитывается, и
+  доказывается неизменность остальных записей. `PRODUCTION` отклоняется,
+  `field50/92` остаются `EXPERIMENTAL`, `rx38_force_generation_allowed=false`.
+- **CONFIRMED:** `export-lira-bar-review` создаёт новую обзорную книгу
+  учебного опыта (идентичность, полный вектор с единицами и ячейками,
+  источники, роли решений, блокеры). Ячейки результата RX3 пустые до
+  фактического расчёта; это не расчётная книга ОБМ.
 - **UNKNOWN:** индекс толщины огнезащиты в RX38 не доказан, поэтому
   `fireproofing_thickness` остаётся `null`.
 - **BLOCKED:** production-расширение за пределы верифицированного

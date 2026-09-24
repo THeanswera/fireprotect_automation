@@ -23,6 +23,12 @@ from .obm import (
     ObmWorkbookExportReport,
     export_obm_workbook,
 )
+from .review import (
+    REVIEW_KIND,
+    STATUS_NOTE,
+    ReviewWorkbookError,
+    export_lira_bar_review,
+)
 from .writer import (
     CopyOnlyViolationError,
     ExcelCopyResult,
@@ -51,10 +57,14 @@ __all__ = [
     "SourceWorkbookChangedError",
     "ObmWorkbookExportError",
     "ObmWorkbookExportReport",
+    "REVIEW_KIND",
+    "ReviewWorkbookError",
+    "STATUS_NOTE",
     "WorkbookMapping",
     "WorkbookMappingError",
     "file_sha256",
     "formula_map_fingerprint",
+    "export_lira_bar_review",
     "export_obm_workbook",
     "resolve_field",
     "write_mapped_copy",

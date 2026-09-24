@@ -88,6 +88,57 @@ python -m fireprotect.cli rx38-experiment-diff BASE.rx38 CHANGED.rx38 --experime
 python -m fireprotect.cli pipeline pipeline.json
 ```
 
+One reproducible preparation step for a single controlled LIRA bar run replaces
+the manual retyping of numbers. The operator supplies an existing verified
+package, one RSU row id, the experiment plan and an output directory; sources,
+geometry, decimals, hashes and provenance are derived from the re-read tables:
+
+```powershell
+python -m fireprotect.cli new-lira-bar-run-conditions --output conditions.json
+python -m fireprotect.cli prepare-lira-bar-run `
+  --source-package validation/STEEL_B2_3M_RUN_01 `
+  --row-id R0003 `
+  --plan validation/STEEL_B2_3M_RUN_01/DOCUMENT_BASED_EXPERIMENT_PLAN.md `
+  --conditions validation/STEEL_B2_3M_RUN_02/experiment_conditions.json `
+  --output-dir validation/STEEL_B2_3M_RUN_02 `
+  --dry-run
+```
+
+`--dry-run` performs every check without writing. Changed source files are
+reported as `SOURCE_DRIFT_DETECTED` and stop the run until they are explicitly
+accepted; the accepted drift is recorded in the run manifest. A repeated run
+with identical inputs reports `RUN_ALREADY_PREPARED` instead of duplicating the
+package. The prepared declaration is an explicitly unsigned
+`DRAFT_UNSIGNED` document whose per-decision roles (`USER_STATEMENT`,
+`SOURCE_DOCUMENT`, `PACKAGE_EVIDENCE`, `ASSISTANT_SELECTION`) are recorded
+instead of an invented engineer signature.
+
+The RX3 input for that teaching run is prepared by a VALIDATION-only step that
+may write exactly two fields of one compatible record:
+
+```powershell
+python -m fireprotect.cli prepare-rx3-lira-bar `
+  --experiment-dir validation/STEEL_B2_3M_RUN_02/experiment `
+  --template rx3/новый_5_814_89.rx38 `
+  --output-dir validation/STEEL_B2_3M_RUN_02/rx3_input
+```
+
+It refuses any other scope, any other transform than the validated
+`MAGNITUDE`, a blocked transfer, a non-unique target, an existing output
+directory and `PRODUCTION` mode; after writing it re-reads the file and proves
+that only the target record changed. The remaining unconfirmed design
+conditions are listed so the manual checkpoint can forbid the calculation until
+a human reviews them.
+
+```powershell
+python -m fireprotect.cli export-lira-bar-review `
+  --run-manifest validation/STEEL_B2_3M_RUN_02/run_manifest.json `
+  --output validation/STEEL_B2_3M_RUN_02/STEEL_B2_3M_RUN_02_REVIEW.xlsx
+```
+
+That workbook is a new review file, never the project calculation book: RX3
+result cells stay empty until a real calculation exists.
+
 Phase A of the controlled pure-axial experiment is deliberately non-generating:
 
 ```powershell

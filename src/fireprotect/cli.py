@@ -5,9 +5,11 @@ import json
 from pathlib import Path
 
 from .execution import ExecutionMode
+from .excel import export_lira_bar_review
 from .lira import (
     import_rsu_xls_bundle,
     prepare_bar_experiment_input,
+    prepare_bar_run,
     prepare_lira_model_bundle,
     prepare_lira_review_bundle,
     prepare_lira_selection_bundle,
@@ -16,6 +18,7 @@ from .lira import (
     validate_lira_governing_selection,
     validate_rsu_reconstruction,
     validate_rsu_selection,
+    write_conditions_template,
     write_declaration_template,
 )
 from .project_io import read_project_element_json
@@ -36,6 +39,7 @@ from .rx3.experiment import (
     validate_rx3_bending_q3_result,
     validate_rx3_my5_result,
 )
+from .rx3.lira_bar_prep import prepare_rx3_lira_bar_validation
 from .rx3.parser import Rx38Construction, construction_records, read_rx38
 from .rx3.profiles import ProfileRepository, list_tables
 from .rx3.safety import GuiExecutionEvidence, Rx3SafetyContext
@@ -576,6 +580,62 @@ def cmd_new_lira_bar_experiment_declaration(args: argparse.Namespace) -> None:
     )
 
 
+def cmd_new_lira_bar_run_conditions(args: argparse.Namespace) -> None:
+    target = write_conditions_template(args.output)
+    print(
+        json.dumps(
+            {
+                "conditions_template": str(target),
+                "kind": "LIRA_BAR_EXPERIMENT_CONDITIONS",
+                "note": (
+                    "Заполните выбранные по документации условия и роли решений; "
+                    "геометрию, длины и хеши команда получит из пакета сама."
+                ),
+                "rx38_created": False,
+                "release_forbidden": True,
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+    )
+
+
+def cmd_prepare_lira_bar_run(args: argparse.Namespace) -> None:
+    manifest = prepare_bar_run(
+        source_package=args.source_package,
+        plan_reference=args.plan,
+        experiment_row_id=args.row_id,
+        output_dir=args.output_dir,
+        conditions_path=args.conditions,
+        dry_run=args.dry_run,
+        accept_current_sources=args.accept_current_sources,
+    )
+    print(json.dumps(manifest, ensure_ascii=False, indent=2))
+    if manifest.get("status") == "SOURCE_DRIFT_DETECTED":
+        raise SystemExit(2)
+
+
+def cmd_prepare_rx3_lira_bar(args: argparse.Namespace) -> None:
+    manifest = prepare_rx3_lira_bar_validation(
+        experiment_dir=args.experiment_dir,
+        template_path=args.template,
+        output_dir=args.output_dir,
+    )
+    print(json.dumps(manifest, ensure_ascii=False, indent=2))
+
+
+def cmd_export_lira_bar_review(args: argparse.Namespace) -> None:
+    print(
+        json.dumps(
+            export_lira_bar_review(
+                run_manifest=args.run_manifest, output=args.output
+            ),
+            ensure_ascii=False,
+            indent=2,
+        )
+    )
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(prog="fireprotect")
     subparsers = parser.add_subparsers(required=True)
@@ -919,6 +979,67 @@ def main() -> None:
     )
     command.add_argument("--output", type=Path, required=True)
     command.set_defaults(func=cmd_new_lira_bar_experiment_declaration)
+
+    command = subparsers.add_parser(
+        "new-lira-bar-run-conditions",
+        help="Write a blank experiment-conditions template; prepares no package",
+    )
+    command.add_argument("--output", type=Path, required=True)
+    command.set_defaults(func=cmd_new_lira_bar_run_conditions)
+
+    command = subparsers.add_parser(
+        "prepare-lira-bar-run",
+        help=(
+            "Prepare one controlled LIRA->RX3 bar run from an existing verified "
+            "package, one RSU row id, the experiment plan and an output directory"
+        ),
+    )
+    command.add_argument("--source-package", type=Path, required=True)
+    command.add_argument("--row-id", required=True)
+    command.add_argument("--plan", type=Path, required=True)
+    command.add_argument(
+        "--conditions",
+        type=Path,
+        help="Document-derived experiment conditions with per-decision roles",
+    )
+    command.add_argument("--output-dir", type=Path, required=True)
+    command.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Run every check and print the plan without writing anything",
+    )
+    command.add_argument(
+        "--accept-current-sources",
+        action="store_true",
+        help=(
+            "Continue after a recorded source file changed on disk; the accepted "
+            "drift is written into the run manifest"
+        ),
+    )
+    command.set_defaults(func=cmd_prepare_lira_bar_run)
+
+    command = subparsers.add_parser(
+        "prepare-rx3-lira-bar",
+        help=(
+            "VALIDATION-only: prepare one RX3 input file from a verified LIRA "
+            "bar experiment input and a compatible template"
+        ),
+    )
+    command.add_argument("--experiment-dir", type=Path, required=True)
+    command.add_argument("--template", type=Path, required=True)
+    command.add_argument("--output-dir", type=Path, required=True)
+    command.set_defaults(func=cmd_prepare_rx3_lira_bar)
+
+    command = subparsers.add_parser(
+        "export-lira-bar-review",
+        help=(
+            "Write a new review-only Excel file for one prepared LIRA bar run; "
+            "never a calculation workbook"
+        ),
+    )
+    command.add_argument("--run-manifest", type=Path, required=True)
+    command.add_argument("--output", type=Path, required=True)
+    command.set_defaults(func=cmd_export_lira_bar_review)
 
     args = parser.parse_args()
     args.func(args)
