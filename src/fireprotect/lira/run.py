@@ -56,17 +56,25 @@ from .experiment_input import (
     build_bar_chain,
     prepare_bar_experiment_input,
     read_authorship,
+    read_bar_declaration,
+    read_model_node_coordinates,
 )
 from .rsu import import_rsu_xls_bundle, validate_rsu_reconstruction
 from .rsu_evidence import (
     EVIDENCE_KIND,
+    RsuEvidenceBundle,
+    RsuEvidenceRow,
     read_json_object,
     read_rsu_evidence,
     require_mapping,
     require_text,
     sha256_file,
 )
-from .rsu_link import prepare_linked_rsu_bundle
+from .rsu_link import (
+    link_rsu_rows_to_elements,
+    prepare_linked_rsu_bundle,
+    read_model_package,
+)
 from .rsu_review import prepare_rsu_review_bundle
 
 CONDITIONS_KIND = "LIRA_BAR_EXPERIMENT_CONDITIONS"
@@ -862,6 +870,117 @@ def _list_field(payload: Mapping[str, object], field: str) -> list[object]:
     if not isinstance(value, (list, tuple)):
         return []
     return list(value)
+
+
+@dataclass(frozen=True, slots=True)
+class VerifiedBarRun:
+    """A prepared run re-derived from its sources, not from its own JSON.
+
+    Every value here comes from re-reading the LIRA tables and the RSU evidence
+    bound to the declaration's recorded revision; the stored JSON files are used
+    only to detect that something was substituted.
+    """
+
+    run_dir: Path
+    declaration: BarExperimentDeclaration
+    linked_dir: Path
+    model_dir: Path
+    evidence_path: Path
+    assembled: tuple[LiraAssembledElement, ...]
+    chain: BarChain
+    evidence: RsuEvidenceBundle
+    row: RsuEvidenceRow
+    components: list[dict[str, object]]
+    blockers: list[str]
+
+
+def read_verified_bar_run(run_dir: str | Path) -> VerifiedBarRun:
+    """Re-verify one prepared run from its sources and return derived values."""
+
+    root = Path(run_dir).resolve(strict=True)
+    declaration_path = root / "declaration.json"
+    declaration = read_bar_declaration(declaration_path)
+    linked_dir = root / "derived" / "linked"
+    linked_manifest_path = linked_dir / "manifest.json"
+    linked_manifest = read_json_object(linked_manifest_path, "linked package manifest")
+    if linked_manifest.get("status") != "MODEL_RSU_LINKED":
+        raise LiraMappingError(
+            f"{linked_manifest_path}: manifest status must be MODEL_RSU_LINKED"
+        )
+    actual_linked_sha = sha256_file(linked_manifest_path)
+    if declaration.linked_manifest_sha256 != actual_linked_sha:
+        raise LiraMappingError(
+            f"{declaration_path}: linked_manifest_sha256 does not match "
+            f"{linked_manifest_path} (declared "
+            f"{declaration.linked_manifest_sha256}, actual {actual_linked_sha}); "
+            "the declaration is bound to a different evidence revision"
+        )
+    basis = require_mapping(
+        linked_manifest.get("link_basis"), "link_basis", str(linked_manifest_path)
+    )
+    model_block = require_mapping(
+        basis.get("model_package"), "model_package", str(linked_manifest_path)
+    )
+    evidence_block = require_mapping(
+        basis.get("rsu_evidence"), "rsu_evidence", str(linked_manifest_path)
+    )
+    model_dir = Path(require_text(model_block, "path", str(linked_manifest_path)))
+    evidence_path = Path(require_text(evidence_block, "path", str(linked_manifest_path)))
+    recorded_model_files = require_mapping(
+        model_block.get("files"), "files", str(linked_manifest_path)
+    )
+    for name in ("manifest.json", "elements.json"):
+        actual = sha256_file(model_dir / name)
+        if recorded_model_files.get(name) != actual:
+            raise LiraMappingError(
+                f"{linked_manifest_path}: the linked package no longer matches its "
+                f"recorded model package file {name}"
+            )
+    _, _, model_manifest, _, assembled = read_model_package(model_dir)
+    bundle = read_rsu_evidence(evidence_path)
+    recorded_evidence_sha = evidence_block.get("sha256")
+    if not isinstance(recorded_evidence_sha, str) or not recorded_evidence_sha.strip():
+        raise LiraMappingError(
+            f"{linked_manifest_path}: link_basis.rsu_evidence has no usable sha256"
+        )
+    if bundle.sha256 != recorded_evidence_sha.strip():
+        raise LiraMappingError(
+            f"{linked_manifest_path}: the linked package no longer matches its "
+            f"recorded RSU evidence revision (recorded "
+            f"{recorded_evidence_sha.strip()}, actual {bundle.sha256})"
+        )
+    link_rsu_rows_to_elements(
+        tuple(item.as_dict() for item in assembled), bundle
+    )
+    coordinates = read_model_node_coordinates(model_manifest, context=str(model_dir))
+    chain = build_bar_chain(assembled, coordinates, declaration, context=str(root))
+    matches = [row for row in bundle.rows if row.row_id == declaration.row_id]
+    if not matches:
+        raise LiraMappingError(
+            f"{evidence_path}: selected row {declaration.row_id!r} does not exist "
+            "in the re-read evidence"
+        )
+    row = matches[0]
+    if row.element_id not in declaration.element_ids:
+        raise LiraMappingError(
+            f"{evidence_path}: selected row {declaration.row_id!r} belongs to "
+            f"element {row.element_id!r}, which is not part of the declared bar "
+            f"{declaration.bar_id!r}"
+        )
+    components, blockers = analyse_components(row, declaration, chain.bar_length_m)
+    return VerifiedBarRun(
+        run_dir=root,
+        declaration=declaration,
+        linked_dir=linked_dir,
+        model_dir=model_dir,
+        evidence_path=evidence_path,
+        assembled=assembled,
+        chain=chain,
+        evidence=bundle,
+        row=row,
+        components=components,
+        blockers=blockers,
+    )
 
 
 def _build_derived(

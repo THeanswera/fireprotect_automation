@@ -617,7 +617,7 @@ def cmd_prepare_lira_bar_run(args: argparse.Namespace) -> None:
 
 def cmd_prepare_rx3_lira_bar(args: argparse.Namespace) -> None:
     manifest = prepare_rx3_lira_bar_validation(
-        experiment_dir=args.experiment_dir,
+        run_dir=args.run_dir,
         template_path=args.template,
         output_dir=args.output_dir,
     )
@@ -1021,11 +1021,19 @@ def main() -> None:
     command = subparsers.add_parser(
         "prepare-rx3-lira-bar",
         help=(
-            "VALIDATION-only: prepare one RX3 input file from a verified LIRA "
-            "bar experiment input and a compatible template"
+            "VALIDATION-only: prepare one RX3 input file from a prepared LIRA "
+            "bar run and the controlled template"
         ),
     )
-    command.add_argument("--experiment-dir", type=Path, required=True)
+    command.add_argument(
+        "--run-dir",
+        type=Path,
+        required=True,
+        help=(
+            "Prepared run directory whose declaration, linked package and "
+            "evidence are re-read and re-verified"
+        ),
+    )
     command.add_argument("--template", type=Path, required=True)
     command.add_argument("--output-dir", type=Path, required=True)
     command.set_defaults(func=cmd_prepare_rx3_lira_bar)

@@ -880,7 +880,13 @@ def load_bending_report_references(
     return tuple(result)
 
 
-def _single_plane_bending_label(value: str) -> bool:
+def single_plane_bending_label(value: str) -> bool:
+    """True when an RX3 stress-state label is one-plane bending, not axial.
+
+    Reused by the LIRA bar preparer so that the template record is classified
+    by evidence rather than by a declaration's own words.
+    """
+
     normalized = _normal_text(value)
     return (
         "изгибаемый стержень" in normalized
@@ -888,6 +894,9 @@ def _single_plane_bending_label(value: str) -> bool:
         and "сжат" not in normalized
         and "растянут" not in normalized
     )
+
+
+_single_plane_bending_label = single_plane_bending_label
 
 
 def _section_simplicity_rank(value: str) -> int:

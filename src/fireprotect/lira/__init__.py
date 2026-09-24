@@ -120,11 +120,13 @@ from .run import (
     RunConditions,
     SourceFile,
     SourcePackage,
+    VerifiedBarRun,
     conditions_template,
     derive_single_bar_chain,
     prepare_bar_run,
     read_run_conditions,
     read_source_package,
+    read_verified_bar_run,
     write_conditions_template,
 )
 from .types import (
@@ -251,6 +253,7 @@ __all__ = [
     "RunConditions",
     "SourceFile",
     "SourcePackage",
+    "VerifiedBarRun",
     "analyse_components",
     "build_bar_chain",
     "conditions_template",
@@ -262,6 +265,7 @@ __all__ = [
     "read_bar_declaration",
     "read_run_conditions",
     "read_source_package",
+    "read_verified_bar_run",
     "write_conditions_template",
     "write_declaration_template",
 ]

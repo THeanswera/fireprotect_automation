@@ -40,7 +40,10 @@ def _sha256(path: Path) -> str:
 
 
 def _make_source_package(
-    tmp_path: Path, *, element_rows: list[list[object]] | None = None
+    tmp_path: Path,
+    *,
+    element_rows: list[list[object]] | None = None,
+    plan: list[dict[str, object]] | None = None,
 ) -> Path:
     """Assemble a verified package shaped like a real LIRA run directory."""
 
@@ -48,9 +51,9 @@ def _make_source_package(
     package.mkdir()
     model, _ = _make_steel_model(tmp_path, element_rows=element_rows)
     shutil.move(str(model), str(package / "model"))
-    plan, _ = _default_plan()
-    sources = _write_rsu_biff(tmp_path, plan)
-    evidence = _write_evidence(tmp_path, _evidence_payload(plan, sources))
+    rows = _default_plan()[0] if plan is None else plan
+    sources = _write_rsu_biff(tmp_path, rows)
+    evidence = _write_evidence(tmp_path, _evidence_payload(rows, sources))
     (package / "rsu").mkdir()
     shutil.copy(evidence, package / "rsu" / "rsu_evidence.json")
     return package

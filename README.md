@@ -118,17 +118,26 @@ may write exactly two fields of one compatible record:
 
 ```powershell
 python -m fireprotect.cli prepare-rx3-lira-bar `
-  --experiment-dir validation/STEEL_B2_3M_RUN_02/experiment `
+  --run-dir validation/STEEL_B2_3M_RUN_03 `
   --template rx3/новый_5_814_89.rx38 `
-  --output-dir validation/STEEL_B2_3M_RUN_02/rx3_input
+  --output-dir validation/STEEL_B2_3M_RUN_03/rx3_input
 ```
 
-It refuses any other scope, any other transform than the validated
-`MAGNITUDE`, a blocked transfer, a non-unique target, an existing output
-directory and `PRODUCTION` mode; after writing it re-reads the file and proves
-that only the target record changed. The remaining unconfirmed design
-conditions are listed so the manual checkpoint can forbid the calculation until
-a human reviews them.
+It re-derives every value from the re-read LIRA tables and the bound RSU
+evidence (`read_verified_bar_run`) and never from the stored run JSON; the JSON
+is read only to detect substitution, and the whole six-component vector, its
+units, its convention and the bar identity must still match the sources. The
+target record is accepted only when it also carries the confirmed one-plane
+bending stress state, the declared required fire resistance and the declared
+fire regime, and when the template file matches the controlled SHA-256 pin.
+Any other scope, another transform than the validated `MAGNITUDE`, a blocked
+transfer, a non-unique target, an existing output directory and `PRODUCTION`
+mode are refused; after writing, the file is re-read and only the target record
+may differ. The effective-length question is resolved from confirmed facts
+(`N = 0`, one-plane bending, the controlled experiment on this record) and is
+reported as not applicable instead of substituting the geometrical 3 m. The
+resume command deliberately omits `ENGINEER_CONFIRMED`: saving the file is not
+evidence that a human reviewed the result.
 
 ```powershell
 python -m fireprotect.cli export-lira-bar-review `

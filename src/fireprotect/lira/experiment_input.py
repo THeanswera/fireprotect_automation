@@ -756,7 +756,7 @@ def build_bar_chain(
     )
 
 
-def _read_node_coordinates(
+def read_model_node_coordinates(
     model_manifest: Mapping[str, Any], *, context: str
 ) -> dict[str, Vector3]:
     """Re-read the node table with the recorded settings for the chain check."""
@@ -1042,7 +1042,7 @@ def prepare_bar_experiment_input(
     link_rsu_rows_to_elements(
         tuple(item.as_dict() for item in assembled), bundle
     )
-    node_coordinates = _read_node_coordinates(
+    node_coordinates = read_model_node_coordinates(
         model_manifest, context=str(linked)
     )
     chain = build_bar_chain(

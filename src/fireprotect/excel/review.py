@@ -324,9 +324,23 @@ def _result_rows(manifest: Mapping[str, Any], prepared: Mapping[str, Any] | None
         )
         rows.append(
             [
-                "Расчёт разрешён без ручной сверки",
-                "нет",
-                "расчётная длина и закрепление не подтверждены",
+                "Расчётная длина и закрепление",
+                prepared.get("effective_length_status") or "не подтверждено",
+                prepared.get("effective_length_basis") or "нет основания",
+            ]
+        )
+        rows.append(
+            [
+                "Расчёт запускает",
+                "инженер вручную в RX3",
+                "автоматический запуск запрещён",
+            ]
+        )
+        rows.append(
+            [
+                "Подтверждение инженера",
+                "ещё не получено",
+                "calculated.rx38 сам по себе подтверждением не является",
             ]
         )
     return rows
@@ -365,10 +379,18 @@ def export_lira_bar_review(
         prepared_raw = _read_json(prepared_manifest_path, "RX3 preparation manifest")
         target_block = prepared_raw.get("target") or {}
         generated = prepared_raw.get("generated") or {}
+        effective = prepared_raw.get("effective_length_and_support") or {}
+        basis = effective.get("basis")
         prepared = {
             "path": generated.get("path"),
             "position": target_block.get("position"),
             "after_fingerprint": target_block.get("after_fingerprint"),
+            "effective_length_status": effective.get("status"),
+            "effective_length_basis": (
+                "; ".join(str(item) for item in basis)
+                if isinstance(basis, list)
+                else effective.get("not_substituted")
+            ),
         }
 
     workbook = Workbook()
