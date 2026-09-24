@@ -56,6 +56,25 @@ PACKAGE_KIND = "LIRA_BAR_EXPERIMENT_INPUT"
 STATUS_READY = "EXPERIMENT_INPUT_READY"
 STATUS_BLOCKED = "EXPERIMENT_INPUT_BLOCKED"
 
+# A declaration is either signed by a human engineer or an explicitly unsigned
+# technical draft. The draft form exists so that an assistant-derived teaching
+# setup never has to invent an engineer's name: `confirmed_by`/`selected_by`
+# stay null and every decision carries its own recorded role instead.
+DECLARATION_STATUS_SIGNED = "ENGINEER_SIGNED"
+DECLARATION_STATUS_DRAFT = "DRAFT_UNSIGNED"
+DECLARATION_STATUSES = (DECLARATION_STATUS_SIGNED, DECLARATION_STATUS_DRAFT)
+
+# Roles are provenance labels, not signatures. Only ENGINEER_CONFIRMED states
+# that a human took the decision; the others record what the value actually is.
+DECISION_ROLES = (
+    "USER_STATEMENT",
+    "SOURCE_DOCUMENT",
+    "PACKAGE_EVIDENCE",
+    "ASSISTANT_SELECTION",
+    "ENGINEER_CONFIRMED",
+)
+_AUTHORSHIP_KEYS = ("bar", "experiment_row", "profile", "design_conditions")
+
 _LINK_FILES = (
     "manifest.json",
     "experiment_input.json",
@@ -128,6 +147,86 @@ def _declaration_mapping(
     return payload
 
 
+def _nullable_declaration_text(
+    payload: Mapping[str, Any], field: str, context: str
+) -> str | None:
+    """Read a signature field that is null exactly when nobody signed it."""
+
+    value = payload.get(field)
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise LiraMappingError(
+            f"{context}: {field} must be a non-empty string or null"
+        )
+    if not value.strip():
+        raise LiraMappingError(
+            f"{context}: {field} must be a non-empty string or null; an empty "
+            "string would look like a signature without being one"
+        )
+    return value.strip()
+
+
+@dataclass(frozen=True, slots=True)
+class DecisionRecord:
+    """Who or what produced one part of the experiment setup."""
+
+    role: str
+    basis: str
+    reference: str | None
+
+    def as_dict(self) -> dict[str, str | None]:
+        return {"role": self.role, "basis": self.basis, "reference": self.reference}
+
+
+@dataclass(frozen=True, slots=True)
+class BarAuthorship:
+    bar: DecisionRecord
+    experiment_row: DecisionRecord
+    profile: DecisionRecord
+    design_conditions: DecisionRecord
+
+    def as_dict(self) -> dict[str, dict[str, str | None]]:
+        return {name: getattr(self, name).as_dict() for name in _AUTHORSHIP_KEYS}
+
+
+def read_authorship(
+    payload: object, *, context: str
+) -> BarAuthorship:
+    """Read the per-decision provenance block of an unsigned draft."""
+
+    block = _declaration_mapping(payload, "authorship", context)
+    if set(block) != set(_AUTHORSHIP_KEYS):
+        raise LiraMappingError(
+            f"{context}: authorship must contain exactly {sorted(_AUTHORSHIP_KEYS)}"
+        )
+    records: dict[str, DecisionRecord] = {}
+    for name in _AUTHORSHIP_KEYS:
+        entry = _declaration_mapping(block.get(name), f"authorship.{name}", context)
+        if set(entry) != {"role", "basis", "reference"}:
+            raise LiraMappingError(
+                f"{context}: authorship.{name} must contain exactly "
+                "['basis', 'reference', 'role']"
+            )
+        role = entry.get("role")
+        if not isinstance(role, str) or role not in DECISION_ROLES:
+            raise LiraMappingError(
+                f"{context}: authorship.{name}.role must be one of "
+                f"{list(DECISION_ROLES)}"
+            )
+        if role == "ENGINEER_CONFIRMED":
+            raise LiraMappingError(
+                f"{context}: authorship.{name} claims ENGINEER_CONFIRMED, which "
+                f"contradicts declaration_status={DECLARATION_STATUS_DRAFT!r}"
+            )
+        records[name] = DecisionRecord(
+            role=role,
+            basis=_declaration_text(entry, "basis", context),
+            reference=_nullable_declaration_text(entry, "reference", context),
+        )
+    return BarAuthorship(**records)
+
+
 @dataclass(frozen=True, slots=True)
 class BarProfileDeclaration:
     kind_word: str
@@ -139,7 +238,7 @@ class BarProfileDeclaration:
     scheme_flag: str
     rx3_template: str
     stress_state: str | None
-    confirmed_by: str
+    confirmed_by: str | None
     basis: str
 
     def as_dict(self) -> dict[str, object]:
@@ -177,17 +276,25 @@ class BarDesignConditions:
 
 @dataclass(frozen=True, slots=True)
 class BarExperimentDeclaration:
+    declaration_status: str
     linked_manifest_sha256: str
     bar_id: str
     element_ids: tuple[str, ...]
     end_node_ids: tuple[str, str]
     join_basis: str
-    bar_confirmed_by: str
+    bar_confirmed_by: str | None
     row_id: str
     selection_basis: str
-    selected_by: str
+    selected_by: str | None
     profile: BarProfileDeclaration
     design_conditions: BarDesignConditions
+    authorship: BarAuthorship | None
+
+    @property
+    def engineer_signed(self) -> bool:
+        """True only when a human actually signed this declaration."""
+
+        return self.declaration_status == DECLARATION_STATUS_SIGNED
 
 
 def read_bar_declaration(path: str | Path) -> BarExperimentDeclaration:
@@ -197,11 +304,13 @@ def read_bar_declaration(path: str | Path) -> BarExperimentDeclaration:
     root = read_json_object(source, "bar experiment declaration")
     allowed = {
         "declaration_kind",
+        "declaration_status",
         "linked_manifest_sha256",
         "bar",
         "experiment_row",
         "profile",
         "design_conditions",
+        "authorship",
     }
     if set(root) != allowed:
         raise LiraMappingError(
@@ -211,6 +320,14 @@ def read_bar_declaration(path: str | Path) -> BarExperimentDeclaration:
         raise LiraMappingError(
             f"{source}: declaration_kind must be {DECLARATION_KIND!r}"
         )
+    status = root.get("declaration_status")
+    if status not in DECLARATION_STATUSES:
+        raise LiraMappingError(
+            f"{source}: declaration_status must be one of "
+            f"{list(DECLARATION_STATUSES)}; an unsigned draft is never upgraded "
+            "implicitly"
+        )
+    signed = status == DECLARATION_STATUS_SIGNED
     bar = _declaration_mapping(root.get("bar"), "bar", str(source))
     allowed_bar = {
         "bar_id",
@@ -283,7 +400,50 @@ def read_bar_declaration(path: str | Path) -> BarExperimentDeclaration:
             f"{source}: design_conditions must contain exactly "
             f"{sorted(_DESIGN_CONDITION_KEYS)}"
         )
+    authorship_payload = root.get("authorship")
+    bar_confirmed_by: str | None
+    selected_by: str | None
+    profile_confirmed_by: str | None
+    authorship: BarAuthorship | None
+    if signed:
+        if authorship_payload is not None:
+            raise LiraMappingError(
+                f"{source}: authorship belongs to an unsigned draft; a signed "
+                "declaration records its author in confirmed_by/selected_by"
+            )
+        bar_confirmed_by = _declaration_text(bar, "confirmed_by", str(source))
+        selected_by = _declaration_text(row, "selected_by", str(source))
+        profile_confirmed_by = _declaration_text(
+            profile_payload, "confirmed_by", str(source)
+        )
+        authorship = None
+    else:
+        bar_confirmed_by = _nullable_declaration_text(
+            bar, "confirmed_by", str(source)
+        )
+        selected_by = _nullable_declaration_text(row, "selected_by", str(source))
+        profile_confirmed_by = _nullable_declaration_text(
+            profile_payload, "confirmed_by", str(source)
+        )
+        for field, value in (
+            ("bar.confirmed_by", bar_confirmed_by),
+            ("experiment_row.selected_by", selected_by),
+            ("profile.confirmed_by", profile_confirmed_by),
+        ):
+            if value is not None:
+                raise LiraMappingError(
+                    f"{source}: {field} must be null while "
+                    f"declaration_status={DECLARATION_STATUS_DRAFT!r}; a name in "
+                    "this field claims a human signature"
+                )
+        if authorship_payload is None:
+            raise LiraMappingError(
+                f"{source}: an unsigned draft must record why each decision was "
+                "taken in 'authorship'"
+            )
+        authorship = read_authorship(authorship_payload, context=str(source))
     return BarExperimentDeclaration(
+        declaration_status=str(status),
         linked_manifest_sha256=_declaration_text(
             root, "linked_manifest_sha256", str(source)
         ),
@@ -291,10 +451,10 @@ def read_bar_declaration(path: str | Path) -> BarExperimentDeclaration:
         element_ids=tuple(item.strip() for item in element_ids),
         end_node_ids=(end_node_ids[0].strip(), end_node_ids[1].strip()),
         join_basis=_declaration_text(bar, "join_basis", str(source)),
-        bar_confirmed_by=_declaration_text(bar, "confirmed_by", str(source)),
+        bar_confirmed_by=bar_confirmed_by,
         row_id=_declaration_text(row, "row_id", str(source)),
         selection_basis=_declaration_text(row, "selection_basis", str(source)),
-        selected_by=_declaration_text(row, "selected_by", str(source)),
+        selected_by=selected_by,
         profile=BarProfileDeclaration(
             kind_word=_declaration_text(profile_payload, "kind_word", str(source)),
             designation=_declaration_text(
@@ -315,9 +475,7 @@ def read_bar_declaration(path: str | Path) -> BarExperimentDeclaration:
                 profile_payload, "rx3_template", str(source)
             ),
             stress_state=None if stress_state is None else str(stress_state).strip(),
-            confirmed_by=_declaration_text(
-                profile_payload, "confirmed_by", str(source)
-            ),
+            confirmed_by=profile_confirmed_by,
             basis=_declaration_text(profile_payload, "basis", str(source)),
         ),
         design_conditions=BarDesignConditions(
@@ -326,6 +484,7 @@ def read_bar_declaration(path: str | Path) -> BarExperimentDeclaration:
                 for name in _DESIGN_CONDITION_KEYS
             }
         ),
+        authorship=authorship,
     )
 
 
@@ -334,18 +493,19 @@ def declaration_template() -> dict[str, object]:
 
     return {
         "declaration_kind": DECLARATION_KIND,
+        "declaration_status": "",
         "linked_manifest_sha256": "",
         "bar": {
             "bar_id": "",
             "element_ids": [],
             "end_node_ids": [],
             "join_basis": "",
-            "confirmed_by": "",
+            "confirmed_by": None,
         },
         "experiment_row": {
             "row_id": "",
             "selection_basis": "",
-            "selected_by": "",
+            "selected_by": None,
         },
         "profile": {
             "kind_word": "",
@@ -357,10 +517,11 @@ def declaration_template() -> dict[str, object]:
             "scheme_flag": "",
             "rx3_template": "",
             "stress_state": None,
-            "confirmed_by": "",
+            "confirmed_by": None,
             "basis": "",
         },
         "design_conditions": {name: None for name in _DESIGN_CONDITION_KEYS},
+        "authorship": None,
     }
 
 
@@ -411,7 +572,7 @@ def _cross_and_dot(
     return cross, dot
 
 
-def _build_bar_chain(
+def build_bar_chain(
     assembled: Sequence[LiraAssembledElement],
     node_coordinates: Mapping[str, Vector3],
     declaration: BarExperimentDeclaration,
@@ -634,7 +795,7 @@ def _read_node_coordinates(
     return coordinates
 
 
-def _component_analysis(
+def analyse_components(
     row: RsuEvidenceRow,
     declaration: BarExperimentDeclaration,
     bar_length_m: Decimal,
@@ -700,28 +861,54 @@ def _card_text(
     lines = [
         "# Карточка технического опыта ЛИРА→RX3",
         "",
+        f"- Статус декларации: **{declaration.declaration_status}**",
         f"- Физическая балка: **{declaration.bar_id}**",
         f"- Конечные элементы: {', '.join(chain.ordered_element_ids)} "
         f"(длины: {', '.join(f'{eid} = {chain.element_lengths_m[eid]} м' for eid in chain.ordered_element_ids)})",
         f"- Длина физического стержня (геометрическая): {chain.bar_length_m} м",
         f"- Концевые узлы: {chain.start_node} → {chain.end_node}",
         f"- Основание объединения КЭ в стержень: {declaration.join_basis}",
-        f"- Подтвердил: {declaration.bar_confirmed_by}",
+        f"- Подтвердил (инженер): {declaration.bar_confirmed_by or 'нет подписи'}",
         "",
         "## Выбранная строка технического опыта",
         "",
         f"- row_id: **{row.row_id}** (элемент {row.element_id}, сечение {row.section_station})",
         f"- Группа {row.rsu_group}, критерий {row.rsu_criterion}, столбец {row.rsu_column_number}",
         f"- Состав загружений: {' '.join(row.load_case_membership)}",
-        f"- Основание выбора: {declaration.selection_basis} ({declaration.selected_by})",
+        f"- Основание выбора: {declaration.selection_basis} "
+        f"({declaration.selected_by or 'подписи нет'})",
         "- Это строка технического опыта, **не** определяющая строка: "
         "governing-выбор не выполняется.",
         "",
-        "## Усилия (полный подписанный вектор)",
+        "## Происхождение решений",
         "",
-        "| Компонент | Источник | Обзорное значение | Конвенция |",
-        "|---|---|---|---|",
     ]
+    if declaration.authorship is None:
+        lines.append(
+            "- Декларация подписана инженером; отдельный реестр ролей не ведётся."
+        )
+    else:
+        lines.append("| Решение | Роль | Основание | Ссылка |")
+        lines.append("|---|---|---|---|")
+        for name, record in declaration.authorship.as_dict().items():
+            lines.append(
+                f"| {name} | {record['role']} | {record['basis']} | "
+                f"{record['reference'] or '—'} |"
+            )
+        lines.append("")
+        lines.append(
+            "Роли `USER_STATEMENT`, `SOURCE_DOCUMENT`, `PACKAGE_EVIDENCE` и "
+            "`ASSISTANT_SELECTION` **не являются** инженерным подтверждением."
+        )
+    lines.extend(
+        [
+            "",
+            "## Усилия (полный подписанный вектор)",
+            "",
+            "| Компонент | Источник | Обзорное значение | Конвенция |",
+            "|---|---|---|---|",
+        ]
+    )
     for item in components:
         convention = item["convention"]
         assert isinstance(convention, Mapping)
@@ -858,7 +1045,7 @@ def prepare_bar_experiment_input(
     node_coordinates = _read_node_coordinates(
         model_manifest, context=str(linked)
     )
-    chain = _build_bar_chain(
+    chain = build_bar_chain(
         assembled, node_coordinates, declaration, context=str(linked)
     )
     row_matches = [row for row in bundle.rows if row.row_id == declaration.row_id]
@@ -875,7 +1062,7 @@ def prepare_bar_experiment_input(
             f"{declaration.bar_id!r}"
         )
 
-    components, blockers = _component_analysis(
+    components, blockers = analyse_components(
         row, declaration, chain.bar_length_m
     )
     missing_confirmations: list[str] = list(
@@ -901,6 +1088,11 @@ def prepare_bar_experiment_input(
     manifest: dict[str, object] = {
         "kind": PACKAGE_KIND,
         "status": status,
+        "declaration_status": declaration.declaration_status,
+        "engineer_confirmed": declaration.engineer_signed,
+        "authorship": (
+            None if declaration.authorship is None else declaration.authorship.as_dict()
+        ),
         "bar": {
             "bar_id": declaration.bar_id,
             "element_ids": list(declaration.element_ids),
@@ -947,6 +1139,13 @@ def prepare_bar_experiment_input(
         {
             "kind": PACKAGE_KIND,
             "status": status,
+            "declaration_status": declaration.declaration_status,
+            "engineer_confirmed": declaration.engineer_signed,
+            "authorship": (
+                None
+                if declaration.authorship is None
+                else declaration.authorship.as_dict()
+            ),
             "bar": {
                 "bar_id": declaration.bar_id,
                 "elements": [

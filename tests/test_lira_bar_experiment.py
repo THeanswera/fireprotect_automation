@@ -528,6 +528,7 @@ def _declaration_payload(
 ) -> dict[str, object]:
     return {
         "declaration_kind": "LIRA_BAR_EXPERIMENT_DECLARATION",
+        "declaration_status": "ENGINEER_SIGNED",
         "linked_manifest_sha256": _sha256_file(linked_dir / "manifest.json"),
         "bar": {
             "bar_id": "B1",
@@ -561,7 +562,38 @@ def _declaration_payload(
             "fire_regime": None,
             "required_fire_resistance_min": None,
         },
+        "authorship": None,
     }
+
+
+def _draft_declaration_payload(
+    linked_dir: Path,
+    *,
+    row_id: str = "R0001",
+    element_ids: tuple[str, ...] = ("1", "2"),
+    end_node_ids: tuple[str, ...] = ("1", "2"),
+) -> dict[str, object]:
+    """The same setup declared as an unsigned assistant-derived draft."""
+
+    payload = _declaration_payload(
+        linked_dir,
+        row_id=row_id,
+        element_ids=element_ids,
+        end_node_ids=end_node_ids,
+    )
+    payload["declaration_status"] = "DRAFT_UNSIGNED"
+    payload["bar"]["confirmed_by"] = None  # type: ignore[index]
+    payload["experiment_row"]["selected_by"] = None  # type: ignore[index]
+    payload["profile"]["confirmed_by"] = None  # type: ignore[index]
+    payload["authorship"] = {
+        name: {
+            "role": "ASSISTANT_SELECTION",
+            "basis": f"учебная постановка по {name}",
+            "reference": None,
+        }
+        for name in ("bar", "experiment_row", "profile", "design_conditions")
+    }
+    return payload
 
 
 def _write_declaration(
@@ -907,13 +939,116 @@ def test_write_declaration_template_and_no_overwrite(tmp_path: Path) -> None:
     payload = json.loads(target.read_text(encoding="utf-8"))
     assert payload == declaration_template()
     assert payload["declaration_kind"] == "LIRA_BAR_EXPERIMENT_DECLARATION"
+    assert payload["declaration_status"] == ""
     assert payload["linked_manifest_sha256"] == ""
     assert payload["bar"]["element_ids"] == []
-    assert payload["bar"]["confirmed_by"] == ""
-    assert payload["profile"]["confirmed_by"] == ""
+    assert payload["bar"]["confirmed_by"] is None
+    assert payload["profile"]["confirmed_by"] is None
     assert payload["profile"]["stress_state"] is None
+    assert payload["authorship"] is None
     assert all(
         value is None for value in payload["design_conditions"].values()
     )
     with pytest.raises(LiraFormatError, match="refusing to overwrite"):
         write_declaration_template(target)
+
+
+# --------------------------------------------------------------------------
+# Unsigned technical draft
+# --------------------------------------------------------------------------
+
+
+def test_unsigned_draft_is_accepted_without_inventing_an_engineer(
+    tmp_path: Path,
+) -> None:
+    linked, _ = _make_linked(tmp_path)
+    declaration = _write_declaration(
+        tmp_path, _draft_declaration_payload(linked)
+    )
+
+    manifest = _run(tmp_path, linked, declaration)
+
+    assert manifest["status"] == "EXPERIMENT_INPUT_READY"
+    assert manifest["declaration_status"] == "DRAFT_UNSIGNED"
+    assert manifest["engineer_confirmed"] is False
+    assert manifest["bar"]["confirmed_by"] is None
+    assert manifest["selected_row"]["selected_by"] is None
+    authorship = manifest["authorship"]
+    assert set(authorship) == {
+        "bar", "experiment_row", "profile", "design_conditions",
+    }
+    assert {item["role"] for item in authorship.values()} == {
+        "ASSISTANT_SELECTION"
+    }
+    assert manifest["rx38_created"] is False
+    assert manifest["release_forbidden"] is True
+    detail = json.loads(
+        (tmp_path / "experiment" / "experiment_input.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert detail["engineer_confirmed"] is False
+    assert detail["declaration_status"] == "DRAFT_UNSIGNED"
+    card = (tmp_path / "experiment" / "experiment_card.md").read_text(
+        encoding="utf-8"
+    )
+    assert "DRAFT_UNSIGNED" in card
+    assert "ASSISTANT_SELECTION" in card
+    assert "нет подписи" in card
+
+
+def test_draft_with_signature_name_rejected(tmp_path: Path) -> None:
+    linked, _ = _make_linked(tmp_path)
+    payload = _draft_declaration_payload(linked)
+    payload["profile"]["confirmed_by"] = "Инженер"  # type: ignore[index]
+    declaration = _write_declaration(tmp_path, payload)
+    with pytest.raises(LiraMappingError, match="must be null"):
+        _run(tmp_path, linked, declaration)
+
+
+def test_draft_claiming_engineer_role_rejected(tmp_path: Path) -> None:
+    linked, _ = _make_linked(tmp_path)
+    payload = _draft_declaration_payload(linked)
+    payload["authorship"]["bar"]["role"] = "ENGINEER_CONFIRMED"  # type: ignore[index]
+    declaration = _write_declaration(tmp_path, payload)
+    with pytest.raises(LiraMappingError, match="contradicts declaration_status"):
+        _run(tmp_path, linked, declaration)
+
+
+def test_draft_without_authorship_rejected(tmp_path: Path) -> None:
+    linked, _ = _make_linked(tmp_path)
+    payload = _draft_declaration_payload(linked)
+    payload["authorship"] = None
+    declaration = _write_declaration(tmp_path, payload)
+    with pytest.raises(LiraMappingError, match="must record why each decision"):
+        _run(tmp_path, linked, declaration)
+
+
+def test_missing_declaration_status_rejected(tmp_path: Path) -> None:
+    linked, _ = _make_linked(tmp_path)
+    payload = _draft_declaration_payload(linked)
+    del payload["declaration_status"]
+    declaration = _write_declaration(tmp_path, payload)
+    with pytest.raises(LiraMappingError, match="declaration_status"):
+        _run(tmp_path, linked, declaration)
+
+
+def test_signed_declaration_cannot_carry_authorship(tmp_path: Path) -> None:
+    linked, _ = _make_linked(tmp_path)
+    payload = _declaration_payload(linked)
+    payload["authorship"] = {
+        name: {"role": "USER_STATEMENT", "basis": "текст", "reference": None}
+        for name in ("bar", "experiment_row", "profile", "design_conditions")
+    }
+    declaration = _write_declaration(tmp_path, payload)
+    with pytest.raises(LiraMappingError, match="authorship belongs to an unsigned"):
+        _run(tmp_path, linked, declaration)
+
+
+def test_unknown_authorship_role_rejected(tmp_path: Path) -> None:
+    linked, _ = _make_linked(tmp_path)
+    payload = _draft_declaration_payload(linked)
+    payload["authorship"]["profile"]["role"] = "LOOKS_OFFICIAL"  # type: ignore[index]
+    declaration = _write_declaration(tmp_path, payload)
+    with pytest.raises(LiraMappingError, match="role must be one of"):
+        _run(tmp_path, linked, declaration)
