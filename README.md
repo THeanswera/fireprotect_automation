@@ -133,11 +133,20 @@ fire regime, and when the template file matches the controlled SHA-256 pin.
 Any other scope, another transform than the validated `MAGNITUDE`, a blocked
 transfer, a non-unique target, an existing output directory and `PRODUCTION`
 mode are refused; after writing, the file is re-read and only the target record
-may differ. The effective-length question is resolved from confirmed facts
-(`N = 0`, one-plane bending, the controlled experiment on this record) and is
-reported as not applicable instead of substituting the geometrical 3 m. The
-resume command deliberately omits `ENGINEER_CONFIRMED`: saving the file is not
-evidence that a human reviewed the result.
+may differ. The effective-length question is answered from the primary
+description of the algorithm: in the calculation document shipped with RX3
+(`rx3/doc/pages/pr.pdf`, section 4, "Изгибаемый стержень в одной из главных
+плоскостей", formulas 3 and 4) the critical temperature is derived from the
+moment, section modulus, shear force, moment of inertia and minimum thickness;
+the effective length and the support condition belong to the "Сжатый стержень"
+subsection (formulas 8-13). The status is reported as
+`NOT_USED_BY_THIS_ALGORITHM` with the document and its SHA-256, the geometrical
+3 m are never substituted, and the engineering limits (unapproved draft
+document, unverified program/formula identity, engineer's choice of mode) are
+listed separately. Data transfer is not presented as proof of an engineering
+fire-resistance calculation. The resume command deliberately omits
+`ENGINEER_CONFIRMED`: saving the file is not evidence that a human reviewed the
+result.
 
 ```powershell
 python -m fireprotect.cli export-lira-bar-review `

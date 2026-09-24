@@ -133,8 +133,15 @@ def _run_manifest(tmp_path: Path, *, prepared: bool = False) -> Path:
                     "generated": {"path": "generated.rx38", "sha256": "d" * 64},
                     "target": {"position": 12, "after_fingerprint": "e" * 64},
                     "effective_length_and_support": {
-                        "status": "NOT_APPLICABLE_FOR_THIS_RECORD",
-                        "basis": ["выбранная строка не содержит осевого усилия"],
+                        "status": "NOT_USED_BY_THIS_ALGORITHM",
+                        "algorithm_evidence": {
+                            "finding": "расчётная длина в формулы не входит",
+                            "source": {
+                                "path": "rx3/doc/pages/pr.pdf",
+                                "section": "Раздел 4",
+                                "bending_subsection": "формулы (3) и (4)",
+                            },
+                        },
                         "not_substituted": "геометрические 3 м не назначались",
                     },
                 },

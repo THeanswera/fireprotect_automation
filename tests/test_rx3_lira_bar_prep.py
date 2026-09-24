@@ -199,8 +199,9 @@ def test_checkpoint_uses_prepared_values_and_no_invented_signature(
     assert ROW_ID in checkpoint
     assert decimal_token(MY_KNM) in checkpoint
     assert "R15" in checkpoint
-    assert "НЕ применимы" not in checkpoint
-    assert "NOT_APPLICABLE_FOR_THIS_RECORD" in checkpoint
+    assert "NOT_USED_BY_THIS_ALGORITHM" in checkpoint
+    assert "pr.pdf" in checkpoint
+    assert "формулы (3) и (4)" in checkpoint
     assert "ENGINEER_CONFIRMED" in checkpoint  # only as an explicit prohibition
     assert "--gui-evidence ENGINEER_CONFIRMED" not in manifest["validation_command"]
     assert "validate-rx3-result" in manifest["validation_command"]
@@ -208,20 +209,48 @@ def test_checkpoint_uses_prepared_values_and_no_invented_signature(
     assert "14,80" not in checkpoint
 
 
-def test_effective_length_question_is_resolved_from_confirmed_facts(
+def test_effective_length_is_resolved_by_the_calculation_document(
     tmp_path: Path,
 ) -> None:
     run_dir = _prepared_run(tmp_path)
     manifest = _prepare(tmp_path, run_dir)
 
     decision = manifest["effective_length_and_support"]
-    assert decision["status"] == "NOT_APPLICABLE_FOR_THIS_RECORD"
+    assert decision["status"] == "NOT_USED_BY_THIS_ALGORITHM"
     assert decision["not_substituted"] == (
-        "геометрические 3 м расчётной длиной не назначались"
+        "геометрические 3 м расчётной длиной не назначались; поля 48/51/141 "
+        "не читаются как семантика и не изменяются подготовщиком"
     )
-    assert any("N = 0" in item for item in decision["basis"])
-    assert "N = 0" in decision["limits"]
+    evidence = decision["algorithm_evidence"]
+    assert evidence["source"]["path"] == "rx3/doc/pages/pr.pdf"
+    assert evidence["source"]["sha256"] == (
+        "326e4b8bc87038a338ec9e3503b554624cdafc8f24bb7988575812c1ba31f615"
+    )
+    assert "формулы (3) и (4)" in evidence["source"]["bending_subsection"]
+    assert "L / i_min" in evidence["source"]["compression_subsection"]
+    assert "Расчётная длина L и вид опирания в этих формулах не" in evidence["finding"]
+    assert decision["interface"]["source"]["path"] == (
+        "rx3/doc/pages/windowpredel.html"
+    )
+    # The old, unproven argument must not be used as evidence any more.
+    assert decision["empirical_observations_not_used_as_evidence"]
+    assert "basis" not in decision
     assert manifest["calculation_gate"]["blocked_by_unconfirmed_inputs"] == []
+    assert "не входят в описание алгоритма" in manifest["calculation_gate"]["reason"]
+
+
+def test_experience_scope_separates_transfer_from_engineering(tmp_path: Path) -> None:
+    run_dir = _prepared_run(tmp_path)
+    manifest = _prepare(tmp_path, run_dir)
+
+    scope = manifest["experience_scope"]
+    assert any("Перенос данных проверен" in item for item in scope["technical_transfer"])
+    assert any(
+        "Корректность инженерного расчёта" in item
+        for item in scope["engineering_calculation_not_asserted"]
+    )
+    assert manifest["production_write_allowed"] is False
+    assert manifest["engineer_confirmation_required"] is True
 
 
 def test_nonzero_axial_force_stops_the_preparation(tmp_path: Path) -> None:

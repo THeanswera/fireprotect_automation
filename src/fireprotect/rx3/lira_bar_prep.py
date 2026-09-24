@@ -71,6 +71,65 @@ _PREP_FILES = (
 _STANDARD_REGIME_FRAGMENT = "стандартн"
 
 
+# Primary sources that describe the selected loading mode. The claim below is
+# deliberately narrow: it is about what the shipped calculation document says
+# about this algorithm, not about the program's implementation and not about
+# the engineering applicability of the method.
+CALCULATION_DOCUMENT = {
+    "path": "rx3/doc/pages/pr.pdf",
+    "sha256": "326e4b8bc87038a338ec9e3503b554624cdafc8f24bb7988575812c1ba31f615",
+    "title": (
+        "Проект НД для Rx3. Инструкция. Определение пределов огнестойкости "
+        "стальных строительных конструкций с огнезащитным покрытием"
+    ),
+    "section": "Раздел 4 «Определение критической температуры»",
+    "bending_subsection": (
+        "подраздел «Изгибаемый стержень в одной из главных плоскостей», "
+        "формулы (3) и (4)"
+    ),
+    "compression_subsection": (
+        "подраздел «Сжатый стержень», формулы (8)–(13): λ = L / i_min, где "
+        "«L — расчетная длина стержня, в зависимости от вида опирания и длины "
+        "стержня L0»"
+    ),
+}
+INTERFACE_HELP = {
+    "path": "rx3/doc/pages/windowpredel.html",
+    "sha256": "1e449a96d88f22fd2ece40c992861e2a5b52e331e1fadb11916821fa662c9e3f",
+    "section": (
+        "Окно «Расчет предела огнестойкости стальных конструкций», блок 6 "
+        "«Данные для статического расчета», пп. 6.1 (список вида нагружения), "
+        "6.3 (переключатель «прочность/устойчивость»), 6.4 (список видов "
+        "опирания), 6.5 (коэффициент для определения расчётной длины)"
+    ),
+}
+ENGINEERING_LIMITS = (
+    "Проект НД для Rx3 не является утверждённым нормативным документом; его "
+    "нормативная применимость не подтверждена.",
+    "Тождество расчётного алгоритма программы RX3 и формул проекта НД не "
+    "верифицировано: это приложение к справке, а не документация реализации.",
+    "Выбор вида нагружения и переключателя «прочность/устойчивость» остаётся "
+    "инженерным решением; запись классифицируется по подтверждённому полю 45, "
+    "а поле кода 46 остаётся probable и не интерпретируется.",
+    "Приложение 4 требует постоянного поперечного сечения по длине; "
+    "принадлежность элемента к элементарной стержневой конструкции в составе "
+    "реальной конструкции проверяет инженер.",
+)
+TECHNICAL_SCOPE = (
+    "Перенос данных проверен: строка РСУ, единицы, знаки, происхождение, "
+    "цепочка КЭ и запись шаблона.",
+    "Проверено, что изменены только поля 50 и 92 одной записи, а остальные "
+    "записи не изменены.",
+)
+ENGINEERING_NOT_ASSERTED = (
+    "Корректность инженерного расчёта огнестойкости этим пакетом не "
+    "доказывается.",
+    "Нормативная применимость методики и пригодность результата для выпуска "
+    "не подтверждены.",
+    "Фактический результат RX3 не проверен: подтверждение даёт инженер.",
+)
+
+
 class Rx3LiraBarPrepError(ValueError):
     """Raised when the narrow preparation contract cannot be satisfied."""
 
@@ -503,48 +562,78 @@ def _require_scope(
     return length
 
 
-def _effective_length_decision(
+def _effective_length_assessment(
     verified: VerifiedBarRun, target: TargetRecord
 ) -> dict[str, object]:
-    """Resolve the effective-length question from confirmed facts only.
+    """State what the shipped calculation document says about this algorithm.
 
-    The controlled experiment for this exact record and scope ran with an empty
-    support-condition field and a zero effective length, RX3 neither required
-    nor rewrote those fields, and the selected row carries no axial force. The
-    geometrical 3 m are therefore not needed and are not substituted.
+    Three separate questions are answered separately, because they have
+    different evidence:
+
+    * interface — what the built-in help says about the window controls;
+    * algorithm — what the calculation document puts into the formulas of this
+      loading mode, compared with the compression mode;
+    * engineering applicability — what still depends on an engineer and is not
+      established by this package.
+
+    The earlier ``NOT_APPLICABLE`` wording is deliberately gone: it was argued
+    from ``N = 0`` and from the program having calculated once with empty
+    fields, and neither of those is evidence about the algorithm.
     """
 
-    axial = _decimal(
-        verified.row.published_vector["N"].value,
-        name="N",
-        context=str(verified.evidence_path),
-    )
-    if axial != 0:
+    label = target.record.fields[45]
+    if not single_plane_bending_label(label):
         raise Rx3LiraBarPrepError(
-            f"{verified.evidence_path}: selected row carries axial force {axial} "
-            "kN; the effective-length question is not resolved for that case"
-        )
-    if not single_plane_bending_label(target.record.fields[45]):
-        raise Rx3LiraBarPrepError(
-            "the target record is not a one-plane bending member"
+            f"the target record carries stress state {label!r}, which is not the "
+            "one-plane bending algorithm of this experiment"
         )
     return {
-        "status": "NOT_APPLICABLE_FOR_THIS_RECORD",
-        "basis": [
-            "выбранная строка не содержит осевого усилия (N = 0)",
-            "запись шаблона классифицируется как изгибаемый стержень в одной "
-            "из главных плоскостей (существующая подтверждённая функция)",
-            "контролируемый опыт LIRA-RX3-22P-XX-MAGNITUDE на этой же записи Б2 "
-            "выполнен при незаполненном field48 и field51='0'; RX3 не потребовал "
-            "их заполнения и не изменил их "
-            "(docs/RX3_CONTROLLED_EXPERIMENTS.md)",
-            "поля 48/51/141 не читаются как семантика и не изменяются "
-            "подготовщиком",
+        "status": "NOT_USED_BY_THIS_ALGORITHM",
+        "algorithm": "Изгибаемый стержень в одной из главных плоскостей",
+        "algorithm_classified_from": {
+            "field": 45,
+            "field_name": FIELD_SPECS[45].name,
+            "value": label,
+            "classifier": "single_plane_bending_label",
+        },
+        "interface": {
+            "source": INTERFACE_HELP,
+            "finding": (
+                "Справка показывает вид опирания и коэффициент расчётной длины "
+                "как отдельные элементы блока статического расчёта и отмечает, "
+                "что доступность полей зависит от режима, но не перечисляет, "
+                "для каких режимов эти поля требуются. Требования в интерфейсе "
+                "не установлено."
+            ),
+        },
+        "algorithm_evidence": {
+            "source": CALCULATION_DOCUMENT,
+            "finding": (
+                "Для этого вида нагружения критическая температура определяется "
+                "формулами (3) и (4) по максимальному моменту M, моменту "
+                "сопротивления W, поперечной силе Q, моменту инерции I, "
+                "статическому моменту полусечения S' и минимальной толщине "
+                "t_min. Расчётная длина L и вид опирания в этих формулах не "
+                "участвуют: они входят в алгоритм «Сжатый стержень» через "
+                "гибкость λ = L / i_min."
+            ),
+            "not_covered": (
+                "Документ описывает методику расчёта, а не реализацию RX3; "
+                "соответствие программы формулам не проверялось."
+            ),
+        },
+        "engineering_applicability": {
+            "limits": list(ENGINEERING_LIMITS),
+            "not_established_by_this_package": True,
+        },
+        "empirical_observations_not_used_as_evidence": [
+            "осевое усилие выбранной строки равно нулю",
+            "в контролируемом опыте RX3 расчёт проходил при незаполненном "
+            "field48 и field51='0'",
         ],
-        "not_substituted": "геометрические 3 м расчётной длиной не назначались",
-        "limits": (
-            "вывод относится только к этому режиму (N = 0, одноосный изгиб); "
-            "для сжатых и сжато-изогнутых элементов вопрос остаётся открытым"
+        "not_substituted": (
+            "геометрические 3 м расчётной длиной не назначались; поля 48/51/141 "
+            "не читаются как семантика и не изменяются подготовщиком"
         ),
     }
 
@@ -613,30 +702,69 @@ def _checkpoint_text(
             "4. Температурный режим записи — стандартный, как заявлено.",
             "5. Шаблон совпадает с контролируемым файлом этого опыта по SHA-256.",
             "",
-            "## Расчётная длина и закрепление",
+            "## Расчётная длина и вид опирания",
             "",
         ]
     )
     decision = manifest["effective_length_and_support"]
+    algorithm = decision["algorithm_evidence"]
+    assert isinstance(algorithm, Mapping)
     lines.append(f"Статус: **{decision['status']}**")
     lines.append("")
-    for reason in decision["basis"]:
-        lines.append(f"- {reason}")
+    lines.append(
+        "Что именно установлено: в поставляемом с программой проекте НД для Rx3"
+    )
+    lines.append(
+        f"({algorithm['source']['path']}, SHA-256 "
+        f"`{str(algorithm['source']['sha256'])[:16]}…`),"
+    )
+    lines.append(f"{algorithm['source']['section']},")
+    lines.append(f"{algorithm['source']['bending_subsection']},")
+    lines.append("критическая температура определяется по максимальному моменту,")
+    lines.append("моменту сопротивления, поперечной силе, моменту инерции и")
+    lines.append("минимальной толщине сечения. Расчётная длина и вид опирания в эти")
+    lines.append("формулы не входят; они входят в описание сжатого стержня:")
+    lines.append(f"{algorithm['source']['compression_subsection']}.")
+    lines.append("")
+    lines.append("Чего это не доказывает:")
+    for limit in decision["engineering_applicability"]["limits"]:
+        lines.append(f"- {limit}")
+    lines.append("")
+    lines.append(f"{decision['not_substituted']}.")
+    interface = decision["interface"]
+    assert isinstance(interface, Mapping)
+    lines.append("")
+    lines.append(f"Интерфейс: {interface['finding']}")
     lines.extend(
         [
             "",
-            f"{decision['not_substituted']}.",
+            "Никакие значения расчётной длины или закрепления инженеру сверять не",
+            "нужно: они не входят в этот алгоритм и подготовщик их не заполняет.",
             "",
-            f"Ограничение: {decision['limits']}",
+            "## Область этого опыта",
+            "",
+            "Проверено (технический перенос данных):",
+        ]
+    )
+    for item in manifest["experience_scope"]["technical_transfer"]:
+        lines.append(f"- {item}")
+    lines.append("")
+    lines.append("Не доказано этим пакетом:")
+    for item in manifest["experience_scope"]["engineering_calculation_not_asserted"]:
+        lines.append(f"- {item}")
+    lines.extend(
+        [
             "",
             "## Что остаётся за инженером",
             "",
-            "1. Открыть файл и убедиться, что расчёт идёт в режиме изгиба одной",
-            "   главной плоскости при N = 0, Mx и Q такие, как в таблице выше.",
-            "2. Нажать расчёт.",
-            "3. Сохранить результат как `calculated.rx38` в **новый** каталог;",
+            "1. Открыть файл и убедиться, что выбран режим изгиба одной главной",
+            "   плоскости, а Mx и Q такие, как в таблице выше.",
+            "2. Убедиться, что методика и проект НД применимы к вашей конструкции:",
+            "   пакет этого не подтверждает.",
+            "3. Нажать расчёт.",
+            "4. Сохранить результат как `calculated.rx38` в **новый** каталог;",
             "   `generated.rx38` и шаблон не перезаписывать.",
-            "4. Сообщить путь к сохранённому файлу.",
+            "5. Сообщить путь к сохранённому файлу.",
             "",
             "## Чего делать нельзя",
             "",
@@ -644,7 +772,8 @@ def _checkpoint_text(
             "- сохранять файл под именем `generated.rx38` или шаблона;",
             "- переносить значения из более ранних расчётов этой записи: они",
             "  относятся к другому набору нагрузок;",
-            "- считать этот опыт разрешением на выпуск.",
+            "- считать этот опыт разрешением на выпуск или доказательством",
+            "  инженерного расчёта.",
             "",
             "## Проверка результата",
             "",
@@ -734,7 +863,7 @@ def prepare_rx3_lira_bar_validation(
         fire_regime=fire_regime,
         context=str(template),
     )
-    decision = _effective_length_decision(verified, target)
+    decision = _effective_length_assessment(verified, target)
     changes, unresolved, unmapped_zero = _requested_changes(
         verified, context=context
     )
@@ -877,6 +1006,10 @@ def prepare_rx3_lira_bar_validation(
         "non_target_records": len(document.records) - 1,
         "non_target_records_identical": True,
         "effective_length_and_support": decision,
+        "experience_scope": {
+            "technical_transfer": list(TECHNICAL_SCOPE),
+            "engineering_calculation_not_asserted": list(ENGINEERING_NOT_ASSERTED),
+        },
         "source_binding": {
             "model_dir": str(verified.model_dir),
             "evidence_path": str(verified.evidence_path),
@@ -888,9 +1021,12 @@ def prepare_rx3_lira_bar_validation(
             "blocked_by_unconfirmed_inputs": [],
             "effective_length_status": decision["status"],
             "reason": (
-                "Расчёт выполняет инженер в RX3. Расчётная длина и закрепление "
-                "для этой записи не применимы (N = 0, одноосный изгиб); "
-                "остальные входные данные проверены программой по источникам."
+                "Расчёт выполняет инженер в RX3 и отвечает за выбор режима и "
+                "применимость методики. Расчётная длина и вид опирания не "
+                "входят в описание алгоритма этого вида нагружения (проект НД "
+                "для Rx3, раздел 4, формулы 3 и 4) и подготовщиком не "
+                "заполняются. Пакет не является подтверждением инженерного "
+                "расчёта и не разрешает выпуск."
             ),
         },
         "engineer_confirmation_required": True,

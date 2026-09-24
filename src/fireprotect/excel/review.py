@@ -380,16 +380,26 @@ def export_lira_bar_review(
         target_block = prepared_raw.get("target") or {}
         generated = prepared_raw.get("generated") or {}
         effective = prepared_raw.get("effective_length_and_support") or {}
-        basis = effective.get("basis")
+        evidence = effective.get("algorithm_evidence") or {}
+        source = evidence.get("source") or {}
         prepared = {
             "path": generated.get("path"),
             "position": target_block.get("position"),
             "after_fingerprint": target_block.get("after_fingerprint"),
             "effective_length_status": effective.get("status"),
-            "effective_length_basis": (
-                "; ".join(str(item) for item in basis)
-                if isinstance(basis, list)
-                else effective.get("not_substituted")
+            "effective_length_basis": " ".join(
+                part
+                for part in (
+                    str(evidence.get("finding") or ""),
+                    str(effective.get("not_substituted") or ""),
+                    (
+                        f"Источник: {source.get('path')} — {source.get('section')}, "
+                        f"{source.get('bending_subsection')}."
+                        if source
+                        else ""
+                    ),
+                )
+                if part
             ),
         }
 

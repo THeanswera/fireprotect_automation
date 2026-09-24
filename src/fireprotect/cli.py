@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 from pathlib import Path
 
 from .execution import ExecutionMode
@@ -44,6 +45,23 @@ from .rx3.parser import Rx38Construction, construction_records, read_rx38
 from .rx3.profiles import ProfileRepository, list_tables
 from .rx3.safety import GuiExecutionEvidence, Rx3SafetyContext
 from .validation import validate_rx38_record
+
+
+def print_json(payload: object) -> None:
+    """Print a payload without failing on a console that cannot encode it.
+
+    Cyrillic is representable in the Windows console encoding but mathematical
+    symbols such as λ are not; an unprintable character must never turn a
+    completed preparation into a failed command.
+    """
+
+    text = json.dumps(payload, ensure_ascii=False, indent=2)
+    encoding = getattr(sys.stdout, "encoding", None) or "utf-8"
+    try:
+        text.encode(encoding)
+    except (UnicodeEncodeError, LookupError):
+        text = json.dumps(payload, ensure_ascii=True, indent=2)
+    print(text)
 
 
 def _new_report_path(path: Path, *protected: Path) -> Path:
@@ -610,7 +628,7 @@ def cmd_prepare_lira_bar_run(args: argparse.Namespace) -> None:
         dry_run=args.dry_run,
         accept_current_sources=args.accept_current_sources,
     )
-    print(json.dumps(manifest, ensure_ascii=False, indent=2))
+    print_json(manifest)
     if manifest.get("status") == "SOURCE_DRIFT_DETECTED":
         raise SystemExit(2)
 
@@ -621,18 +639,12 @@ def cmd_prepare_rx3_lira_bar(args: argparse.Namespace) -> None:
         template_path=args.template,
         output_dir=args.output_dir,
     )
-    print(json.dumps(manifest, ensure_ascii=False, indent=2))
+    print_json(manifest)
 
 
 def cmd_export_lira_bar_review(args: argparse.Namespace) -> None:
-    print(
-        json.dumps(
-            export_lira_bar_review(
-                run_manifest=args.run_manifest, output=args.output
-            ),
-            ensure_ascii=False,
-            indent=2,
-        )
+    print_json(
+        export_lira_bar_review(run_manifest=args.run_manifest, output=args.output)
     )
 
 
