@@ -5,9 +5,11 @@ from decimal import Decimal
 from hashlib import sha256
 import json
 from pathlib import Path
+import sys
 
 import pytest
 
+from fireprotect.cli import main
 from fireprotect.lira import (
     LiraFormatError,
     LiraMappingError,
@@ -177,12 +179,185 @@ def test_missing_coefficient_and_source_load_block(tmp_path: Path) -> None:
 
 
 def test_ambiguous_source_blocks(tmp_path: Path) -> None:
-    report = validate_rsu_reconstruction(_import(_write_bundle(
-        tmp_path,
-        published_rows=[_published_row("A1", 1, "1", 1.5, 0.5)],
-        force_rows={"1": [_force_row(1, 2, 1, 1.5, 0.5), _force_row(1, 2, 1, 1.5, 0.5)]},
-    )))
+    """A duplicate row inside one page is refused while the page is read."""
+
+    with pytest.raises(LiraFormatError, match="describe element '1', section '2', load case '1' twice"):
+        _import(_write_bundle(
+            tmp_path,
+            force_rows={"1": [_force_row(1, 2, 1, 1.5, 0.5), _force_row(1, 2, 1, 1.5, 0.5)]},
+        ))
+
+
+def test_ambiguous_source_bundle_still_blocks(tmp_path: Path) -> None:
+    """The reconstruction layer keeps its own ambiguity guard."""
+
+    bundle = _import(_write_bundle(tmp_path))
+    duplicated = replace(
+        bundle, force_records=(*bundle.force_records, bundle.force_records[0])
+    )
+    report = validate_rsu_reconstruction(duplicated)
     assert "RSU_SOURCE_LOAD_AMBIGUOUS:1" in report.blockers
+
+
+def _write_pages(
+    tmp_path: Path, pages: list[dict[str, list[list[object]]]]
+) -> list[Path]:
+    paths: list[Path] = []
+    for index, sheets in enumerate(pages, 1):
+        path = tmp_path / f"forces-{index}page.xls"
+        _write_table(
+            path,
+            [(name, [["title"], [], _force_header(), *rows]) for name, rows in sheets.items()],
+        )
+        paths.append(path)
+    return paths
+
+
+def test_paged_forces_keep_each_page_as_its_own_source(tmp_path: Path) -> None:
+    pages = _write_pages(
+        tmp_path,
+        [
+            {"1": [_force_row(1, 2, 1, 1.5, 0.5)], "2": [_force_row(1, 2, 2, 3.0, 1.0)]},
+            {"3": [_force_row(1, 2, 3, 4.5, 1.5)], "4": [_force_row(1, 2, 4, -6.0, -2.0)]},
+        ],
+    )
+    aux = _write_bundle(tmp_path / "aux")
+    bundle = import_rsu_xls_bundle(
+        forces_path=pages,
+        published_path=aux[1],
+        coefficients_path=aux[2],
+        parameters_path=aux[3],
+    )
+    first = sha256(pages[0].read_bytes()).hexdigest()
+    second = sha256(pages[1].read_bytes()).hexdigest()
+    assert [book.source_file for book in bundle.forces_workbooks] == [
+        str(path.resolve()) for path in pages
+    ]
+    assert [record.load_case_id for record in bundle.force_records] == ["1", "2", "3", "4"]
+    assert [record.source_sha256 for record in bundle.force_records] == [
+        first, first, second, second,
+    ]
+    assert [record.source_sheet for record in bundle.force_records] == ["1", "2", "3", "4"]
+    assert bundle.force_records[2].vector.values["My"].source_sha256 == second
+    report = validate_rsu_reconstruction(
+        bundle, mutually_exclusive_sets=(frozenset({"3", "4"}),)
+    )
+    assert report.status is RsuValidationStatus.VERIFIED
+    assert report.component_comparisons == 24
+
+
+def test_overlapping_pages_are_refused(tmp_path: Path) -> None:
+    pages = _write_pages(
+        tmp_path,
+        [
+            {"1": [_force_row(1, 2, 1, 1.5, 0.5)]},
+            {"1": [_force_row(1, 2, 1, 1.5, 0.5)]},
+        ],
+    )
+    aux = _write_bundle(tmp_path / "aux")
+    with pytest.raises(LiraFormatError, match="twice"):
+        import_rsu_xls_bundle(
+            forces_path=pages,
+            published_path=aux[1],
+            coefficients_path=aux[2],
+            parameters_path=aux[3],
+        )
+
+
+def test_empty_force_page_is_refused(tmp_path: Path) -> None:
+    page = tmp_path / "empty.xls"
+    _write_table(page, [("1", [["title"], [], _force_header()])])
+    aux = _write_bundle(tmp_path / "aux")
+    with pytest.raises(LiraFormatError, match="no data rows"):
+        import_rsu_xls_bundle(
+            forces_path=[page],
+            published_path=aux[1],
+            coefficients_path=aux[2],
+            parameters_path=aux[3],
+        )
+
+
+def test_pinned_forces_hash_is_refused_for_several_pages(tmp_path: Path) -> None:
+    pages = _write_pages(
+        tmp_path,
+        [{"1": [_force_row(1, 2, 1, 1.5, 0.5)]}, {"2": [_force_row(1, 2, 2, 3.0, 1.0)]}],
+    )
+    aux = _write_bundle(tmp_path / "aux")
+    with pytest.raises(LiraMappingError, match="pins exactly one workbook"):
+        import_rsu_xls_bundle(
+            forces_path=pages,
+            published_path=aux[1],
+            coefficients_path=aux[2],
+            parameters_path=aux[3],
+            expected_sha256={"forces": "0" * 64},
+        )
+
+
+def test_evidence_bundle_refuses_paged_forces(tmp_path: Path) -> None:
+    pages = _write_pages(
+        tmp_path,
+        [
+            {"1": [_force_row(1, 2, 1, 1.5, 0.5)], "2": [_force_row(1, 2, 2, 3.0, 1.0)]},
+            {"3": [_force_row(1, 2, 3, 4.5, 1.5)], "4": [_force_row(1, 2, 4, -6.0, -2.0)]},
+        ],
+    )
+    aux = _write_bundle(tmp_path / "aux")
+    bundle = import_rsu_xls_bundle(
+        forces_path=pages,
+        published_path=aux[1],
+        coefficients_path=aux[2],
+        parameters_path=aux[3],
+    )
+    report = validate_rsu_reconstruction(
+        bundle, mutually_exclusive_sets=(frozenset({"3", "4"}),)
+    )
+    destination = tmp_path / "review"
+    with pytest.raises(LiraFormatError, match="exactly one forces workbook"):
+        prepare_rsu_review_bundle(bundle, report, destination)
+    assert not destination.exists()
+
+
+def test_cli_reports_every_force_page(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    pages = _write_pages(
+        tmp_path,
+        [
+            {"1": [_force_row(1, 2, 1, 1.5, 0.5)], "2": [_force_row(1, 2, 2, 3.0, 1.0)]},
+            {"3": [_force_row(1, 2, 3, 4.5, 1.5)], "4": [_force_row(1, 2, 4, -6.0, -2.0)]},
+        ],
+    )
+    aux = _write_bundle(tmp_path / "aux")
+    report_path = tmp_path / "report.json"
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "fireprotect", "validate-lira-rsu",
+            "--forces", *(str(path) for path in pages),
+            "--published", str(aux[1]),
+            "--coefficients", str(aux[2]),
+            "--parameters", str(aux[3]),
+            "--report", str(report_path),
+        ],
+    )
+    main()
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["status"] == "VERIFIED"
+    assert payload["force_records"] == 4
+    assert payload["published_records"] == 4
+    assert payload["verified_rows"] == 4
+    assert payload["blocked_rows"] == 0
+    assert [page["sha256"] for page in payload["force_pages"]] == [
+        sha256(path.read_bytes()).hexdigest() for path in pages
+    ]
+    assert [page["elements_min"] for page in payload["force_pages"]] == [1, 1]
+    assert payload["component_mismatches"] == {
+        "N": 0, "Mk": 0, "My": 0, "Mz": 0, "Qy": 0, "Qz": 0,
+    }
+    assert payload["blocker_row_counts"] == {}
+    assert payload["issue_readiness"] == "NOT_READY_FOR_ISSUE"
+    assert json.loads(report_path.read_text(encoding="utf-8"))["status"] == "VERIFIED"
 
 
 def test_result_mismatch_keeps_joint_vector(tmp_path: Path) -> None:

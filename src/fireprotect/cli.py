@@ -8,6 +8,9 @@ from pathlib import Path
 from .execution import ExecutionMode
 from .excel import export_lira_bar_review
 from .lira import (
+    RsuImportBundle,
+    RsuLoadForceRecord,
+    RsuValidationReport,
     import_rsu_xls_bundle,
     prepare_bar_experiment_input,
     prepare_bar_run,
@@ -518,9 +521,59 @@ def cmd_validate_lira_selection(args: argparse.Namespace) -> None:
     print(json.dumps(payload, ensure_ascii=False, indent=2))
 
 
+def _force_page_report(bundle: RsuImportBundle) -> list[dict[str, object]]:
+    """Describe every force page actually read, with its own SHA-256."""
+
+    records_by_page: dict[str, list[RsuLoadForceRecord]] = {}
+    for record in bundle.force_records:
+        records_by_page.setdefault(record.source_sha256, []).append(record)
+    report: list[dict[str, object]] = []
+    for index, book in enumerate(bundle.forces_workbooks, 1):
+        page = records_by_page.get(book.source_sha256, [])
+        elements: list[int] = []
+        for record in page:
+            try:
+                elements.append(int(float(record.element_id)))
+            except (TypeError, ValueError):
+                continue
+        report.append(
+            {
+                "page": index,
+                "path": book.source_file,
+                "sha256": book.source_sha256,
+                "sheets": [sheet.name for sheet in book.worksheets],
+                "records": len(page),
+                "elements_min": min(elements) if elements else None,
+                "elements_max": max(elements) if elements else None,
+                "load_cases": sorted({record.load_case_id for record in page}),
+                "section_stations": sorted(
+                    {record.section_station for record in page}
+                ),
+            }
+        )
+    return report
+
+
+def _blocker_row_counts(report: RsuValidationReport) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for result in report.results:
+        for blocker in result.blockers:
+            counts[blocker] = counts.get(blocker, 0) + 1
+    return dict(sorted(counts.items()))
+
+
+def _component_mismatches(report: RsuValidationReport) -> dict[str, int]:
+    mismatches = {name: 0 for name in ("N", "Mk", "My", "Mz", "Qy", "Qz")}
+    for result in report.results:
+        for item in result.components:
+            if item.difference != 0:
+                mismatches[item.component] = mismatches.get(item.component, 0) + 1
+    return mismatches
+
+
 def cmd_validate_lira_rsu(args: argparse.Namespace) -> None:
     bundle = import_rsu_xls_bundle(
-        forces_path=args.forces,
+        forces_path=tuple(args.forces),
         published_path=args.published,
         coefficients_path=args.coefficients,
         parameters_path=args.parameters,
@@ -528,10 +581,19 @@ def cmd_validate_lira_rsu(args: argparse.Namespace) -> None:
     report = validate_rsu_reconstruction(bundle)
     payload: dict[str, object] = {
         "status": report.status.value,
+        "force_pages": _force_page_report(bundle),
         "force_records": len(bundle.force_records),
         "published_records": len(bundle.published_records),
         "component_comparisons": report.component_comparisons,
         "matching_components": report.matching_components,
+        "component_mismatches": _component_mismatches(report),
+        "verified_rows": sum(
+            1 for result in report.results if result.status.value == "VERIFIED"
+        ),
+        "blocked_rows": sum(
+            1 for result in report.results if result.status.value != "VERIFIED"
+        ),
+        "blocker_row_counts": _blocker_row_counts(report),
         "blockers": list(report.blockers),
         "rx38_force_generation_allowed": False,
         "issue_readiness": "NOT_READY_FOR_ISSUE",
@@ -542,12 +604,16 @@ def cmd_validate_lira_rsu(args: argparse.Namespace) -> None:
         )
     if args.report is not None:
         target = _new_report_path(
-            args.report, args.forces, args.published, args.coefficients, args.parameters
+            args.report,
+            *args.forces,
+            args.published,
+            args.coefficients,
+            args.parameters,
         )
         target.write_text(
             json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
         )
-    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    print_json(payload)
 
 
 def cmd_validate_lira_rsu_selection(args: argparse.Namespace) -> None:
@@ -950,7 +1016,18 @@ def main() -> None:
         "validate-lira-rsu",
         help="Read legacy XLS exports and reconstruct published native RSU vectors",
     )
-    command.add_argument("--forces", type=Path, required=True)
+    command.add_argument(
+        "--forces",
+        type=Path,
+        required=True,
+        nargs="+",
+        metavar="XLS",
+        help=(
+            "One LIRA force workbook, or several pages of one force table. "
+            "Each page keeps its own SHA-256 and must not repeat an "
+            "element/section/load case"
+        ),
+    )
     command.add_argument("--published", type=Path, required=True)
     command.add_argument("--coefficients", type=Path, required=True)
     command.add_argument("--parameters", type=Path, required=True)

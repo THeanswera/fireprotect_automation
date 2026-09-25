@@ -188,7 +188,7 @@ class RsuLoadParameter:
 
 @dataclass(frozen=True, slots=True)
 class RsuImportBundle:
-    forces_workbook: XlsWorkbook
+    forces_workbooks: tuple[XlsWorkbook, ...]
     published_workbook: XlsWorkbook
     coefficients_workbook: XlsWorkbook
     parameters_workbook: XlsWorkbook
@@ -199,6 +199,21 @@ class RsuImportBundle:
     mapping_fingerprint: str
     rx38_force_generation_allowed: bool = False
     issue_readiness: str = "NOT_READY_FOR_ISSUE"
+
+    @property
+    def forces_workbook(self) -> XlsWorkbook:
+        """The single force workbook of a one-page export.
+
+        A paged export has no single workbook; asking for one there would hide
+        which page a value came from, so the ambiguity is refused.
+        """
+
+        if len(self.forces_workbooks) != 1:
+            raise LiraFormatError(
+                f"this import contains {len(self.forces_workbooks)} force pages; "
+                "there is no single forces workbook to return"
+            )
+        return self.forces_workbooks[0]
 
 
 @dataclass(frozen=True, slots=True)
@@ -314,25 +329,68 @@ def _membership(token: str) -> tuple[str, ...]:
     return values
 
 
+def _force_page_paths(
+    forces_path: str | Path | Sequence[str | Path],
+) -> tuple[str | Path, ...]:
+    """Normalize one force workbook or an explicit page sequence.
+
+    LIRA writes a long force table in pages, so several workbooks may describe
+    one force table.  The order given by the caller is kept verbatim: this
+    function never sorts, merges, or guesses which page covers which elements.
+    """
+
+    if isinstance(forces_path, (str, Path)):
+        return (forces_path,)
+    if isinstance(forces_path, (bytes, bytearray)):
+        raise LiraFormatError("forces_path must be a path or a sequence of paths")
+    try:
+        pages = tuple(forces_path)
+    except TypeError as exc:
+        raise LiraFormatError(
+            "forces_path must be a path or a sequence of paths, got "
+            f"{type(forces_path).__name__}"
+        ) from exc
+    if not pages:
+        raise LiraFormatError("at least one forces workbook is required")
+    return pages
+
+
 def import_rsu_xls_bundle(
     *,
-    forces_path: str | Path,
+    forces_path: str | Path | Sequence[str | Path],
     published_path: str | Path,
     coefficients_path: str | Path,
     parameters_path: str | Path,
     mapping: RsuXlsMapping | None = None,
     expected_sha256: Mapping[str, str] | None = None,
 ) -> RsuImportBundle:
-    """Import all worksheets and preserve BIFF provenance for RSU validation."""
+    """Import all worksheets and preserve BIFF provenance for RSU validation.
+
+    ``forces_path`` accepts a single workbook or an explicit sequence of
+    workbooks.  Every page keeps its own path and SHA-256, and a page that
+    describes an (element, section, load case) already read from another page is
+    refused: overlapping pages are never merged and never silently overwritten.
+    """
 
     config = mapping or RsuXlsMapping()
     hashes = expected_sha256 or {}
-    books = {
-        "forces": read_xls_workbook(
-            forces_path,
+    pages = _force_page_paths(forces_path)
+    recorded_forces_hash = hashes.get("forces")
+    if len(pages) > 1 and recorded_forces_hash is not None:
+        raise LiraMappingError(
+            "expected_sha256['forces'] pins exactly one workbook, but "
+            f"{len(pages)} force pages were given; record each page "
+            "individually or drop the pinned hash"
+        )
+    force_books = tuple(
+        read_xls_workbook(
+            page,
             encoding_override=config.encoding_override,
-            expected_sha256=hashes.get("forces"),
-        ),
+            expected_sha256=recorded_forces_hash,
+        )
+        for page in pages
+    )
+    books = {
         "published": read_xls_workbook(
             published_path,
             encoding_override=config.encoding_override,
@@ -350,25 +408,51 @@ def import_rsu_xls_bundle(
         ),
     }
     force_records: list[RsuLoadForceRecord] = []
-    for sheet in books["forces"].worksheets:
-        headers = _headers(sheet, config.force_header_row)
-        element_column = _required_column(headers, config.element_header, source="forces")
-        station_column = _required_column(headers, config.station_header, source="forces")
-        load_column = _required_column(headers, config.load_case_header, source="forces")
-        for row in sheet.rows[config.force_header_row :]:
-            if all(cell.value is None for cell in row):
-                continue
-            force_records.append(
-                RsuLoadForceRecord(
+    force_locations: dict[tuple[str, str, str], str] = {}
+    for book in force_books:
+        page_records = 0
+        for sheet in book.worksheets:
+            headers = _headers(sheet, config.force_header_row)
+            element_column = _required_column(headers, config.element_header, source="forces")
+            station_column = _required_column(headers, config.station_header, source="forces")
+            load_column = _required_column(headers, config.load_case_header, source="forces")
+            for row in sheet.rows[config.force_header_row :]:
+                if all(cell.value is None for cell in row):
+                    continue
+                record = RsuLoadForceRecord(
                     element_id=_text(row[element_column], field="element_id"),
                     section_station=_text(row[station_column], field="section_station"),
                     load_case_id=_text(row[load_column], field="load_case_id"),
-                    vector=_vector(row, headers, config, books["forces"].source_sha256),
+                    vector=_vector(row, headers, config, book.source_sha256),
                     source_sheet=sheet.name,
                     source_row=row[0].row_number,
-                    source_sha256=books["forces"].source_sha256,
+                    source_sha256=book.source_sha256,
                     mapping_fingerprint=config.fingerprint,
                 )
+                key = (
+                    record.element_id,
+                    record.section_station,
+                    record.load_case_id,
+                )
+                location = (
+                    f"{book.source_file} sheet {sheet.name!r} row {record.source_row}"
+                )
+                previous = force_locations.get(key)
+                if previous is not None:
+                    raise LiraFormatError(
+                        "the force pages describe element "
+                        f"{key[0]!r}, section {key[1]!r}, load case {key[2]!r} "
+                        f"twice ({previous} and {location}); an overlapping or "
+                        "duplicated page is refused instead of being merged"
+                    )
+                force_locations[key] = location
+                force_records.append(record)
+                page_records += 1
+        if page_records == 0:
+            raise LiraFormatError(
+                f"force page {book.source_file} contains no data rows; an empty "
+                "page is refused instead of being treated as a valid part of "
+                "the force table"
             )
     published_records: list[RsuPublishedRecord] = []
     for sheet in books["published"].worksheets:
@@ -470,7 +554,7 @@ def import_rsu_xls_bundle(
                 )
             )
     return RsuImportBundle(
-        forces_workbook=books["forces"],
+        forces_workbooks=force_books,
         published_workbook=books["published"],
         coefficients_workbook=books["coefficients"],
         parameters_workbook=books["parameters"],

@@ -50,11 +50,19 @@ def rsu_evidence(bundle: RsuImportBundle, report: RsuValidationReport) -> dict[s
 
     if len(bundle.published_records) != len(report.results):
         raise LiraFormatError("RSU report does not match the imported bundle")
+    if len(bundle.forces_workbooks) != 1:
+        raise LiraFormatError(
+            "the read-only RSU evidence bundle binds exactly one forces "
+            f"workbook, but this import contains {len(bundle.forces_workbooks)} "
+            "force pages; a paged force export is not yet representable in the "
+            "evidence format, so the bundle is refused instead of recording "
+            "only one page as if it were the whole table"
+        )
     sources = {
         name: {"path": book.source_file, "sha256": book.source_sha256,
                "sheets": len(book.worksheets)}
         for name, book in (
-            ("forces", bundle.forces_workbook),
+            ("forces", bundle.forces_workbooks[0]),
             ("published", bundle.published_workbook),
             ("coefficients", bundle.coefficients_workbook),
             ("parameters", bundle.parameters_workbook),
