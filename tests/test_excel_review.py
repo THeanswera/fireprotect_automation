@@ -218,7 +218,7 @@ def test_result_cells_stay_empty_before_a_real_calculation(tmp_path: Path) -> No
     results = {row[0]: row[1] for row in rows if row[0]}
     assert results["Критическая температура, °C"] is None
     assert results["Собственный предел огнестойкости, мин"] is None
-    assert results["Коэффициент использования по моменту"] is None
+    assert results["Коэффициент уровня нагружения по моменту (RX3)"] is None
     assert results["Требуемая толщина огнезащиты, мм"] is None
     assert results["Расход материала"] is None
     assert "не заполнено" in str(
@@ -226,6 +226,63 @@ def test_result_cells_stay_empty_before_a_real_calculation(tmp_path: Path) -> No
             "Критическая температура, °C"
         ]
     )
+
+
+def test_confirmed_result_fills_the_result_sheet(tmp_path: Path) -> None:
+    manifest = _run_manifest(tmp_path, prepared=True)
+    run_dir = manifest.parent
+    report = {
+        "status": "RX3_RESULT_ANALYSED",
+        "gui_execution_evidence": "ENGINEER_CONFIRMED",
+        "evidence_reference": "LIRA-RX3-B2-R0001",
+        "rx3_recalculation_proven": True,
+        "non_target_records_text_unchanged": True,
+        "after": {"path": "calculated.rx38", "sha256": "f" * 64},
+        "records": [
+            {"is_target": False},
+            {
+                "is_target": True,
+                "rx3_result": {
+                    "critical_temperature": {
+                        "value": "728.806265661724",
+                        "unit": "degC",
+                    },
+                    "unprotected_fire_resistance": {
+                        "value": "15.6833333333333",
+                        "unit": "min",
+                    },
+                    "required_fire_resistance": {"value": "15", "unit": "min"},
+                },
+                "confirmed_changes": [
+                    {"index": 52, "new_value": "0.112716240602966"}
+                ],
+            },
+        ],
+    }
+    (run_dir / "rx3_input" / "rx3_result_report_confirmed.json").write_text(
+        json.dumps(report, ensure_ascii=False), encoding="utf-8"
+    )
+    output = tmp_path / "review.xlsx"
+
+    export_lira_bar_review(run_manifest=manifest, output=output)
+
+    workbook = load_workbook(output)
+    rows = list(workbook["Результат RX3"].iter_rows(min_row=2, values_only=True))
+    results = {row[0]: row[1] for row in rows if row[0]}
+    assert results["Критическая температура, degC"] == "728.806265661724"
+    assert results["Собственный предел огнестойкости, мин"] == "15.6833333333333"
+    assert results["Требуемый предел огнестойкости, мин"] == "15"
+    assert (
+        results["Коэффициент уровня нагружения по моменту (RX3)"]
+        == "0.112716240602966"
+    )
+    assert results["Требуемая толщина огнезащиты, мм"] is None
+    assert results["Проверка результата"] == "RX3_RESULT_ANALYSED"
+    assert results["Подтверждение инженера"] == "ENGINEER_CONFIRMED"
+    assert results["Пересчёт доказан"] == "да"
+    assert results["Нецелевые записи"] == "не изменены"
+    sources = {row[0]: row[2] for row in rows if row[0]}
+    assert "RX3_RESULT_ANALYSED" in str(sources["Критическая температура, degC"])
 
 
 def test_existing_workbook_is_never_overwritten(tmp_path: Path) -> None:

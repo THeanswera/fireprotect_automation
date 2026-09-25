@@ -295,16 +295,114 @@ def _blocker_rows(manifest: Mapping[str, Any]) -> list[list[object]]:
     return rows
 
 
-def _result_rows(manifest: Mapping[str, Any], prepared: Mapping[str, Any] | None) -> list[list[object]]:
+def _rx3_result(run_dir: Path) -> Mapping[str, Any] | None:
+    """Read the newest RX3 result report of this run, if one exists.
+
+    Only a report produced by ``validate-rx3-result`` is used; the numbers are
+    copied together with the status, the confirmation state and the SHA-256 of
+    the exact calculated file they came from.
+    """
+
+    for name in (
+        "rx3_result_report_confirmed.json",
+        "rx3_result_report.json",
+    ):
+        path = run_dir / "rx3_input" / name
+        if not path.is_file():
+            continue
+        payload = _read_json(path, "RX3 result report")
+        records = payload.get("records")
+        if not isinstance(records, list):
+            return None
+        target = next(
+            (
+                item
+                for item in records
+                if isinstance(item, Mapping) and item.get("is_target")
+            ),
+            None,
+        )
+        if not isinstance(target, Mapping):
+            return None
+        return {"path": str(path), "report": payload, "target": target}
+    return None
+
+
+def _result_rows(
+    manifest: Mapping[str, Any],
+    prepared: Mapping[str, Any] | None,
+    rx3: Mapping[str, Any] | None = None,
+) -> list[list[object]]:
     rows: list[list[object]] = [
         ["Показатель", "Значение", "Источник"],
         ["Критическая температура, °C", None, _UNCONFIRMED],
         ["Собственный предел огнестойкости, мин", None, _UNCONFIRMED],
-        ["Коэффициент использования по моменту", None, _UNCONFIRMED],
+        ["Коэффициент уровня нагружения по моменту (RX3)", None, _UNCONFIRMED],
         ["Коэффициент использования по поперечной силе", None, _UNCONFIRMED],
         ["Требуемая толщина огнезащиты, мм", None, "индекс RX38 не подтверждён"],
         ["Расход материала", None, "нормативный источник не подтверждён"],
     ]
+    if rx3 is not None:
+        report = rx3["report"]
+        target_record = rx3["target"]
+        result = target_record.get("rx3_result") or {}
+        after = report.get("after") or {}
+        reference = (
+            f"RX3, {after.get('path')} "
+            f"(SHA-256 {str(after.get('sha256'))[:16]}…), проверка "
+            f"{report.get('status')}, подтверждение "
+            f"{report.get('gui_execution_evidence')}"
+        )
+        temperature = result.get("critical_temperature") or {}
+        resistance = result.get("unprotected_fire_resistance") or {}
+        level = None
+        for change in target_record.get("confirmed_changes") or []:
+            if isinstance(change, Mapping) and change.get("index") == 52:
+                level = change.get("new_value")
+        rows = [
+            ["Показатель", "Значение", "Источник"],
+            [
+                f"Критическая температура, {temperature.get('unit') or '°C'}",
+                temperature.get("value"),
+                reference,
+            ],
+            [
+                "Собственный предел огнестойкости, мин",
+                resistance.get("value"),
+                reference,
+            ],
+            [
+                "Требуемый предел огнестойкости, мин",
+                (result.get("required_fire_resistance") or {}).get("value"),
+                reference,
+            ],
+            ["Коэффициент уровня нагружения по моменту (RX3)", level, reference],
+            [
+                "Требуемая толщина огнезащиты, мм",
+                None,
+                "индекс RX38 не подтверждён; значение RX3 не переносилось",
+            ],
+            ["Расход материала", None, "нормативный источник не подтверждён"],
+            [],
+            ["Проверка результата", report.get("status"), str(rx3["path"])],
+            [
+                "Подтверждение инженера",
+                report.get("gui_execution_evidence"),
+                report.get("evidence_reference"),
+            ],
+            [
+                "Пересчёт доказан",
+                "да" if report.get("rx3_recalculation_proven") else "нет",
+                "result-поля изменились, файл не совпадает байтово",
+            ],
+            [
+                "Нецелевые записи",
+                "не изменены"
+                if report.get("non_target_records_text_unchanged")
+                else "ИЗМЕНЕНЫ",
+                "проверено validate-rx3-result",
+            ],
+        ]
     if prepared:
         rows.append([])
         rows.append(["Подготовленный файл RX3", prepared.get("path"), REVIEW_KIND])
@@ -334,13 +432,6 @@ def _result_rows(manifest: Mapping[str, Any], prepared: Mapping[str, Any] | None
                 "Расчёт запускает",
                 "инженер вручную в RX3",
                 "автоматический запуск запрещён",
-            ]
-        )
-        rows.append(
-            [
-                "Подтверждение инженера",
-                "ещё не получено",
-                "calculated.rx38 сам по себе подтверждением не является",
             ]
         )
     return rows
@@ -407,6 +498,7 @@ def export_lira_bar_review(
     status_sheet = workbook.active
     assert status_sheet is not None
     status_sheet.title = "Статус"
+    rx3_result = _rx3_result(run_dir)
     _write_table(status_sheet, _status_rows(manifest, prepared), [34, 70])
     _write_table(workbook.create_sheet("Идентичность"), _bar_rows(manifest), [30, 46, 34])
     _write_table(workbook.create_sheet("Строка РСУ"), _row_rows(experiment), [22, 18, 14, 14, 14, 14, 14, 14, 20])
@@ -428,7 +520,7 @@ def export_lira_bar_review(
     )
     _write_table(
         workbook.create_sheet("Результат RX3"),
-        _result_rows(manifest, prepared),
+        _result_rows(manifest, prepared, rx3_result),
         [42, 34, 46],
     )
     for sheet in workbook.worksheets:

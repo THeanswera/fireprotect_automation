@@ -154,8 +154,11 @@ python -m fireprotect.cli export-lira-bar-review `
   --output validation/STEEL_B2_3M_RUN_02/STEEL_B2_3M_RUN_02_REVIEW.xlsx
 ```
 
-That workbook is a new review file, never the project calculation book: RX3
-result cells stay empty until a real calculation exists.
+That workbook is a new review file, never the project calculation book. RX3
+result cells stay empty until `validate-rx3-result` has produced a report for
+the run; once it exists, the same command fills the "Результат RX3" sheet with
+the extracted values together with the check status, the engineer confirmation
+state and the SHA-256 of the exact calculated file.
 
 Phase A of the controlled pure-axial experiment is deliberately non-generating:
 
