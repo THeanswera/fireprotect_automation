@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
 from .execution import ExecutionMode
@@ -44,6 +45,10 @@ from .rx3.experiment import (
     validate_rx3_my5_result,
 )
 from .rx3.lira_bar_prep import prepare_rx3_lira_bar_validation
+from .rx3.template_intake import (
+    BaselineExpectation,
+    prepare_rx3_baseline_observation,
+)
 from .rx3.parser import Rx38Construction, construction_records, read_rx38
 from .rx3.profiles import ProfileRepository, list_tables
 from .rx3.safety import GuiExecutionEvidence, Rx3SafetyContext
@@ -714,6 +719,30 @@ def cmd_export_lira_bar_review(args: argparse.Namespace) -> None:
     )
 
 
+def cmd_prepare_rx3_baseline_observation(args: argparse.Namespace) -> None:
+    """Freeze one engineer-created RX3 baseline; never calculates anything."""
+
+    try:
+        length = Decimal(str(args.length_m).replace(",", "."))
+        required_r = Decimal(str(args.required_r_min).replace(",", "."))
+    except InvalidOperation as exc:
+        raise ValueError(f"length and required R must be decimal numbers: {exc}") from exc
+    payload = prepare_rx3_baseline_observation(
+        file=args.file,
+        expectation=BaselineExpectation(
+            mark=args.mark,
+            standard=args.standard,
+            designation=args.designation,
+            length_m=length,
+            stress_state=args.stress_state,
+            required_fire_resistance_min=required_r,
+        ),
+        profile_db=args.profile_db,
+        output_dir=args.output_dir,
+    )
+    print_json(payload)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(prog="fireprotect")
     subparsers = parser.add_subparsers(required=True)
@@ -1137,6 +1166,34 @@ def main() -> None:
     command.add_argument("--run-manifest", type=Path, required=True)
     command.add_argument("--output", type=Path, required=True)
     command.set_defaults(func=cmd_export_lira_bar_review)
+
+    command = subparsers.add_parser(
+        "prepare-rx3-baseline-observation",
+        help=(
+            "Read-only intake of one engineer-created RX3 baseline: freeze a "
+            "byte-identical copy, prove the declared identity against the RX3 "
+            "assortment database and write the GUI observation checklist"
+        ),
+    )
+    command.add_argument(
+        "--file",
+        type=Path,
+        required=True,
+        help="The .rx38 file the engineer created in RX3; it is never modified",
+    )
+    command.add_argument("--mark", required=True, help="Declared mark of the single target construction")
+    command.add_argument("--standard", required=True, help="Declared assortment standard")
+    command.add_argument("--designation", required=True, help="Declared profile designation")
+    command.add_argument("--length-m", required=True, help="Declared length in metres (exact token)")
+    command.add_argument("--stress-state", required=True, help="Declared RX3 loading/stress state")
+    command.add_argument(
+        "--required-r-min",
+        required=True,
+        help="Declared required fire resistance in minutes (R15 -> 15)",
+    )
+    command.add_argument("--profile-db", type=Path, default=Path("rx3") / "rx3.rxdb")
+    command.add_argument("--output-dir", type=Path, required=True)
+    command.set_defaults(func=cmd_prepare_rx3_baseline_observation)
 
     args = parser.parse_args()
     args.func(args)
