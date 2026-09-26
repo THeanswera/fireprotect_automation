@@ -1,4 +1,4 @@
-"""Artifacts and reports for the mandatory manual RX3 GUI checkpoint."""
+﻿"""Artifacts and reports for the mandatory manual RX3 GUI checkpoint."""
 
 from __future__ import annotations
 
@@ -372,7 +372,7 @@ def prepare_rx3_validation(
 8. Выполните Project Save As в этой папке под именем `calculated.rx38`; не перезаписывайте `template.rx38` и `generated.rx38`. Это кандидат FILE_PERSISTED.
 9. Выполните:
 
-   `python -m fireprotect.cli validate-rx3-result generated.rx38 calculated.rx38 --target-fingerprint BEFORE_RECORD_SHA256 --gui-evidence ENGINEER_CONFIRMED --evidence-reference EVIDENCE-ID`
+   `python -m fireprotect.cli validate-rx3-result generated.rx38 calculated.rx38 --target-fingerprint BEFORE_RECORD_SHA256 --expected-generated-sha256 GENERATED_SHA256 --gui-evidence ENGINEER_CONFIRMED --evidence-reference EVIDENCE-ID`
 
 10. Передайте `calculated.rx38`, evidence, `rx3_result.json`, `rx3_validation_report.json` и `rx3_validation_report.md` обратно в проект.
 11. Before any VALIDATION/PRODUCTION generation, verify that typed
@@ -471,9 +471,18 @@ def validate_rx3_result_files(
     change_sets: list[set[int]] = []
     material_result_change_sets: list[set[int]] = []
     unsafe_change_sets: list[set[int]] = []
+    input_change_sets: list[set[int]] = []
+    calculated_service_change_sets: list[set[int]] = []
+    unexpected_change_sets: list[set[int]] = []
     unexpected_non_target_changes: list[dict[str, Any]] = []
-    expected_output_fields = {44, 54}
-    allowed_calculated_result_fields = expected_output_fields | {52}
+    from .schema import FIELD_SPECS
+
+    input_fields = frozenset(
+        index for index, spec in FIELD_SPECS.items() if spec.direction == "input"
+    )
+    expected_output_fields = frozenset({44, 54})
+    calculated_service_fields = frozenset({52, 53, 76, 78})
+    allowed_calculated_result_fields = expected_output_fields | calculated_service_fields
     for position, (old, new) in enumerate(zip(before, after), 1):
         changes = [_change_dict(item) for item in diff_records(old, new)]
         changed_indices = {item["index"] for item in changes}
@@ -488,13 +497,20 @@ def validate_rx3_result_files(
             if old_value.is_finite() and new_value.is_finite() and old_value != new_value:
                 material_changes.add(index)
         material_result_change_sets.append(material_changes)
+        semantic_changes = {
+            item["index"]
+            for item in changes
+            if item["semantic_changed"] is not False
+        }
+        input_change_sets.append(semantic_changes & input_fields)
+        calculated_service_change_sets.append(
+            semantic_changes & calculated_service_fields
+        )
+        unexpected_change_sets.append(
+            semantic_changes - input_fields - allowed_calculated_result_fields
+        )
         unsafe_change_sets.append(
-            {
-                item["index"]
-                for item in changes
-                if item["index"] not in allowed_calculated_result_fields
-                and item["semantic_changed"] is not False
-            }
+            semantic_changes - allowed_calculated_result_fields
         )
         is_target = position in target_positions
         if not is_target and changes:
@@ -557,13 +573,21 @@ def validate_rx3_result_files(
         if position not in target_positions
     )
     prepared_inputs_preserved = not any(
-        unsafe_change_sets[position - 1] for position in sorted(target_positions)
+        input_change_sets[position - 1] for position in sorted(target_positions)
+    )
+    target_unexpected_change_indices = sorted(
+        {
+            index
+            for position in sorted(target_positions)
+            for index in unexpected_change_sets[position - 1]
+        }
     )
     recalculation_proven = (
         not byte_identical
         and result_fields_changed
         and non_target_records_text_unchanged
         and prepared_inputs_preserved
+        and not target_unexpected_change_indices
     )
     evidence_reference_valid = (
         isinstance(evidence_reference, str) and bool(evidence_reference.strip())
@@ -591,6 +615,8 @@ def validate_rx3_result_files(
         if unsafe_production_changes
         else "RX3_TARGET_INPUTS_CHANGED"
         if not prepared_inputs_preserved
+        else "RX3_UNEXPECTED_FIELD_CHANGE"
+        if target_unexpected_change_indices
         else "RX3_RECALCULATION_NOT_PROVEN"
         if not recalculation_proven
         else "RX3_PRODUCTION_INPUTS_CHANGED"
@@ -632,6 +658,27 @@ def validate_rx3_result_files(
                 for index in unsafe_change_sets[position - 1]
             }
         ),
+        "expected_before_sha256": expected_before_sha256,
+        "actual_before_sha256": before_hash,
+        "prepared_input_binding_note": (
+            "The pinned SHA-256 is a check of the result against the exactly fixed "
+            "BEFORE file; it is not proof of the provenance of the AFTER file."
+        ),
+        "input_field_change_indices": sorted(
+            {
+                index
+                for position in sorted(target_positions)
+                for index in input_change_sets[position - 1]
+            }
+        ),
+        "calculated_service_change_indices": sorted(
+            {
+                index
+                for position in sorted(target_positions)
+                for index in calculated_service_change_sets[position - 1]
+            }
+        ),
+        "target_unexpected_change_indices": target_unexpected_change_indices,
         "prepared_inputs_preserved": prepared_inputs_preserved,
         "recalculation_note": (
             "The recorded result fields 44/54 changed, so the file content changed. This "

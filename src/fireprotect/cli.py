@@ -429,6 +429,7 @@ def cmd_validate_rx3_result(args: argparse.Namespace) -> None:
         overwrite=args.overwrite,
         gui_execution_evidence=GuiExecutionEvidence(args.gui_evidence),
         evidence_reference=args.evidence_reference,
+        expected_before_sha256=args.expected_generated_sha256,
         target_record_fingerprints=args.target_fingerprints or (),
         target_record_positions=args.target_positions or (),
         target_marks=args.target_marks or (),
@@ -930,6 +931,14 @@ def main() -> None:
     command.add_argument("--json-report", type=Path)
     command.add_argument("--markdown-report", type=Path)
     command.add_argument("--overwrite", action="store_true")
+    command.add_argument(
+        "--expected-generated-sha256",
+        required=True,
+        help=(
+            "Pinned SHA-256 of the prepared generated.rx38; a result calculated "
+            "from another file is refused"
+        ),
+    )
     targets = command.add_mutually_exclusive_group(required=True)
     targets.add_argument(
         "--target-fingerprint",
@@ -967,7 +976,7 @@ def main() -> None:
     command.add_argument("--experiment-id", required=True)
     command.add_argument(
         "--expected-generated-sha256",
-        default=None,
+        required=True,
         help=(
             "Pin the exact prepared generated.rx38 SHA-256; a result calculated from "
             "another file is refused"

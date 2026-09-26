@@ -149,6 +149,47 @@ def test_result_from_another_generated_file_is_refused(tmp_path: Path):
         )
 
 
+def test_scoped_calculated_and_service_changes_are_not_input_changes(tmp_path: Path):
+    """Fields 44/52/54/76/78 may change after a calculation without being inputs."""
+
+    generated, calculated = _two_record_calculation(
+        tmp_path,
+        target_changes={44: "480", 52: "0,3", 54: "18", 76: "120,5", 78: "2,5"},
+    )
+    report = validate_rx3_result_files(
+        generated,
+        calculated,
+        target_record_positions=(1,),
+        gui_execution_evidence=GuiExecutionEvidence.SCREENSHOT_REFERENCED,
+        evidence_reference="SCOPED-POST-CALC",
+    )
+    assert report.data["input_field_change_indices"] == []
+    assert report.data["prepared_inputs_preserved"] is True
+    assert report.data["calculated_service_change_indices"] == [52, 76, 78]
+    assert report.data["target_unexpected_change_indices"] == []
+    assert report.data["status"] == "RX3_RESULT_ANALYSED"
+    assert report.data["gui_recalculation_verified"] is True
+
+
+def test_field50_change_is_still_refused_and_field49_too(tmp_path: Path):
+    for index, token in ((50, "9,99"), (49, "1234,5")):
+        case = tmp_path / f"field{index}"
+        case.mkdir()
+        generated, calculated = _two_record_calculation(
+            case, target_changes={44: "500", 54: "20", index: token}
+        )
+        report = validate_rx3_result_files(
+            generated,
+            calculated,
+            target_record_positions=(1,),
+            gui_execution_evidence=GuiExecutionEvidence.SCREENSHOT_REFERENCED,
+            evidence_reference="CONTROL-INPUT",
+        )
+        assert report.data["status"] == "RX3_TARGET_INPUTS_CHANGED"
+        assert report.data["input_field_change_indices"] == [index]
+        assert report.data["gui_recalculation_verified"] is False
+
+
 def test_byte_identical_calculated_file_does_not_prove_gui_run(tmp_path: Path):
     generated = tmp_path / "generated.rx38"
     calculated = tmp_path / "calculated.rx38"
@@ -179,8 +220,9 @@ def test_unrelated_file_change_does_not_refresh_stale_results(tmp_path: Path):
     )
     assert report.data["byte_identical"] is False
     assert report.data["expected_result_fields_changed"] is False
-    assert report.data["status"] == "RX3_TARGET_INPUTS_CHANGED"
-    assert report.data["prepared_inputs_preserved"] is False
+    assert report.data["status"] == "RX3_UNEXPECTED_FIELD_CHANGE"
+    assert report.data["prepared_inputs_preserved"] is True
+    assert report.data["target_unexpected_change_indices"] == [2]
 
 
 def test_formatting_only_result_changes_do_not_refresh_stale_values(tmp_path: Path):
@@ -287,7 +329,7 @@ def test_confirmed_load_level_change_is_a_calculated_result_not_an_input(tmp_pat
         generated, calculated, target_record_positions=(1,)
     )
 
-    assert report.data["allowed_calculated_result_fields"] == [44, 52, 54]
+    assert report.data["allowed_calculated_result_fields"] == [44, 52, 53, 54, 76, 78]
     assert 52 not in report.data["unsafe_production_change_indices"]
 
 

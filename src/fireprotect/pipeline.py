@@ -1034,6 +1034,7 @@ def run_pipeline(config_path: str | Path) -> PipelineRunResult:
             validation = validate_rx3_result_files(
                 generated,
                 calculated,
+                expected_before_sha256=_hash(generated),
                 json_report=validation_dir / "rx3_validation_report.json",
                 markdown_report=validation_dir / "rx3_validation_report.md",
                 overwrite=True,

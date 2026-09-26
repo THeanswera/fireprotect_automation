@@ -194,6 +194,33 @@ def test_intake_refuses_when_the_assortment_database_changes_while_reading(
     assert not (tmp_path / "baseline").exists()
 
 
+def test_database_hash_is_read_twice_and_no_third_read_is_recorded(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Regression for the a, a, b sequence: the recorded hash must be a read value."""
+
+    import fireprotect.rx3.template_intake as template_intake
+
+    real = template_intake._sha256
+    sequence = iter(["a" * 64, "a" * 64, "b" * 64])
+    calls = {"database": 0}
+
+    def fake(path: object) -> str:
+        if Path(str(path)).resolve() == RXDB.resolve():
+            calls["database"] += 1
+            return next(sequence)
+        return real(path)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(template_intake, "_sha256", fake)
+    report = prepare_rx3_baseline_observation(
+        file=CORPUS, expectation=_expectation(), profile_db=RXDB,
+        output_dir=tmp_path / "baseline",
+    )
+    assert calls["database"] == 2, "the database must be hashed exactly twice"
+    assert report["assortment"]["sha256"] == "a" * 64
+    assert report["assortment"]["sha256_after_read"] == "a" * 64
+
+
 def test_intake_refuses_an_existing_output_directory(tmp_path: Path) -> None:
     (tmp_path / "baseline").mkdir()
     with pytest.raises(Rx3BaselineError, match="already exists"):
