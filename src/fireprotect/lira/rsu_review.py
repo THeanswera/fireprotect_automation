@@ -7,7 +7,7 @@ from decimal import Decimal, InvalidOperation
 from hashlib import sha256
 import json
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Mapping, Sequence
 
 from .errors import LiraFormatError, LiraMappingError
 from .rsu import (
@@ -21,6 +21,242 @@ from .rsu import (
 )
 
 DECLARATION_KIND = "RSU_ENGINEER_GOVERNING_ROW_DECLARATION"
+ROW_DETAIL_KIND = "READ_ONLY_LIRA_RSU_ROW_DETAIL"
+RESIDUAL_STATISTICS_KIND = "READ_ONLY_LIRA_RSU_RESIDUAL_STATISTICS"
+
+# Stated, not assumed: half a single-precision ulp of the stored value plus the
+# rounding of the printed decimal (six fractional digits).
+SINGLE_PRECISION_HALF_ULP = Decimal(2) ** -24
+PRINTED_DECIMAL_ROUNDING = Decimal("0.0000005")
+
+
+def rsu_residual_statistics(report: RsuValidationReport) -> dict[str, Any]:
+    """Describe the reconstruction residuals without installing any tolerance.
+
+    The envelope below comes from a *stated* hypothesis about the source
+    precision, not from the observed differences.  The report counts how many
+    residuals stay inside that envelope and how many do not; exact equality
+    remains the only acceptance rule and no numeric policy is enabled.
+    """
+
+    components: dict[str, dict[str, Any]] = {}
+    for result in report.results:
+        for item in result.components:
+            if item.difference == 0:
+                continue
+            entry = components.setdefault(
+                item.component,
+                {
+                    "mismatches": 0,
+                    "beyond_hypothesis_envelope": 0,
+                    "max_abs_difference": Decimal(0),
+                    "max_ratio_to_envelope": Decimal(0),
+                    "worst_observed": None,
+                },
+            )
+            magnitude = sum(
+                (abs(value * coefficient) for _, value, coefficient in item.source_terms),
+                Decimal(0),
+            )
+            envelope = magnitude * SINGLE_PRECISION_HALF_ULP + (
+                PRINTED_DECIMAL_ROUNDING * (len(item.source_terms) + 1)
+            )
+            difference = abs(item.difference)
+            ratio = difference / envelope if envelope else Decimal(0)
+            entry["mismatches"] += 1
+            if ratio > 1:
+                entry["beyond_hypothesis_envelope"] += 1
+            if difference > entry["max_abs_difference"]:
+                entry["max_abs_difference"] = difference
+            if ratio > entry["max_ratio_to_envelope"]:
+                entry["max_ratio_to_envelope"] = ratio
+                entry["worst_observed"] = (
+                    f"element {result.published_record.element_id} "
+                    f"station {result.published_record.section_station}"
+                )
+    return {
+        "kind": RESIDUAL_STATISTICS_KIND,
+        "exact_equality_required": True,
+        "numeric_policy_installed": False,
+        "hypothesis": {
+            "statement": (
+                "each printed value deviates from the stored value by at most half "
+                "a single-precision ulp, and each printed decimal is rounded to at "
+                "most six fractional digits"
+            ),
+            "relative_term": f"2^-24 = {SINGLE_PRECISION_HALF_ULP}",
+            "printed_rounding_per_value": str(PRINTED_DECIMAL_ROUNDING),
+            "status": (
+                "NOT PROVEN. The observed residuals stay inside this envelope for "
+                "Mk/My/Mz/Qz; a small number of N residuals exceed it. The cause of "
+                "the residuals is therefore not established and no tolerance is applied"
+            ),
+        },
+        "components": {
+            name: {
+                "mismatches": entry["mismatches"],
+                "beyond_hypothesis_envelope": entry["beyond_hypothesis_envelope"],
+                "max_abs_difference": str(entry["max_abs_difference"]),
+                "max_ratio_to_envelope": f"{entry['max_ratio_to_envelope']:.3f}",
+                "worst_observed": entry["worst_observed"],
+            }
+            for name, entry in sorted(components.items())
+        },
+    }
+
+
+def _decimal_places(value: Decimal) -> int:
+    exponent = value.as_tuple().exponent
+    return -exponent if isinstance(exponent, int) and exponent < 0 else 0
+
+
+def _row_value(value: RsuSourceValue) -> dict[str, object]:
+    """One value as stored plus the number of stored decimal places."""
+
+    detail = _value(value)
+    detail["decimal_places"] = _decimal_places(value.value)
+    return detail
+
+
+def _coefficient_detail(item: RsuCoefficient) -> dict[str, object]:
+    return {
+        "load_case_id": item.load_case_id,
+        "column_number": item.column_number,
+        "header": item.source_header,
+        "coefficient": str(item.coefficient),
+        "decimal_places": _decimal_places(item.coefficient),
+        "sheet": item.source_sheet,
+        "row": item.source_row,
+        "cell": item.source_cell,
+        "source_sha256": item.source_sha256,
+        "raw_token": item.raw_token,
+        "decimal_provenance": item.decimal_provenance,
+    }
+
+
+def rsu_row_detail(
+    bundle: RsuImportBundle, report: RsuValidationReport, row_ids: Sequence[str]
+) -> dict[str, Any]:
+    """Exact source view of explicitly requested published RSU rows.
+
+    The view only re-uses the existing import bundle and reconstruction report:
+    it never re-reads a CSV or JSON as evidence, never renumbers rows and never
+    repairs a value.
+    """
+
+    if len(bundle.published_records) != len(report.results):
+        raise LiraFormatError("RSU report does not match the imported bundle")
+    forces: dict[tuple[str, str, str], list[RsuLoadForceRecord]] = {}
+    for record in bundle.force_records:
+        forces.setdefault(
+            (record.element_id, record.section_station, record.load_case_id), []
+        ).append(record)
+    coefficients: dict[tuple[str, int], list[RsuCoefficient]] = {}
+    for item in bundle.coefficients:
+        coefficients.setdefault(
+            (item.load_case_id, item.column_number), []
+        ).append(item)
+    pages = {book.source_sha256: book.source_file for book in bundle.forces_workbooks}
+    by_row_id = {
+        f"R{position:04d}": position for position, _ in enumerate(report.results, 1)
+    }
+    details: list[dict[str, Any]] = []
+    for row_id in row_ids:
+        position = by_row_id.get(row_id)
+        if position is None:
+            details.append(
+                {
+                    "row_id": row_id,
+                    "found": False,
+                    "reason": "no published RSU row carries this row_id",
+                }
+            )
+            continue
+        result = report.results[position - 1]
+        published = result.published_record
+        terms: list[dict[str, Any]] = []
+        completeness: list[dict[str, Any]] = []
+        for load_case in published.load_case_membership:
+            matches = forces.get(
+                (published.element_id, published.section_station, load_case), []
+            )
+            coefficient_rows = coefficients.get(
+                (load_case, published.rsu_column_number), []
+            )
+            term: dict[str, Any] = {
+                "load_case_id": load_case,
+                "force_records": len(matches),
+                "coefficient_records": len(coefficient_rows),
+            }
+            if len(matches) == 1:
+                record = matches[0]
+                term["force"] = {
+                    "sheet": record.source_sheet,
+                    "row": record.source_row,
+                    "source_sha256": record.source_sha256,
+                    "page": pages.get(record.source_sha256),
+                    "values": {
+                        name: _row_value(record.vector.values[name])
+                        for name in RSU_FORCE_COMPONENTS
+                    },
+                }
+            if len(coefficient_rows) == 1:
+                term["coefficient"] = _coefficient_detail(coefficient_rows[0])
+            if len(matches) != 1 or len(coefficient_rows) != 1:
+                completeness.append(term)
+            terms.append(term)
+        details.append(
+            {
+                "row_id": row_id,
+                "found": True,
+                "status": result.status.value,
+                "blockers": list(result.blockers),
+                "identity": {
+                    "element_id": published.element_id,
+                    "section_station": published.section_station,
+                    "rsu_group": published.rsu_group,
+                    "rsu_criterion": published.rsu_criterion,
+                    "rsu_column_number": published.rsu_column_number,
+                    "load_case_membership": list(published.load_case_membership),
+                },
+                "published_source": {
+                    "sheet": published.source_sheet,
+                    "row": published.source_row,
+                    "sha256": published.source_sha256,
+                    "mapping_fingerprint": published.mapping_fingerprint,
+                },
+                "published_vector": {
+                    name: _row_value(published.vector.values[name])
+                    for name in RSU_FORCE_COMPONENTS
+                },
+                "terms": terms,
+                "load_case_incomplete": completeness,
+                "reconstruction": {
+                    item.component: {
+                        "published": str(item.published),
+                        "reconstructed": str(item.reconstructed),
+                        "difference": str(item.difference),
+                        "difference_decimal_places": _decimal_places(item.difference),
+                    }
+                    for item in result.components
+                },
+            }
+        )
+    return {
+        "kind": ROW_DETAIL_KIND,
+        "mapping_fingerprint": bundle.mapping_fingerprint,
+        "force_pages": [
+            {
+                "path": book.source_file,
+                "sha256": book.source_sha256,
+                "sheets": [sheet.name for sheet in book.worksheets],
+            }
+            for book in bundle.forces_workbooks
+        ],
+        "rows": details,
+        "rx38_force_generation_allowed": False,
+        "issue_readiness": "NOT_READY_FOR_ISSUE",
+    }
 
 
 def _hash(path: Path) -> str:

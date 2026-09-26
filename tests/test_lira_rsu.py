@@ -19,6 +19,8 @@ from fireprotect.lira import (
     import_rsu_xls_bundle,
     prepare_rsu_review_bundle,
     read_xls_workbook,
+    rsu_residual_statistics,
+    rsu_row_detail,
     validate_rsu_reconstruction,
     validate_rsu_selection,
 )
@@ -315,6 +317,44 @@ def test_evidence_bundle_refuses_paged_forces(tmp_path: Path) -> None:
     with pytest.raises(LiraFormatError, match="exactly one forces workbook"):
         prepare_rsu_review_bundle(bundle, report, destination)
     assert not destination.exists()
+
+
+def test_residual_statistics_state_the_envelope_and_install_no_policy(tmp_path: Path) -> None:
+    report = validate_rsu_reconstruction(_import(_write_bundle(
+        tmp_path, published_rows=[_published_row("A1", 2, "1 2", 4.36, 1.45)]
+    )))
+    statistics = rsu_residual_statistics(report)
+    assert statistics["kind"] == "READ_ONLY_LIRA_RSU_RESIDUAL_STATISTICS"
+    assert statistics["exact_equality_required"] is True
+    assert statistics["numeric_policy_installed"] is False
+    assert statistics["hypothesis"]["status"].startswith("NOT PROVEN")
+    assert statistics["components"]["My"]["mismatches"] == 1
+    assert statistics["components"]["My"]["beyond_hypothesis_envelope"] == 1
+    assert statistics["components"]["My"]["max_abs_difference"] == "0.010"
+    assert set(statistics["components"]) == {"My"}
+
+    matching = validate_rsu_reconstruction(_import(_write_bundle(tmp_path / "clean")))
+    assert rsu_residual_statistics(matching)["components"] == {}
+
+
+def test_row_detail_reports_terms_coefficients_and_exact_differences(tmp_path: Path) -> None:
+    bundle = _import(_write_bundle(tmp_path))
+    report = validate_rsu_reconstruction(bundle)
+    detail = rsu_row_detail(bundle, report, ("R0002", "R9999"))
+    rows = {row["row_id"]: row for row in detail["rows"]}
+    assert detail["kind"] == "READ_ONLY_LIRA_RSU_ROW_DETAIL"
+    assert rows["R9999"]["found"] is False
+    row = rows["R0002"]
+    assert row["status"] == "VERIFIED"
+    assert row["identity"]["load_case_membership"] == ["1", "2"]
+    assert row["published_vector"]["My"]["cell"] == "H5"
+    assert [term["load_case_id"] for term in row["terms"]] == ["1", "2"]
+    assert row["terms"][0]["force"]["values"]["My"]["value"] == "1.5"
+    assert row["terms"][0]["coefficient"]["coefficient"] == "1.0"
+    assert row["reconstruction"]["My"]["difference"] == "0.000"
+    assert row["load_case_incomplete"] == []
+    assert detail["rx38_force_generation_allowed"] is False
+    assert detail["issue_readiness"] == "NOT_READY_FOR_ISSUE"
 
 
 def test_cli_reports_every_force_page(

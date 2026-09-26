@@ -233,12 +233,28 @@ def _check_identity_relations(record: Rx38Record) -> list[dict[str, object]]:
         ptm * perimeter,
         _relative(area, ptm * perimeter),
     )
+    density = _decimal(record.fields[32])
+    mass_one = _decimal(record.fields[66])
+    mass_total = _decimal(record.fields[67])
+    computed_mass = area * length * density / Decimal(1000000)
+    add(
+        "field66_equals_area_times_length_times_density",
+        mass_one,
+        computed_mass,
+        _relative(mass_one, computed_mass),
+    )
+    add(
+        "field67_equals_field66_times_quantity",
+        mass_total,
+        mass_one * quantity,
+        _relative(mass_total, mass_one * quantity),
+    )
     steel = record.fields[42].strip()
     match = re.search(r"(\d+(?:[.,]\d+)?)\s*$", steel)
     stored = _decimal(record.fields[33])
     parsed = Decimal(match.group(1).replace(",", ".")) if match else None
     add(
-        "steel_grade_tail_equals_field33",
+        "steel_grade_numeric_tail_correlates_with_field33",
         stored,
         parsed if parsed is not None else "no numeric grade tail",
         parsed is not None and parsed == stored,
@@ -313,6 +329,7 @@ def _check_assortment(
     compare("wy_m3", _decimal(record.fields[30]), geometry.wy_cm3, Decimal("1e-6"))
     return {
         "database": str(profile_db),
+        "sha256": _sha256(profile_db),
         "table": candidate.table,
         "standard": candidate.standard,
         "designation": candidate.designation,
@@ -558,6 +575,26 @@ def prepare_rx3_baseline_observation(
         "declared_identity": declarations,
         "identity_relations": relations,
         "assortment": assortment,
+        "check_counts": {
+            "declared_identity": len(declarations),
+            "identity_relations": len(relations),
+            "assortment": len(assortment_checks),
+        },
+        "identity_relations_scope": (
+            "These checks prove the internal consistency of the stored construction and its "
+            "equality with the RX3 assortment database. They are not a steel-strength "
+            "verification: the numeric tail of the steel grade only correlates with the stored "
+            "yield strength and says nothing about the characteristic required for the actual "
+            "thickness, standard or conditions."
+        ),
+        "engineer_observation_recorded": False,
+        "engineer_observation": None,
+        "engineer_confirmation_note": (
+            "The existence of this file is not an observation. The engineer must open the frozen "
+            "copy in RX3, compare the displayed values with CHECKLIST.md and state the result; "
+            "only that statement can be recorded as an observation, and no name is written by "
+            "the program"
+        ),
         "observed_fields": observed,
         "records": records,
         "next_step": (

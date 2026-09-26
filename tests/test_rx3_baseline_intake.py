@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from decimal import Decimal
+from hashlib import sha256
 import json
 from pathlib import Path
 import sys
@@ -106,6 +107,66 @@ def test_intake_refuses_a_geometry_that_contradicts_the_assortment(tmp_path: Pat
             file=altered, expectation=_expectation(), profile_db=RXDB,
             output_dir=tmp_path / "baseline",
         )
+
+
+def _altered_corpus(tmp_path: Path, index: int, token: str) -> Path:
+    lines = CORPUS.read_text(encoding="utf-8").splitlines(keepends=True)
+    fields = lines[12].rstrip("\r\n").split(";")
+    assert fields[1] == "Б2"
+    fields[index] = token
+    lines[12] = ";".join(fields) + "\n"
+    altered = tmp_path / f"altered-{index}.rx38"
+    altered.write_text("".join(lines), encoding="utf-8")
+    return altered
+
+
+def test_intake_checks_single_and_total_mass(tmp_path: Path) -> None:
+    report = prepare_rx3_baseline_observation(
+        file=CORPUS, expectation=_expectation(), profile_db=RXDB,
+        output_dir=tmp_path / "baseline",
+    )
+    names = {item["check"] for item in report["identity_relations"]}
+    assert "field66_equals_area_times_length_times_density" in names
+    assert "field67_equals_field66_times_quantity" in names
+    assert report["check_counts"] == {
+        "declared_identity": 6,
+        "identity_relations": 9,
+        "assortment": 9,
+    }
+    assert report["assortment"]["sha256"] == sha256(RXDB.read_bytes()).hexdigest()
+    assert report["engineer_observation_recorded"] is False
+    assert report["engineer_observation"] is None
+    assert "not a steel-strength verification" in report["identity_relations_scope"]
+
+
+def test_intake_refuses_a_wrong_single_mass(tmp_path: Path) -> None:
+    altered = _altered_corpus(tmp_path, 66, "999")
+    with pytest.raises(Rx3BaselineError, match="field66_equals_area"):
+        prepare_rx3_baseline_observation(
+            file=altered, expectation=_expectation(), profile_db=RXDB,
+            output_dir=tmp_path / "baseline",
+        )
+    assert not (tmp_path / "baseline").exists()
+
+
+def test_intake_refuses_a_wrong_total_mass(tmp_path: Path) -> None:
+    altered = _altered_corpus(tmp_path, 67, "1")
+    with pytest.raises(Rx3BaselineError, match="field67_equals_field66"):
+        prepare_rx3_baseline_observation(
+            file=altered, expectation=_expectation(), profile_db=RXDB,
+            output_dir=tmp_path / "baseline",
+        )
+
+
+def test_section_property_fields_stay_probable_and_forbidden() -> None:
+    from fireprotect.rx3.schema import WritePolicy, field_spec
+
+    for index in (90, 91, 99, 100):
+        spec = field_spec(index)
+        assert spec.confidence == "probable"
+        assert spec.write_policy is WritePolicy.FORBIDDEN
+    assert field_spec(90).name == "static_moment_half_section_x_m3"
+    assert field_spec(99).name == "plastic_modulus_x_m3"
 
 
 def test_intake_refuses_an_existing_output_directory(tmp_path: Path) -> None:

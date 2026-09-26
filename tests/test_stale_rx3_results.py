@@ -76,6 +76,40 @@ def test_template_results_are_stale_and_excluded_from_rx3_input(tmp_path: Path):
     assert "unprotected_fire_resistance" not in report.rx3_input
 
 
+def test_unchanged_numbers_cannot_separate_pressed_from_not_pressed(tmp_path: Path):
+    generated, calculated = _two_record_calculation(tmp_path, target_changes={})
+    report = validate_rx3_result_files(
+        generated, calculated, target_record_positions=(1,)
+    )
+    assert report.data["status"] == "RX3_RECALCULATION_NOT_PROVEN"
+    assert report.data["rx3_recalculation_proven"] is False
+    assert "cannot separate" in report.data["recalculation_note"]
+    assert report.data["target_input_change_indices"] == []
+
+
+def test_target_input_change_is_reported_separately_from_result_fields(tmp_path: Path):
+    generated, calculated = _two_record_calculation(
+        tmp_path, target_changes={50: "3,5"}
+    )
+    report = validate_rx3_result_files(
+        generated, calculated, target_record_positions=(1,)
+    )
+    assert report.data["target_input_change_indices"] == [50]
+    assert report.data["rx3_recalculation_proven"] is False
+
+
+def test_material_result_change_states_that_recalculation_is_proven(tmp_path: Path):
+    generated, calculated = _two_record_calculation(
+        tmp_path, target_changes={44: "500", 54: "20"}
+    )
+    report = validate_rx3_result_files(
+        generated, calculated, target_record_positions=(1,)
+    )
+    assert report.data["rx3_recalculation_proven"] is True
+    assert "prove that the file was recalculated" in report.data["recalculation_note"]
+    assert report.data["target_input_change_indices"] == []
+
+
 def test_byte_identical_calculated_file_does_not_prove_gui_run(tmp_path: Path):
     generated = tmp_path / "generated.rx38"
     calculated = tmp_path / "calculated.rx38"

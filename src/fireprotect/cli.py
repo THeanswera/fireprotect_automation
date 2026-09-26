@@ -20,6 +20,8 @@ from .lira import (
     prepare_lira_selection_bundle,
     prepare_linked_rsu_bundle,
     prepare_rsu_review_bundle,
+    rsu_row_detail,
+    rsu_residual_statistics,
     validate_lira_governing_selection,
     validate_rsu_reconstruction,
     validate_rsu_selection,
@@ -603,6 +605,9 @@ def cmd_validate_lira_rsu(args: argparse.Namespace) -> None:
         "rx38_force_generation_allowed": False,
         "issue_readiness": "NOT_READY_FOR_ISSUE",
     }
+    if args.row_detail:
+        payload["row_details"] = rsu_row_detail(bundle, report, tuple(args.row_detail))
+    payload["residual_statistics"] = rsu_residual_statistics(report)
     if args.output_dir is not None:
         payload["review_bundle"] = prepare_rsu_review_bundle(
             bundle, report, args.output_dir
@@ -1062,6 +1067,15 @@ def main() -> None:
     command.add_argument("--parameters", type=Path, required=True)
     command.add_argument("--report", type=Path)
     command.add_argument("--output-dir", type=Path, help="New read-only RSU review bundle")
+    command.add_argument(
+        "--row-detail",
+        action="append",
+        metavar="ROW_ID",
+        help=(
+            "Repeatable. Print the exact source view of one published RSU row "
+            "(cells, terms, coefficients, reconstruction); never repairs a value"
+        ),
+    )
     command.set_defaults(func=cmd_validate_lira_rsu)
 
     command = subparsers.add_parser(

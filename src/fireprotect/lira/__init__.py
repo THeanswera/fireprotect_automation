@@ -80,7 +80,13 @@ from .rsu import (
     import_rsu_xls_bundle,
     validate_rsu_reconstruction,
 )
-from .rsu_review import prepare_rsu_review_bundle, rsu_evidence, validate_rsu_selection
+from .rsu_review import (
+    prepare_rsu_review_bundle,
+    rsu_evidence,
+    rsu_residual_statistics,
+    rsu_row_detail,
+    validate_rsu_selection,
+)
 from .rsu_evidence import (
     EVIDENCE_KIND,
     RsuEvidenceBundle,
@@ -223,6 +229,8 @@ __all__ = [
     "validate_rsu_reconstruction",
     "prepare_rsu_review_bundle",
     "rsu_evidence",
+    "rsu_row_detail",
+    "rsu_residual_statistics",
     "validate_rsu_selection",
     "prepare_lira_review_bundle",
     "prepare_lira_selection_bundle",

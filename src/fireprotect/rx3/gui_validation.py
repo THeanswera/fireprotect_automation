@@ -605,6 +605,23 @@ def validate_rx3_result_files(
         "unsafe_production_change_indices": sorted(
             set().union(*unsafe_change_sets) if unsafe_change_sets else set()
         ),
+        "target_input_change_indices": sorted(
+            {
+                index
+                for position in sorted(target_positions)
+                for index in unsafe_change_sets[position - 1]
+            }
+        ),
+        "recalculation_note": (
+            "Material changes of both result fields 44 and 54 prove that the file was "
+            "recalculated."
+            if recalculation_proven
+            else "Unchanged or partially changed result fields 44/54 prove neither that "
+            "the Calculate button was pressed with unchanged numbers nor that it was not "
+            "pressed at all: the file content alone cannot separate those two cases. Only "
+            "an engineer-recorded GUI observation can, and it must state what the screen "
+            "showed."
+        ),
         "records": records,
         "dependency_candidates": _dependency_candidates(change_sets),
         "dependency_warning": (
