@@ -470,6 +470,7 @@ def cmd_rx38_experiment_diff(args: argparse.Namespace) -> None:
         overwrite=args.overwrite,
         gui_execution_evidence=GuiExecutionEvidence.HASH_ONLY,
         evidence_reference=args.experiment_id,
+        expected_before_sha256=args.expected_generated_sha256,
         target_record_fingerprints=args.target_fingerprints or (),
         target_record_positions=args.target_positions or (),
         target_marks=args.target_marks or (),
@@ -964,6 +965,14 @@ def main() -> None:
     command.add_argument("base", type=Path)
     command.add_argument("changed", type=Path)
     command.add_argument("--experiment-id", required=True)
+    command.add_argument(
+        "--expected-generated-sha256",
+        default=None,
+        help=(
+            "Pin the exact prepared generated.rx38 SHA-256; a result calculated from "
+            "another file is refused"
+        ),
+    )
     command.add_argument("--json-report", type=Path)
     command.add_argument("--markdown-report", type=Path)
     command.add_argument("--overwrite", action="store_true")

@@ -169,6 +169,31 @@ def test_section_property_fields_stay_probable_and_forbidden() -> None:
     assert field_spec(99).name == "plastic_modulus_x_m3"
 
 
+def test_intake_refuses_when_the_assortment_database_changes_while_reading(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The recorded hash must belong to the very data that was read."""
+
+    import fireprotect.rx3.template_intake as template_intake
+
+    real = template_intake._sha256
+    calls = {"database": 0}
+
+    def fake(path: object) -> str:
+        if Path(str(path)).resolve() == RXDB.resolve():
+            calls["database"] += 1
+            return "a" * 64 if calls["database"] == 1 else "b" * 64
+        return real(path)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(template_intake, "_sha256", fake)
+    with pytest.raises(Rx3BaselineError, match="changed while it was being read"):
+        prepare_rx3_baseline_observation(
+            file=CORPUS, expectation=_expectation(), profile_db=RXDB,
+            output_dir=tmp_path / "baseline",
+        )
+    assert not (tmp_path / "baseline").exists()
+
+
 def test_intake_refuses_an_existing_output_directory(tmp_path: Path) -> None:
     (tmp_path / "baseline").mkdir()
     with pytest.raises(Rx3BaselineError, match="already exists"):

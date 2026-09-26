@@ -268,6 +268,7 @@ def _check_assortment(
     """Prove the record against the RX3 assortment database, or refuse."""
 
     repository = ProfileRepository(profile_db)
+    hash_before_read = _sha256(profile_db)
     result = repository.search(record.fields[19], record.fields[17])
     if result.status == "NOT_FOUND":
         raise Rx3BaselineError(
@@ -327,9 +328,16 @@ def _check_assortment(
     compare("iy_m4", _decimal(record.fields[27]), geometry.iy_cm4, Decimal("1e-8"))
     compare("wx_m3", _decimal(record.fields[29]), geometry.wx_cm3, Decimal("1e-6"))
     compare("wy_m3", _decimal(record.fields[30]), geometry.wy_cm3, Decimal("1e-6"))
+    if hash_before_read != _sha256(profile_db):
+        raise Rx3BaselineError(
+            "the assortment database changed while it was being read: the recorded "
+            "checks would belong to a different version of the database; re-run the "
+            "intake on an unchanged file"
+        )
     return {
         "database": str(profile_db),
-        "sha256": _sha256(profile_db),
+        "sha256": hash_before_read,
+        "sha256_after_read": _sha256(profile_db),
         "table": candidate.table,
         "standard": candidate.standard,
         "designation": candidate.designation,

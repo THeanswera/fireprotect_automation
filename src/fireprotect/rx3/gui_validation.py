@@ -430,6 +430,7 @@ def validate_rx3_result_files(
     overwrite: bool = False,
     gui_execution_evidence: GuiExecutionEvidence = GuiExecutionEvidence.NOT_PROVIDED,
     evidence_reference: str | None = None,
+    expected_before_sha256: str | None = None,
     mode: ExecutionMode = ExecutionMode.VALIDATION,
     target_record_fingerprints: Sequence[str] = (),
     target_record_positions: Sequence[int] = (),
@@ -445,6 +446,16 @@ def validate_rx3_result_files(
         raise TypeError("mode must be ExecutionMode")
     before, before_hash = _read_stable_construction_records(before_path)
     after, after_hash = _read_stable_construction_records(after_path)
+    if expected_before_sha256 is not None:
+        expected = expected_before_sha256.strip().casefold()
+        if not expected:
+            raise Rx3GuiValidationError("expected_before_sha256 must not be blank")
+        if before_hash.casefold() != expected:
+            raise Rx3GuiValidationError(
+                "the calculated result is not bound to the prepared input: "
+                f"generated.rx38 sha256 {before_hash} does not match the pinned "
+                f"{expected_before_sha256}"
+            )
     if len(before) != len(after):
         raise Rx3GuiValidationError(
             f"Tconstr count changed: before={len(before)}, after={len(after)}"
@@ -545,10 +556,14 @@ def validate_rx3_result_files(
         for position in range(1, len(records) + 1)
         if position not in target_positions
     )
+    prepared_inputs_preserved = not any(
+        unsafe_change_sets[position - 1] for position in sorted(target_positions)
+    )
     recalculation_proven = (
         not byte_identical
         and result_fields_changed
         and non_target_records_text_unchanged
+        and prepared_inputs_preserved
     )
     evidence_reference_valid = (
         isinstance(evidence_reference, str) and bool(evidence_reference.strip())
@@ -559,6 +574,7 @@ def validate_rx3_result_files(
     )
     gui_verified = (
         recalculation_proven
+        and prepared_inputs_preserved
         and evidence_reference_valid
         and non_target_records_text_unchanged
         and not unsafe_production_changes
@@ -571,6 +587,10 @@ def validate_rx3_result_files(
     status = (
         "RX3_UNEXPECTED_NON_TARGET_CHANGE"
         if not non_target_records_text_unchanged
+        else "RX3_PRODUCTION_INPUTS_CHANGED"
+        if unsafe_production_changes
+        else "RX3_TARGET_INPUTS_CHANGED"
+        if not prepared_inputs_preserved
         else "RX3_RECALCULATION_NOT_PROVEN"
         if not recalculation_proven
         else "RX3_PRODUCTION_INPUTS_CHANGED"
@@ -612,10 +632,18 @@ def validate_rx3_result_files(
                 for index in unsafe_change_sets[position - 1]
             }
         ),
+        "prepared_inputs_preserved": prepared_inputs_preserved,
         "recalculation_note": (
-            "Material changes of both result fields 44 and 54 prove that the file was "
-            "recalculated."
+            "The recorded result fields 44/54 changed, so the file content changed. This "
+            "proves neither that the Calculate button was pressed nor that the computation "
+            "is correct: the GUI actions and the meaning of the result are recorded "
+            "separately by the engineer."
             if recalculation_proven
+            else "Target input fields changed after the input was prepared "
+            f"({sorted({index for position in sorted(target_positions) for index in unsafe_change_sets[position - 1]})}): "
+            "the file may have been recalculated, but not for the prepared input, so the "
+            "result does not confirm the prepared calculation. The full diff is kept below."
+            if not prepared_inputs_preserved
             else "Unchanged or partially changed result fields 44/54 prove neither that "
             "the Calculate button was pressed with unchanged numbers nor that it was not "
             "pressed at all: the file content alone cannot separate those two cases. Only "

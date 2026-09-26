@@ -106,8 +106,47 @@ def test_material_result_change_states_that_recalculation_is_proven(tmp_path: Pa
         generated, calculated, target_record_positions=(1,)
     )
     assert report.data["rx3_recalculation_proven"] is True
-    assert "prove that the file was recalculated" in report.data["recalculation_note"]
+    assert report.data["prepared_inputs_preserved"] is True
+    assert "proves neither that the Calculate button was pressed" in report.data[
+        "recalculation_note"
+    ]
     assert report.data["target_input_change_indices"] == []
+
+
+def test_changed_target_input_never_confirms_the_prepared_calculation(tmp_path: Path):
+    """The defect: result fields changed, GUI reference given, but field 50 was rewritten."""
+
+    generated, calculated = _two_record_calculation(
+        tmp_path, target_changes={44: "500", 54: "20", 50: "9,99"}
+    )
+    report = validate_rx3_result_files(
+        generated,
+        calculated,
+        target_record_positions=(1,),
+        gui_execution_evidence=GuiExecutionEvidence.SCREENSHOT_REFERENCED,
+        evidence_reference="LIRA-RX3-25K1-TECH-01",
+    )
+    assert report.data["status"] == "RX3_TARGET_INPUTS_CHANGED"
+    assert report.data["gui_recalculation_verified"] is False
+    assert report.data["rx3_recalculation_proven"] is False
+    assert report.data["prepared_inputs_preserved"] is False
+    assert report.data["target_input_change_indices"] == [50]
+    assert "does not confirm the prepared calculation" in report.data["recalculation_note"]
+    target = next(item for item in report.data["records"] if item["is_target"])
+    assert any(change["index"] == 50 for change in target["confirmed_changes"])
+
+
+def test_result_from_another_generated_file_is_refused(tmp_path: Path):
+    generated, calculated = _two_record_calculation(
+        tmp_path, target_changes={44: "500", 54: "20"}
+    )
+    with pytest.raises(Rx3GuiValidationError, match="not bound to the prepared input"):
+        validate_rx3_result_files(
+            generated,
+            calculated,
+            target_record_positions=(1,),
+            expected_before_sha256="0" * 64,
+        )
 
 
 def test_byte_identical_calculated_file_does_not_prove_gui_run(tmp_path: Path):
@@ -140,7 +179,8 @@ def test_unrelated_file_change_does_not_refresh_stale_results(tmp_path: Path):
     )
     assert report.data["byte_identical"] is False
     assert report.data["expected_result_fields_changed"] is False
-    assert report.data["status"] == "RX3_RECALCULATION_NOT_PROVEN"
+    assert report.data["status"] == "RX3_TARGET_INPUTS_CHANGED"
+    assert report.data["prepared_inputs_preserved"] is False
 
 
 def test_formatting_only_result_changes_do_not_refresh_stale_values(tmp_path: Path):
