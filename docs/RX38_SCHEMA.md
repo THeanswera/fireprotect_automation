@@ -117,8 +117,8 @@ note. Наличие CONFIRMED-семантики само по себе не д
 | 87 | box_area_one_m2 | Box-protection area of one construction | decimal | m² | calculated | yes for steel Tconstr | Exact identity field86×field14/1000; RX3 report | confirmed | — |
 | 88 | box_area_total_m2 | Box-protection area of all constructions | decimal | m² | calculated | yes for steel Tconstr | Exact identity field87×field15; RX3 report | confirmed | — |
 | 89 | unknown_089 | Not established | unknown | — | unknown | unknown | No admissible evidence | unknown | Preserved verbatim; do not write through the typed API. |
-| 90 | plastic_modulus_x_m3 | Plastic section modulus Wpl,x | decimal | m³ | calculated | yes for steel Tconstr | RX38 values + RX3 report | probable | — |
-| 91 | plastic_modulus_y_m3 | Plastic section modulus Wpl,y | decimal | m³ | calculated | yes for steel Tconstr | RX38 values + RX3 report | probable | — |
+| 90 | static_moment_half_section_x_m3 | Static moment of the half-section Sx | decimal | m³ | calculated | yes for steel Tconstr | RX3 main-window table label + RX38 value match (410,683 cm³) | probable | Earlier plastic-modulus label was wrong: Wpl,x is field 99. |
+| 91 | static_moment_half_section_y_m3 | Static moment of the half-section Sy | decimal | m³ | calculated | yes for steel Tconstr | RX3 main-window table label + RX38 value match (188,611 cm³) | probable | Earlier plastic-modulus label was wrong: Wpl,y is field 100. |
 | 92 | rx3_gui_q_input_kn | RX3 GUI maximum shear-force Q magnitude for the verified one-plane X-X bending family | decimal | kN | input | conditional | Bending correlation + controlled RX3/LIRA evidence | confirmed | `Qz -> field92 / MAGNITUDE` is validated only for Б2 / 22П / ГОСТ 8240-97 / L=3.00 m / rotation=0 / one-plane X-X and one selected source row. `EXPERIMENTAL`; no envelope or production claim. |
 | 93 | unknown_093 | Not established | unknown | — | unknown | unknown | No admissible evidence | unknown | Preserved verbatim; do not write through the typed API. |
 | 94 | unknown_094 | Not established | unknown | — | unknown | unknown | No admissible evidence | unknown | Preserved verbatim; do not write through the typed API. |
@@ -126,8 +126,8 @@ note. Наличие CONFIRMED-семантики само по себе не д
 | 96 | unknown_096 | Not established | unknown | — | unknown | unknown | No admissible evidence | unknown | Preserved verbatim; do not write through the typed API. |
 | 97 | unknown_097 | Not established | unknown | — | unknown | unknown | No admissible evidence | unknown | Preserved verbatim; do not write through the typed API. |
 | 98 | unknown_098 | Not established | unknown | — | unknown | unknown | No admissible evidence | unknown | Preserved verbatim; do not write through the typed API. |
-| 99 | unknown_099 | Not established | unknown | — | unknown | unknown | No admissible evidence | unknown | Preserved verbatim; do not write through the typed API. |
-| 100 | unknown_100 | Not established | unknown | — | unknown | unknown | No admissible evidence | unknown | Preserved verbatim; do not write through the typed API. |
+| 99 | plastic_modulus_x_m3 | Plastic section modulus Wpl,x | decimal | m³ | calculated | yes for steel Tconstr | RX3 main-window table label + RX38 value match (782,527 cm³) | probable | — |
+| 100 | plastic_modulus_y_m3 | Plastic section modulus Wpl,y | decimal | m³ | calculated | yes for steel Tconstr | RX3 main-window table label + RX38 value match (364,854 cm³) | probable | — |
 | 101 | unknown_101 | Not established | unknown | — | unknown | unknown | No admissible evidence | unknown | Preserved verbatim; do not write through the typed API. |
 | 102 | unknown_102 | Not established | unknown | — | unknown | unknown | No admissible evidence | unknown | Preserved verbatim; do not write through the typed API. |
 | 103 | unknown_103 | Not established | unknown | — | unknown | unknown | No admissible evidence | unknown | Preserved verbatim; do not write through the typed API. |
