@@ -18,6 +18,7 @@ from fireprotect.lira import (
     RsuXlsMapping,
     import_rsu_xls_bundle,
     prepare_rsu_review_bundle,
+    read_rsu_evidence,
     read_xls_workbook,
     rsu_residual_statistics,
     rsu_row_detail,
@@ -295,7 +296,7 @@ def test_pinned_forces_hash_is_refused_for_several_pages(tmp_path: Path) -> None
         )
 
 
-def test_evidence_bundle_refuses_paged_forces(tmp_path: Path) -> None:
+def _paged_evidence(tmp_path: Path) -> tuple[Path, list[Path]]:
     pages = _write_pages(
         tmp_path,
         [
@@ -313,10 +314,119 @@ def test_evidence_bundle_refuses_paged_forces(tmp_path: Path) -> None:
     report = validate_rsu_reconstruction(
         bundle, mutually_exclusive_sets=(frozenset({"3", "4"}),)
     )
-    destination = tmp_path / "review"
-    with pytest.raises(LiraFormatError, match="exactly one forces workbook"):
-        prepare_rsu_review_bundle(bundle, report, destination)
-    assert not destination.exists()
+    assert report.status is RsuValidationStatus.VERIFIED
+    prepared = prepare_rsu_review_bundle(bundle, report, tmp_path / "review")
+    return Path(str(prepared["evidence"])), pages
+
+
+def _rewrite_evidence(path: Path, mutate: object) -> None:
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    mutate(payload)  # type: ignore[operator]
+    path.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+    )
+
+
+def test_paged_evidence_records_every_page_and_reads_back(tmp_path: Path) -> None:
+    evidence_path, pages = _paged_evidence(tmp_path)
+    first = sha256(pages[0].read_bytes()).hexdigest()
+    second = sha256(pages[1].read_bytes()).hexdigest()
+    evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+    forces = evidence["sources"]["forces"]
+    assert forces["sha256"] == first
+    assert forces["page_count"] == 2
+    assert forces["pages"] == [
+        {
+            "path": str(pages[0].resolve()),
+            "sha256": first,
+            "sheets": ["1", "2"],
+            "sheets_with_records": ["1", "2"],
+            "records": 2,
+            "elements_min": 1,
+            "elements_max": 1,
+            "load_cases": ["1", "2"],
+            "section_stations": ["2"],
+        },
+        {
+            "path": str(pages[1].resolve()),
+            "sha256": second,
+            "sheets": ["3", "4"],
+            "sheets_with_records": ["3", "4"],
+            "records": 2,
+            "elements_min": 1,
+            "elements_max": 1,
+            "load_cases": ["3", "4"],
+            "section_stations": ["2"],
+        },
+    ]
+
+    bundle = read_rsu_evidence(evidence_path)
+    assert bundle.status == "VERIFIED"
+    assert len(bundle.rows) == 4
+    assert bundle.source_files_rechecked["forces"]["sha256"] == first
+    assert bundle.rows[0].source_terms[0].forces["My"].source_sha256 == first
+    assert bundle.rows[2].source_terms[2].forces["My"].source_sha256 == second
+    assert bundle.rows[3].source_terms[1].forces["My"].source_sha256 == second
+    assert [term.load_case_id for term in bundle.rows[2].source_terms] == ["1", "2", "3"]
+    assert bundle.source_recheck["force_records"] == 4
+
+
+def test_single_page_evidence_keeps_the_flat_sources_shape(tmp_path: Path) -> None:
+    bundle = _import(_write_bundle(tmp_path))
+    prepared = prepare_rsu_review_bundle(
+        bundle, validate_rsu_reconstruction(bundle), tmp_path / "review"
+    )
+    evidence_path = Path(str(prepared["evidence"]))
+    evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+    assert set(evidence["sources"]["forces"]) == {"path", "sha256", "sheets"}
+    assert read_rsu_evidence(evidence_path).status == "VERIFIED"
+
+
+def test_paged_evidence_refuses_a_page_changed_after_writing(tmp_path: Path) -> None:
+    evidence_path, pages = _paged_evidence(tmp_path)
+    _write_table(
+        pages[1], [("3", [["title"], [], _force_header(), _force_row(1, 2, 3, 4.5, 1.5)])]
+    )
+    with pytest.raises(LiraMappingError, match="changed"):
+        read_rsu_evidence(evidence_path)
+
+
+def test_paged_evidence_refuses_a_page_missing_from_the_recorded_list(
+    tmp_path: Path,
+) -> None:
+    evidence_path, _ = _paged_evidence(tmp_path)
+
+    def drop_second_page(payload: dict[str, object]) -> None:
+        forces = payload["sources"]["forces"]  # type: ignore[index]
+        del forces["pages"][1]  # type: ignore[index]
+        forces["page_count"] = 1  # type: ignore[index]
+
+    _rewrite_evidence(evidence_path, drop_second_page)
+    with pytest.raises(LiraFormatError, match="not recorded"):
+        read_rsu_evidence(evidence_path)
+
+
+def test_paged_evidence_refuses_a_wrong_page_count(tmp_path: Path) -> None:
+    evidence_path, _ = _paged_evidence(tmp_path)
+
+    def break_page_count(payload: dict[str, object]) -> None:
+        payload["sources"]["forces"]["page_count"] = 3  # type: ignore[index]
+
+    _rewrite_evidence(evidence_path, break_page_count)
+    with pytest.raises(LiraFormatError, match="page_count"):
+        read_rsu_evidence(evidence_path)
+
+
+def test_paged_evidence_refuses_the_same_page_twice(tmp_path: Path) -> None:
+    evidence_path, pages = _paged_evidence(tmp_path)
+
+    def duplicate_first_page(payload: dict[str, object]) -> None:
+        forces = payload["sources"]["forces"]  # type: ignore[index]
+        forces["pages"][1] = dict(forces["pages"][0])  # type: ignore[index]
+
+    _rewrite_evidence(evidence_path, duplicate_first_page)
+    with pytest.raises(LiraFormatError, match="more than one page"):
+        read_rsu_evidence(evidence_path)
 
 
 def test_residual_statistics_state_the_envelope_and_install_no_policy(tmp_path: Path) -> None:

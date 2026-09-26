@@ -245,14 +245,7 @@ def rsu_row_detail(
     return {
         "kind": ROW_DETAIL_KIND,
         "mapping_fingerprint": bundle.mapping_fingerprint,
-        "force_pages": [
-            {
-                "path": book.source_file,
-                "sha256": book.source_sha256,
-                "sheets": [sheet.name for sheet in book.worksheets],
-            }
-            for book in bundle.forces_workbooks
-        ],
+        "force_pages": force_page_detail(bundle),
         "rows": details,
         "rx38_force_generation_allowed": False,
         "issue_readiness": "NOT_READY_FOR_ISSUE",
@@ -281,19 +274,87 @@ def _value(value: RsuSourceValue) -> dict[str, object]:
     }
 
 
+def _sorted_tokens(values: set[str]) -> list[str]:
+    """Sort numeric-looking tokens numerically and the rest lexicographically."""
+
+    def key(token: str) -> tuple[int, int, str]:
+        try:
+            return (0, int(token), "")
+        except ValueError:
+            return (1, 0, token)
+
+    return sorted(values, key=key)
+
+
+def force_page_detail(bundle: RsuImportBundle) -> list[dict[str, object]]:
+    """Describe every imported force page from its own records, nothing invented.
+
+    The order is the order the pages were given to the importer.  A page that
+    produced no record is refused: the evidence must not record a page as if it
+    were part of the force table without any value behind it.
+    """
+
+    records_by_page: dict[str, list[RsuLoadForceRecord]] = {}
+    for record in bundle.force_records:
+        records_by_page.setdefault(record.source_sha256, []).append(record)
+    pages: list[dict[str, object]] = []
+    for book in bundle.forces_workbooks:
+        records = records_by_page.get(book.source_sha256, [])
+        if not records:
+            raise LiraFormatError(
+                f"force page {book.source_file} produced no record; a page without "
+                "records is refused instead of being recorded as part of the table"
+            )
+        sheet_names = [sheet.name for sheet in book.worksheets]
+        sheets_with_records = {record.source_sheet for record in records}
+        unknown_sheets = sorted(
+            str(name) for name in sheets_with_records if name not in sheet_names
+        )
+        if unknown_sheets:
+            raise LiraFormatError(
+                f"force page {book.source_file} has records from sheets that are "
+                f"not in the workbook: {', '.join(unknown_sheets)}"
+            )
+        elements: list[int] = []
+        for record in records:
+            try:
+                elements.append(int(record.element_id))
+            except ValueError:
+                continue
+        pages.append(
+            {
+                "path": book.source_file,
+                "sha256": book.source_sha256,
+                "sheets": sheet_names,
+                "sheets_with_records": [
+                    name for name in sheet_names if name in sheets_with_records
+                ],
+                "records": len(records),
+                "elements_min": min(elements) if elements else None,
+                "elements_max": max(elements) if elements else None,
+                "load_cases": _sorted_tokens(
+                    {record.load_case_id for record in records}
+                ),
+                "section_stations": _sorted_tokens(
+                    {record.section_station for record in records}
+                ),
+            }
+        )
+    return pages
+
+
 def rsu_evidence(bundle: RsuImportBundle, report: RsuValidationReport) -> dict[str, Any]:
-    """Keep all published vectors and exact reconstruction terms together."""
+    """Keep all published vectors and exact reconstruction terms together.
+
+    A force table exported by LIRA in several pages is recorded as a paged
+    ``sources["forces"]`` entry: the first page keeps the flat ``path``/``sha256``
+    meaning and every page is listed under ``pages`` with its own SHA-256 and the
+    element/section/load-case coverage read from its records.  A single-page
+    import keeps the previous shape byte for byte.
+    """
 
     if len(bundle.published_records) != len(report.results):
         raise LiraFormatError("RSU report does not match the imported bundle")
-    if len(bundle.forces_workbooks) != 1:
-        raise LiraFormatError(
-            "the read-only RSU evidence bundle binds exactly one forces "
-            f"workbook, but this import contains {len(bundle.forces_workbooks)} "
-            "force pages; a paged force export is not yet representable in the "
-            "evidence format, so the bundle is refused instead of recording "
-            "only one page as if it were the whole table"
-        )
     sources = {
         name: {"path": book.source_file, "sha256": book.source_sha256,
                "sheets": len(book.worksheets)}
@@ -304,6 +365,10 @@ def rsu_evidence(bundle: RsuImportBundle, report: RsuValidationReport) -> dict[s
             ("parameters", bundle.parameters_workbook),
         )
     }
+    if len(bundle.forces_workbooks) > 1:
+        pages = force_page_detail(bundle)
+        sources["forces"]["pages"] = pages
+        sources["forces"]["page_count"] = len(pages)
     forces: dict[tuple[str, str, str], list[RsuLoadForceRecord]] = {}
     for row in bundle.force_records:
         forces.setdefault((row.element_id, row.section_station, row.load_case_id), []).append(row)

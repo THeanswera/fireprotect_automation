@@ -157,6 +157,85 @@ def verify_recorded_sha256(
 
 
 @dataclass(frozen=True, slots=True)
+class VerifiedForceSources:
+    """Verified force workbooks of one evidence bundle, in their recorded order."""
+
+    paths: tuple[str, ...]
+    hashes: frozenset[str]
+    page_records: tuple[int | None, ...]
+    paged: bool
+
+
+def _verify_force_pages(
+    entry: Mapping[str, Any], *, context: str, first_page: Mapping[str, object]
+) -> VerifiedForceSources:
+    """Verify every recorded force page and accept the legacy single-workbook shape.
+
+    A paged entry keeps the flat ``path``/``sha256`` of the first page, so the
+    old flat meaning stays stable, and lists every page under ``pages``.  The
+    first page hash must equal the flat hash, every page file must still match
+    its recorded SHA-256, and no workbook may be recorded twice.
+    """
+
+    pages = entry.get("pages")
+    if pages is None:
+        return VerifiedForceSources(
+            paths=(str(first_page["path"]),),
+            hashes=frozenset({str(first_page["sha256"])}),
+            page_records=(None,),
+            paged=False,
+        )
+    if not isinstance(pages, list) or not pages:
+        raise LiraFormatError(
+            f"{context}: sources.forces.pages must be a non-empty list"
+        )
+    page_count = entry.get("page_count")
+    if (
+        isinstance(page_count, bool)
+        or not isinstance(page_count, int)
+        or page_count != len(pages)
+    ):
+        raise LiraFormatError(
+            f"{context}: sources.forces.page_count must equal the number of "
+            f"recorded pages ({len(pages)})"
+        )
+    paths: list[str] = []
+    hashes: list[str] = []
+    counts: list[int | None] = []
+    for index, raw in enumerate(pages, 1):
+        page = require_mapping(raw, f"forces page {index}", context)
+        verified = verify_recorded_sha256(
+            page, name=f"forces page {index}", context=context
+        )
+        paths.append(str(verified["path"]))
+        hashes.append(str(verified["sha256"]))
+        recorded = page.get("records")
+        if recorded is None:
+            counts.append(None)
+        elif isinstance(recorded, bool) or not isinstance(recorded, int):
+            raise LiraFormatError(
+                f"{context}: forces page {index} records must be an integer"
+            )
+        else:
+            counts.append(recorded)
+    if hashes[0] != str(first_page["sha256"]):
+        raise LiraFormatError(
+            f"{context}: the first force page sha256 does not match "
+            "sources.forces.sha256"
+        )
+    if len(set(hashes)) != len(hashes):
+        raise LiraFormatError(
+            f"{context}: the same force workbook is recorded on more than one page"
+        )
+    return VerifiedForceSources(
+        paths=tuple(paths),
+        hashes=frozenset(hashes),
+        page_records=tuple(counts),
+        paged=True,
+    )
+
+
+@dataclass(frozen=True, slots=True)
 class RsuEvidenceValue:
     """One native component value with its full source provenance."""
 
@@ -378,6 +457,7 @@ def _parse_row(
     index: int,
     context: str,
     expected_hashes: Mapping[str, str],
+    expected_force_hashes: frozenset[str],
     fingerprint: str,
 ) -> RsuEvidenceRow:
     entry = require_mapping(payload, "row", f"{context} row {index + 1}")
@@ -491,10 +571,12 @@ def _parse_row(
     for term in terms:
         for component in RSU_COMPONENTS:
             value = term.forces[component]
-            if value.source_sha256 != expected_hashes["forces"]:
+            if value.source_sha256 not in expected_force_hashes:
                 raise LiraFormatError(
                     f"{row_context}: term {term.load_case_id} component "
-                    f"{component} points to a different forces XLS"
+                    f"{component} points to force workbook "
+                    f"{value.source_sha256} which is not recorded in "
+                    "sources.forces"
                 )
         if term.coefficient_source_sha256 != expected_hashes["coefficients"]:
             raise LiraFormatError(
@@ -649,6 +731,7 @@ def _recheck_against_sources(
     sources_block: Mapping[str, Any],
     rows: tuple[RsuEvidenceRow, ...],
     parameters: tuple[Mapping[str, object], ...],
+    force_sources: VerifiedForceSources,
 ) -> dict[str, object]:
     """Re-read the four source XLS and prove the accepted JSON rows against them.
 
@@ -667,7 +750,7 @@ def _recheck_against_sources(
             "table settings from the data"
         )
     bundle = import_rsu_xls_bundle(
-        forces_path=str(require_text(sources_block["forces"], "path", str(source))),
+        forces_path=force_sources.paths,
         published_path=str(
             require_text(sources_block["published"], "path", str(source))
         ),
@@ -679,6 +762,36 @@ def _recheck_against_sources(
         ),
         mapping=mapping,
     )
+    reimported_hashes = frozenset(
+        record.source_sha256 for record in bundle.force_records
+    )
+    if reimported_hashes != force_sources.hashes:
+        raise LiraFormatError(
+            f"{source}: the force pages recorded in sources.forces do not match "
+            f"the records the re-read pages contain: recorded "
+            f"{sorted(force_sources.hashes)}, re-read {sorted(reimported_hashes)}"
+        )
+    if force_sources.paged:
+        reimported_counts = {
+            book.source_sha256: sum(
+                1
+                for record in bundle.force_records
+                if record.source_sha256 == book.source_sha256
+            )
+            for book in bundle.forces_workbooks
+        }
+        for index, (book, recorded_count) in enumerate(
+            zip(bundle.forces_workbooks, force_sources.page_records), 1
+        ):
+            if recorded_count is None:
+                continue
+            actual_count = reimported_counts[book.source_sha256]
+            if recorded_count != actual_count:
+                raise LiraFormatError(
+                    f"{source}: recorded {recorded_count} force records for page "
+                    f"{index} ({book.source_file}) but the re-read page contains "
+                    f"{actual_count}"
+                )
     report = validate_rsu_reconstruction(bundle)
     if report.status is not RsuValidationStatus.VERIFIED:
         raise LiraFormatError(
@@ -1031,6 +1144,11 @@ def read_rsu_evidence(path: str | Path) -> RsuEvidenceBundle:
         rechecked[name] = verify_recorded_sha256(
             entry, name=name, context=str(source)
         )
+    force_sources = _verify_force_pages(
+        require_mapping(sources_block["forces"], "forces", str(source)),
+        context=str(source),
+        first_page=rechecked["forces"],
+    )
     load_parameters = root.get("load_parameters")
     if not isinstance(load_parameters, list):
         raise LiraFormatError(f"{source}: load_parameters must be a list")
@@ -1080,6 +1198,7 @@ def read_rsu_evidence(path: str | Path) -> RsuEvidenceBundle:
             index=index,
             context=str(source),
             expected_hashes=expected_hashes,
+            expected_force_hashes=force_sources.hashes,
             fingerprint=mapping_fingerprint,
         )
         if row.row_id in seen:
@@ -1089,7 +1208,7 @@ def read_rsu_evidence(path: str | Path) -> RsuEvidenceBundle:
     if not rows:
         raise LiraFormatError(f"{source}: the evidence bundle contains no rows")
     source_recheck = _recheck_against_sources(
-        source, root, sources_block, tuple(rows), parameters
+        source, root, sources_block, tuple(rows), parameters, force_sources
     )
     return RsuEvidenceBundle(
         path=source,
