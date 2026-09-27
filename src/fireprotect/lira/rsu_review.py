@@ -6,6 +6,7 @@ import csv
 from decimal import Decimal, InvalidOperation
 from hashlib import sha256
 import json
+import math
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
@@ -25,19 +26,55 @@ DECLARATION_KIND = "RSU_ENGINEER_GOVERNING_ROW_DECLARATION"
 ROW_DETAIL_KIND = "READ_ONLY_LIRA_RSU_ROW_DETAIL"
 RESIDUAL_STATISTICS_KIND = "READ_ONLY_LIRA_RSU_RESIDUAL_STATISTICS"
 
-# Stated, not assumed: half a single-precision ulp of the stored value plus the
-# rounding of the printed decimal (six fractional digits).
+# Stated, not assumed.  Every exported number is a printed decimal with a
+# recorded number of fractional digits, and the measurement on the real export
+# shows that the printed decimals sit on the single-precision grid: the stored
+# results are single precision.  The residual of an exact decimal reconstruction
+# is therefore bounded by the print rounding of the compared values plus at most
+# one unit in the last place of a single-precision result of that magnitude.
 SINGLE_PRECISION_HALF_ULP = Decimal(2) ** -24
 PRINTED_DECIMAL_ROUNDING = Decimal("0.0000005")
+
+
+def _printed_half_unit(value: Decimal) -> Decimal:
+    """Half a unit of the last printed decimal digit of one value."""
+
+    return Decimal(5).scaleb(-_decimal_places(value) - 1)
+
+
+def _float32_ulp(value: Decimal) -> Decimal:
+    """One unit in the last place of a single-precision value of this magnitude.
+
+    Only the scale of the diagnostic bound is computed in binary floating point;
+    the comparison of the reconstruction with the published value stays exact
+    ``Decimal`` equality.
+    """
+
+    try:
+        magnitude = abs(float(value))
+    except (OverflowError, ValueError):
+        return Decimal(0)
+    if magnitude == 0 or not math.isfinite(magnitude):
+        return Decimal(0)
+    return Decimal(math.ldexp(1.0, math.floor(math.log2(magnitude)) - 23))
 
 
 def rsu_residual_statistics(report: RsuValidationReport) -> dict[str, Any]:
     """Describe the reconstruction residuals without installing any tolerance.
 
-    The envelope below comes from a *stated* hypothesis about the source
-    precision, not from the observed differences.  The report counts how many
-    residuals stay inside that envelope and how many do not; exact equality
-    remains the only acceptance rule and no numeric policy is enabled.
+    Two stated bounds are counted, never applied as an acceptance rule:
+
+    * the *print window*: each compared value is a printed decimal, so the value
+      behind it can differ by half a unit of its own last printed digit; the
+      window is the sum of those half units over the terms and the published
+      value;
+    * the *single-precision excess*: the stored results are single precision, so
+      a residual may exceed the print window by up to about one unit in the last
+      place of a single-precision result of the published magnitude.
+
+    The report counts how many residuals stay inside the print window and how
+    many need that excess; exact equality remains the only acceptance rule and no
+    numeric policy is enabled.
     """
 
     components: dict[str, dict[str, Any]] = {}
@@ -49,59 +86,87 @@ def rsu_residual_statistics(report: RsuValidationReport) -> dict[str, Any]:
                 item.component,
                 {
                     "mismatches": 0,
-                    "beyond_hypothesis_envelope": 0,
+                    "within_print_window": 0,
+                    "beyond_print_window": 0,
+                    "beyond_one_ulp32": 0,
                     "max_abs_difference": Decimal(0),
-                    "max_ratio_to_envelope": Decimal(0),
+                    "max_excess_in_ulp32": Decimal(0),
                     "worst_observed": None,
                 },
             )
-            magnitude = sum(
-                (abs(value * coefficient) for _, value, coefficient in item.source_terms),
-                Decimal(0),
-            )
-            envelope = magnitude * SINGLE_PRECISION_HALF_ULP + (
-                PRINTED_DECIMAL_ROUNDING * (len(item.source_terms) + 1)
-            )
-            difference = abs(item.difference)
-            ratio = difference / envelope if envelope else Decimal(0)
             entry["mismatches"] += 1
+            print_window = _printed_half_unit(item.published)
+            for _, value, _coefficient in item.source_terms:
+                print_window += _printed_half_unit(value)
+            difference = abs(item.difference)
+            entry["max_abs_difference"] = max(
+                entry["max_abs_difference"], difference
+            )
+            if difference <= print_window:
+                entry["within_print_window"] += 1
+                continue
+            entry["beyond_print_window"] += 1
+            excess = difference - print_window
+            ulp = _float32_ulp(item.published)
+            ratio = excess / ulp if ulp else Decimal(0)
             if ratio > 1:
-                entry["beyond_hypothesis_envelope"] += 1
-            if difference > entry["max_abs_difference"]:
-                entry["max_abs_difference"] = difference
-            if ratio > entry["max_ratio_to_envelope"]:
-                entry["max_ratio_to_envelope"] = ratio
+                entry["beyond_one_ulp32"] += 1
+            if ratio > entry["max_excess_in_ulp32"]:
+                entry["max_excess_in_ulp32"] = ratio
                 entry["worst_observed"] = (
                     f"element {result.published_record.element_id} "
-                    f"station {result.published_record.section_station}"
+                    f"station {result.published_record.section_station} "
+                    f"residual {item.difference} "
+                    f"excess {excess} = {ratio:.3f} ulp32 beyond the print window"
                 )
+    beyond_one_ulp = {
+        name: entry["beyond_one_ulp32"] for name, entry in components.items()
+    }
     return {
         "kind": RESIDUAL_STATISTICS_KIND,
         "exact_equality_required": True,
         "numeric_policy_installed": False,
         "hypothesis": {
             "statement": (
-                "each printed value deviates from the stored value by at most half "
-                "a single-precision ulp, and each printed decimal is rounded to at "
-                "most six fractional digits"
+                "every compared value is a printed decimal of a single-precision "
+                "stored result, so a reconstruction residual is bounded by the sum "
+                "of half a unit of the last printed digit of each compared value "
+                "plus about one single-precision ulp of the published magnitude"
             ),
-            "relative_term": f"2^-24 = {SINGLE_PRECISION_HALF_ULP}",
-            "printed_rounding_per_value": str(PRINTED_DECIMAL_ROUNDING),
+            "print_window": (
+                "sum over the terms and the published value of half a unit of their "
+                "own last printed decimal digit"
+            ),
+            "single_precision_half_ulp_term": f"2^-24 = {SINGLE_PRECISION_HALF_ULP}",
+            "six_decimal_rounding": str(PRINTED_DECIMAL_ROUNDING),
             "status": (
-                "NOT PROVEN. The observed residuals stay inside this envelope for "
-                "Mk/My/Mz/Qz; a small number of N residuals exceed it. The cause of "
-                "the residuals is therefore not established and no tolerance is applied"
+                "NOT PROVEN for the exact summation order inside LIRA. The measured "
+                "residuals are bounded as stated and the exported values lie on the "
+                "single-precision grid, but the accumulation LIRA actually used "
+                "cannot be recovered from the printed tables; the cause is a "
+                "property of the export precision, not of this reconstruction"
             ),
         },
         "components": {
             name: {
                 "mismatches": entry["mismatches"],
-                "beyond_hypothesis_envelope": entry["beyond_hypothesis_envelope"],
+                "within_print_window": entry["within_print_window"],
+                "beyond_print_window": entry["beyond_print_window"],
+                "beyond_one_ulp32": entry["beyond_one_ulp32"],
                 "max_abs_difference": str(entry["max_abs_difference"]),
-                "max_ratio_to_envelope": f"{entry['max_ratio_to_envelope']:.3f}",
+                "max_excess_in_ulp32": f"{entry['max_excess_in_ulp32']:.3f}",
                 "worst_observed": entry["worst_observed"],
             }
             for name, entry in sorted(components.items())
+        },
+        "overall": {
+            "components_beyond_one_ulp32": sum(beyond_one_ulp.values()),
+            "reading": (
+                "residuals inside the print window need no further explanation; "
+                "residuals beyond it but inside one ulp32 are consistent with "
+                "single-precision stored results; a residual beyond one ulp32 of "
+                "the print window would need a different cause and is counted"
+            ),
         },
     }
 

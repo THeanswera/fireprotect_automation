@@ -32,7 +32,12 @@ Pre-experiment hardening in version 0.5.0:
   numbers, blank-line numbers and trailing newline;
 - the pipeline takes the expected `generated.rx38` SHA-256 from the generation
   manifest (`diff_before_after.json:generated.sha256`) instead of hashing the
-  file under validation again; the fresh hash is kept only as `actual_sha256`.
+  file under validation again; the fresh hash is kept only as `actual_sha256`;
+- the RSU residual statistics now count the print window of each compared value
+  (half a unit of its own last printed digit) and the excess in units in the last
+  place of a single-precision result of the published magnitude, instead of a
+  uniform six-decimal envelope; exact equality stays the only acceptance rule and
+  no tolerance is installed.
 
 ## 0.5.0 — 2026-08-25
 

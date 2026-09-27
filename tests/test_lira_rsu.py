@@ -607,7 +607,7 @@ def test_paged_evidence_refuses_a_non_integer_record_count(tmp_path: Path) -> No
         read_rsu_evidence(evidence_path)
 
 
-def test_residual_statistics_state_the_envelope_and_install_no_policy(tmp_path: Path) -> None:
+def test_residual_statistics_state_the_window_and_install_no_policy(tmp_path: Path) -> None:
     report = validate_rsu_reconstruction(_import(_write_bundle(
         tmp_path, published_rows=[_published_row("A1", 2, "1 2", 4.36, 1.45)]
     )))
@@ -617,12 +617,68 @@ def test_residual_statistics_state_the_envelope_and_install_no_policy(tmp_path: 
     assert statistics["numeric_policy_installed"] is False
     assert statistics["hypothesis"]["status"].startswith("NOT PROVEN")
     assert statistics["components"]["My"]["mismatches"] == 1
-    assert statistics["components"]["My"]["beyond_hypothesis_envelope"] == 1
     assert statistics["components"]["My"]["max_abs_difference"] == "0.010"
+    # The fixture prints its values with one decimal, so a 0.01 residual is well
+    # inside the print window of the compared values and needs no other cause.
+    assert statistics["components"]["My"]["within_print_window"] == 1
+    assert statistics["components"]["My"]["beyond_print_window"] == 0
     assert set(statistics["components"]) == {"My"}
 
     matching = validate_rsu_reconstruction(_import(_write_bundle(tmp_path / "clean")))
     assert rsu_residual_statistics(matching)["components"] == {}
+
+
+def _three_term_n_bundle(tmp_path: Path, published_n: float) -> tuple[Path, Path, Path, Path]:
+    """A three-load-case N row printed to six decimals, as the real export is."""
+
+    force_rows = {
+        "1": [[1, 2, -5.269833, 0.0, 0.0, 0.0, 0.0, 0.0, 1]],
+        "2": [[1, 2, -105.088051, 0.0, 0.0, 0.0, 0.0, 0.0, 2]],
+        "3": [[1, 2, -34.396229, 0.0, 0.0, 0.0, 0.0, 0.0, 3]],
+    }
+    published_rows = [
+        [1, 2, 1, "A1", 2, published_n, 0.0, 0.0, 0.0, 0.0, 0.0, "1 2 3"]
+    ]
+    return _write_bundle(
+        tmp_path, published_rows=published_rows, force_rows=force_rows
+    )
+
+
+def test_residual_statistics_bound_a_single_precision_residual(tmp_path: Path) -> None:
+    """A six-decimal print hides up to half an ulp32 per value: 8e-6 on N."""
+
+    report = validate_rsu_reconstruction(
+        _import(_three_term_n_bundle(tmp_path, -144.754105))
+    )
+    entry = rsu_residual_statistics(report)["components"]["N"]
+    assert entry["mismatches"] == 1
+    assert entry["max_abs_difference"] == "0.0000080"
+    assert entry["within_print_window"] == 0
+    assert entry["beyond_print_window"] == 1
+    # 8e-6 minus the 2e-6 print window is 0.393 of one ulp32 at 144.75.
+    assert entry["max_excess_in_ulp32"] == "0.393"
+    assert entry["beyond_one_ulp32"] == 0
+    assert "0.0000080" in str(entry["worst_observed"])
+    assert rsu_residual_statistics(report)["overall"][
+        "components_beyond_one_ulp32"
+    ] == 0
+
+
+def test_residual_statistics_still_flag_a_gross_residual(tmp_path: Path) -> None:
+    """A real error (wrong value, coefficient or row) is far beyond one ulp32."""
+
+    report = validate_rsu_reconstruction(
+        _import(_three_term_n_bundle(tmp_path, -140.0))
+    )
+    entry = rsu_residual_statistics(report)["components"]["N"]
+    assert entry["beyond_print_window"] == 1
+    assert entry["beyond_one_ulp32"] == 1
+    assert float(entry["max_excess_in_ulp32"]) > 1000
+    assert rsu_residual_statistics(report)["overall"][
+        "components_beyond_one_ulp32"
+    ] == 1
+    # The acceptance rule is untouched: the row stays blocked.
+    assert report.status is RsuValidationStatus.BLOCKED
 
 
 def test_row_detail_reports_terms_coefficients_and_exact_differences(tmp_path: Path) -> None:
