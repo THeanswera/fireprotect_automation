@@ -200,11 +200,14 @@ def _write_rsu_biff(
         ],
     )
     entries: dict[str, dict[str, object]] = {}
+    # The worksheet count is the real count of each fixture workbook: the reader
+    # re-checks it against the re-read file, so a placeholder would be a lie.
+    sheet_counts = {"forces": 2, "published": 1, "coefficients": 1, "parameters": 1}
     for name, path in paths.items():
         entries[name] = {
             "path": str(path),
             "sha256": _sha256_file(path),
-            "sheets": 1,
+            "sheets": sheet_counts[name],
         }
     return entries
 

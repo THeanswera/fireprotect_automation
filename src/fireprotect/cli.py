@@ -13,6 +13,7 @@ from .lira import (
     RsuLoadForceRecord,
     RsuValidationReport,
     import_rsu_xls_bundle,
+    force_page_summary,
     prepare_bar_experiment_input,
     prepare_bar_run,
     prepare_lira_model_bundle,
@@ -531,33 +532,27 @@ def cmd_validate_lira_selection(args: argparse.Namespace) -> None:
 
 
 def _force_page_report(bundle: RsuImportBundle) -> list[dict[str, object]]:
-    """Describe every force page actually read, with its own SHA-256."""
+    """Describe every force page actually read, with its own SHA-256.
+
+    The summary comes from the same function the evidence writer and the
+    evidence reader use, so the numbers reported here are exactly the numbers
+    that will be pinned in the evidence and re-checked from the page later.
+    """
 
     records_by_page: dict[str, list[RsuLoadForceRecord]] = {}
     for record in bundle.force_records:
         records_by_page.setdefault(record.source_sha256, []).append(record)
     report: list[dict[str, object]] = []
     for index, book in enumerate(bundle.forces_workbooks, 1):
-        page = records_by_page.get(book.source_sha256, [])
-        elements: list[int] = []
-        for record in page:
-            try:
-                elements.append(int(float(record.element_id)))
-            except (TypeError, ValueError):
-                continue
+        summary = force_page_summary(
+            book, records_by_page.get(book.source_sha256, [])
+        )
         report.append(
             {
                 "page": index,
                 "path": book.source_file,
                 "sha256": book.source_sha256,
-                "sheets": [sheet.name for sheet in book.worksheets],
-                "records": len(page),
-                "elements_min": min(elements) if elements else None,
-                "elements_max": max(elements) if elements else None,
-                "load_cases": sorted({record.load_case_id for record in page}),
-                "section_stations": sorted(
-                    {record.section_station for record in page}
-                ),
+                **summary,
             }
         )
     return report

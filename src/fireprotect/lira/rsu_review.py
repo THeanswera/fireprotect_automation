@@ -19,6 +19,7 @@ from .rsu import (
     RsuValidationReport,
     RsuValidationStatus,
 )
+from .xls import XlsWorkbook
 
 DECLARATION_KIND = "RSU_ENGINEER_GOVERNING_ROW_DECLARATION"
 ROW_DETAIL_KIND = "READ_ONLY_LIRA_RSU_ROW_DETAIL"
@@ -286,12 +287,60 @@ def _sorted_tokens(values: set[str]) -> list[str]:
     return sorted(values, key=key)
 
 
+def force_page_summary(
+    book: XlsWorkbook, records: Sequence[RsuLoadForceRecord]
+) -> dict[str, object]:
+    """Aggregate one force page from its own records, nothing invented.
+
+    This is the single definition of a page summary: the evidence writer records
+    it and the evidence reader recomputes it from the re-read page and compares
+    every key with the recorded expectation.  A page that produced no record, or
+    a record whose sheet is not in the workbook, is refused.
+
+    Recomputing with the same function detects a doctored recorded summary or a
+    substituted page file; it cannot detect a shared defect in this aggregate.
+    """
+
+    if not records:
+        raise LiraFormatError(
+            f"force page {book.source_file} produced no record; a page without "
+            "records is refused instead of being recorded as part of the table"
+        )
+    sheet_names = [sheet.name for sheet in book.worksheets]
+    sheets_with_records = {record.source_sheet for record in records}
+    unknown_sheets = sorted(
+        str(name) for name in sheets_with_records if name not in sheet_names
+    )
+    if unknown_sheets:
+        raise LiraFormatError(
+            f"force page {book.source_file} has records from sheets that are "
+            f"not in the workbook: {', '.join(unknown_sheets)}"
+        )
+    elements: list[int] = []
+    for record in records:
+        try:
+            elements.append(int(record.element_id))
+        except ValueError:
+            continue
+    return {
+        "sheets": sheet_names,
+        "sheets_with_records": [
+            name for name in sheet_names if name in sheets_with_records
+        ],
+        "records": len(records),
+        "elements_min": min(elements) if elements else None,
+        "elements_max": max(elements) if elements else None,
+        "load_cases": _sorted_tokens({record.load_case_id for record in records}),
+        "section_stations": _sorted_tokens(
+            {record.section_station for record in records}
+        ),
+    }
+
+
 def force_page_detail(bundle: RsuImportBundle) -> list[dict[str, object]]:
     """Describe every imported force page from its own records, nothing invented.
 
-    The order is the order the pages were given to the importer.  A page that
-    produced no record is refused: the evidence must not record a page as if it
-    were part of the force table without any value behind it.
+    The order is the order the pages were given to the importer.
     """
 
     records_by_page: dict[str, list[RsuLoadForceRecord]] = {}
@@ -300,44 +349,11 @@ def force_page_detail(bundle: RsuImportBundle) -> list[dict[str, object]]:
     pages: list[dict[str, object]] = []
     for book in bundle.forces_workbooks:
         records = records_by_page.get(book.source_sha256, [])
-        if not records:
-            raise LiraFormatError(
-                f"force page {book.source_file} produced no record; a page without "
-                "records is refused instead of being recorded as part of the table"
-            )
-        sheet_names = [sheet.name for sheet in book.worksheets]
-        sheets_with_records = {record.source_sheet for record in records}
-        unknown_sheets = sorted(
-            str(name) for name in sheets_with_records if name not in sheet_names
-        )
-        if unknown_sheets:
-            raise LiraFormatError(
-                f"force page {book.source_file} has records from sheets that are "
-                f"not in the workbook: {', '.join(unknown_sheets)}"
-            )
-        elements: list[int] = []
-        for record in records:
-            try:
-                elements.append(int(record.element_id))
-            except ValueError:
-                continue
         pages.append(
             {
                 "path": book.source_file,
                 "sha256": book.source_sha256,
-                "sheets": sheet_names,
-                "sheets_with_records": [
-                    name for name in sheet_names if name in sheets_with_records
-                ],
-                "records": len(records),
-                "elements_min": min(elements) if elements else None,
-                "elements_max": max(elements) if elements else None,
-                "load_cases": _sorted_tokens(
-                    {record.load_case_id for record in records}
-                ),
-                "section_stations": _sorted_tokens(
-                    {record.section_station for record in records}
-                ),
+                **force_page_summary(book, records),
             }
         )
     return pages

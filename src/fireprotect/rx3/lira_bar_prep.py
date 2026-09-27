@@ -905,6 +905,11 @@ def prepare_rx3_lira_bar_validation(
     destination.mkdir(parents=True, exist_ok=False)
     generated_path = destination / "generated.rx38"
     generated_path.write_bytes(payload)
+    generated_sha256 = _sha256_file(generated_path)
+    if generated_sha256 != _sha256_bytes(payload):
+        raise Rx3LiraBarPrepError(
+            "the written generated.rx38 does not hash to the rendered payload"
+        )
 
     # Re-read the written file: prove the target changed and nothing else did.
     after_document = read_rx38_document(generated_path)
@@ -952,6 +957,7 @@ def prepare_rx3_lira_bar_validation(
         "py -3.12 -m fireprotect.cli validate-rx3-result "
         f"\"{generated_path}\" <calculated.rx38> "
         f"--target-fingerprint {rx38_record_fingerprint(after_target)} "
+        f"--expected-generated-sha256 {generated_sha256} "
         f"--json-report \"{destination / 'rx3_result_report.json'}\" "
         f"--markdown-report \"{destination / 'rx3_result_report.md'}\""
     )
@@ -991,7 +997,7 @@ def prepare_rx3_lira_bar_validation(
         },
         "generated": {
             "path": str(generated_path),
-            "sha256": _sha256_bytes(payload),
+            "sha256": generated_sha256,
             "records": len(after_document.records),
         },
         "target": {

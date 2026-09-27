@@ -101,6 +101,39 @@ def _hash(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _pinned_generated_hash(
+    element_id: str, generated: Path, recorded: object
+) -> str:
+    """Return the hash recorded when this bundle was generated.
+
+    The pin must be an independent expectation, not a fresh hash of the file
+    under validation: a fresh hash would make the comparison a tautology and a
+    file replaced between generation and validation would still be accepted.
+    The recorded value is used as the pin and the file on disk must still match
+    it, otherwise the run stops.
+    """
+
+    if not isinstance(recorded, str) or not recorded.strip():
+        raise PipelineError(
+            f"Element {element_id}: the audit records no generated.rx38 SHA-256, "
+            "so the calculated result cannot be bound to the prepared input"
+        )
+    pin = recorded.strip().casefold()
+    if len(pin) != 64 or any(character not in "0123456789abcdef" for character in pin):
+        raise PipelineError(
+            f"Element {element_id}: the recorded generated.rx38 SHA-256 is not a "
+            f"64-character hexadecimal digest: {recorded!r}"
+        )
+    actual = _hash(generated)
+    if actual != pin:
+        raise PipelineError(
+            f"Element {element_id}: generated.rx38 no longer matches the hash "
+            "recorded at generation time; the calculated result cannot be bound "
+            "to the prepared input"
+        )
+    return pin
+
+
 def _resolve(base: Path, value: object, *, field: str, must_exist: bool = True) -> Path:
     if not isinstance(value, str) or not value.strip():
         raise PipelineError(f"{field} must be a non-empty path string")
@@ -1031,10 +1064,18 @@ def run_pipeline(config_path: str | Path) -> PipelineRunResult:
                 raise PipelineError(
                     f"Element {element.element_id}: invalid gui_execution_evidence"
                 ) from exc
+            # The pin comes from the hash recorded when this bundle was generated
+            # (element_audit["rx3_generated"]), never from a fresh hash of the file
+            # under validation; _pinned_generated_hash refuses a replaced file.
+            recorded_generated_pin = _pinned_generated_hash(
+                element.element_id,
+                generated,
+                element_audit["rx3_generated"]["sha256"],
+            )
             validation = validate_rx3_result_files(
                 generated,
                 calculated,
-                expected_before_sha256=_hash(generated),
+                expected_before_sha256=recorded_generated_pin,
                 json_report=validation_dir / "rx3_validation_report.json",
                 markdown_report=validation_dir / "rx3_validation_report.md",
                 overwrite=True,

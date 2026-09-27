@@ -1,4 +1,5 @@
 import csv
+from hashlib import sha256
 from pathlib import Path
 
 import pytest
@@ -27,6 +28,12 @@ from tests.safety_support import (
     write_template,
 )
 from fireprotect.rx3.safety import GuiExecutionEvidence, rx38_record_fingerprint
+
+
+def _pin(path: Path) -> str:
+    """The independently pinned BEFORE hash of one prepared file."""
+
+    return sha256(path.read_bytes()).hexdigest()
 
 
 def _two_record_calculation(
@@ -60,6 +67,344 @@ def _two_record_calculation(
     return generated, calculated
 
 
+def _raw_lines(path: Path) -> list[str]:
+    """Raw lines without newline translation: CRLF must stay CRLF here."""
+
+    return path.read_bytes().decode("utf-8").splitlines(keepends=True)
+
+
+def _write_raw_lines(path: Path, lines: list[str], *, encoding: str = "utf-8") -> None:
+    path.write_bytes("".join(lines).encode(encoding))
+
+
+def _set_raw_fields(line: str, values: dict[int, str]) -> str:
+    """Rewrite raw tokens of one line without re-quoting anything else."""
+
+    newline = "\r\n" if line.endswith("\r\n") else "\n" if line.endswith("\n") else ""
+    content = line[: len(line) - len(newline)] if newline else line
+    tokens = content.split(";")
+    for index, value in values.items():
+        tokens[index] = value
+    return ";".join(tokens) + newline
+
+
+def _first_tconstr_index(lines: list[str]) -> int:
+    for index, line in enumerate(lines):
+        if line.startswith("Tconstr"):
+            return index
+    raise AssertionError("the fixture has no Tconstr record")
+
+
+def _calculated_text_from(
+    tmp_path: Path, *, target_changes: dict[int, str]
+) -> tuple[Path, list[str]]:
+    """A prepared file plus the raw text of the same file after recalculation."""
+
+    generated = tmp_path / "generated.rx38"
+    _two_record_calculation(tmp_path, target_changes=target_changes)
+    lines = _raw_lines(generated)
+    target_index = _first_tconstr_index(lines)
+    lines[target_index] = _set_raw_fields(lines[target_index], target_changes)
+    return generated, lines
+
+
+def test_an_added_record_blocks_the_gui_check(tmp_path: Path):
+    generated, lines = _calculated_text_from(
+        tmp_path, target_changes={44: "500", 54: "20"}
+    )
+    calculated = tmp_path / "calculated.rx38"
+    _write_raw_lines(calculated, [*lines, "Trazdel;Добавлено\r\n"])
+
+    report = validate_rx3_result_files(
+        generated,
+        calculated,
+        expected_before_sha256=_pin(generated),
+        gui_execution_evidence=GuiExecutionEvidence.ENGINEER_CONFIRMED,
+        evidence_reference="STRUCTURE-CONTROL",
+        target_record_positions=(1,),
+    )
+    data = report.data
+    assert data["status"] == "RX3_DOCUMENT_STRUCTURE_CHANGED"
+    assert data["gui_recalculation_verified"] is False
+    assert data["structure_changed"] is True
+    assert data["field_level_analysis_performed"] is False
+    assert data["records"] == []
+    assert data["prepared_inputs_preserved"] is None
+    added = data["structural_diff"]["record_sequence"]["added"]
+    assert [item["raw_line"] for item in added] == ["Trazdel;Добавлено\r\n"]
+    assert "records were added" in data["recalculation_note"]
+
+
+def test_a_removed_record_blocks_the_gui_check(tmp_path: Path):
+    generated, lines = _calculated_text_from(
+        tmp_path, target_changes={44: "500", 54: "20"}
+    )
+    calculated = tmp_path / "calculated.rx38"
+    _write_raw_lines(calculated, [line for line in lines if not line.startswith("Trazdel")])
+
+    report = validate_rx3_result_files(
+        generated,
+        calculated,
+        expected_before_sha256=_pin(generated),
+        gui_execution_evidence=GuiExecutionEvidence.ENGINEER_CONFIRMED,
+        evidence_reference="STRUCTURE-CONTROL",
+        target_record_positions=(1,),
+    )
+    assert report.data["status"] == "RX3_DOCUMENT_STRUCTURE_CHANGED"
+    removed = report.data["structural_diff"]["record_sequence"]["removed"]
+    assert [item["record_type"] for item in removed] == ["Trazdel"]
+    assert removed[0]["raw_line"] == "Trazdel;Safety test\r\n"
+
+
+def test_a_changed_non_tconstr_record_blocks_the_gui_check(tmp_path: Path):
+    generated, lines = _calculated_text_from(
+        tmp_path, target_changes={44: "500", 54: "20"}
+    )
+    calculated = tmp_path / "calculated.rx38"
+    _write_raw_lines(
+        calculated,
+        [
+            "Trazdel;Safety test changed\r\n" if line.startswith("Trazdel") else line
+            for line in lines
+        ],
+    )
+
+    report = validate_rx3_result_files(
+        generated,
+        calculated,
+        expected_before_sha256=_pin(generated),
+        gui_execution_evidence=GuiExecutionEvidence.ENGINEER_CONFIRMED,
+        evidence_reference="STRUCTURE-CONTROL",
+        target_record_positions=(1,),
+    )
+    data = report.data
+    assert data["status"] == "RX3_DOCUMENT_STRUCTURE_CHANGED"
+    changed = data["structural_diff"]["record_sequence"]["non_tconstr_replacements"]
+    assert len(changed) == 1
+    assert changed[0]["raw_line_before"] == "Trazdel;Safety test\r\n"
+    assert changed[0]["raw_line_after"] == "Trazdel;Safety test changed\r\n"
+    assert changed[0]["record_type_changed"] is False
+
+
+def test_a_bom_change_blocks_the_gui_check(tmp_path: Path):
+    generated, lines = _calculated_text_from(
+        tmp_path, target_changes={44: "500", 54: "20"}
+    )
+    calculated = tmp_path / "calculated.rx38"
+    calculated.write_bytes(("\ufeff" + "".join(lines)).encode("utf-8"))
+
+    report = validate_rx3_result_files(
+        generated,
+        calculated,
+        expected_before_sha256=_pin(generated),
+        gui_execution_evidence=GuiExecutionEvidence.ENGINEER_CONFIRMED,
+        evidence_reference="STRUCTURE-CONTROL",
+        target_record_positions=(1,),
+    )
+    data = report.data
+    assert data["status"] == "RX3_DOCUMENT_STRUCTURE_CHANGED"
+    assert data["structural_diff"]["raw_layout"]["bom"] == {
+        "before": False,
+        "after": True,
+        "changed": True,
+    }
+
+
+def test_a_line_ending_change_blocks_the_gui_check(tmp_path: Path):
+    generated, lines = _calculated_text_from(
+        tmp_path, target_changes={44: "500", 54: "20"}
+    )
+    calculated = tmp_path / "calculated.rx38"
+    _write_raw_lines(
+        calculated, [line.replace("\r\n", "\n") for line in lines]
+    )
+
+    report = validate_rx3_result_files(
+        generated,
+        calculated,
+        expected_before_sha256=_pin(generated),
+        gui_execution_evidence=GuiExecutionEvidence.ENGINEER_CONFIRMED,
+        evidence_reference="STRUCTURE-CONTROL",
+        target_record_positions=(1,),
+    )
+    data = report.data
+    assert data["status"] == "RX3_DOCUMENT_STRUCTURE_CHANGED"
+    changes = data["structural_diff"]["raw_layout"]["newline_changes"]
+    assert changes and all(item["after"] == "\n" for item in changes)
+
+
+def test_an_added_blank_line_blocks_the_gui_check(tmp_path: Path):
+    generated, lines = _calculated_text_from(
+        tmp_path, target_changes={44: "500", 54: "20"}
+    )
+    calculated = tmp_path / "calculated.rx38"
+    _write_raw_lines(calculated, [*lines, "\r\n"])
+
+    report = validate_rx3_result_files(
+        generated,
+        calculated,
+        expected_before_sha256=_pin(generated),
+        gui_execution_evidence=GuiExecutionEvidence.ENGINEER_CONFIRMED,
+        evidence_reference="STRUCTURE-CONTROL",
+        target_record_positions=(1,),
+    )
+    data = report.data
+    assert data["status"] == "RX3_DOCUMENT_STRUCTURE_CHANGED"
+    assert data["structural_diff"]["raw_layout"]["blank_lines"]["changed"] is True
+
+
+def test_a_quote_only_change_outside_allowed_fields_blocks_the_gui_check(
+    tmp_path: Path,
+):
+    """Field 3 is a confirmed text copy: quoting it changes no value but the bytes."""
+
+    generated, lines = _calculated_text_from(
+        tmp_path, target_changes={44: "500", 54: "20"}
+    )
+    calculated = tmp_path / "calculated.rx38"
+    target_index = _first_tconstr_index(lines)
+    lines[target_index] = _set_raw_fields(lines[target_index], {3: '"K1"'})
+    _write_raw_lines(calculated, lines)
+
+    report = validate_rx3_result_files(
+        generated,
+        calculated,
+        expected_before_sha256=_pin(generated),
+        gui_execution_evidence=GuiExecutionEvidence.ENGINEER_CONFIRMED,
+        evidence_reference="STRUCTURE-CONTROL",
+        target_record_positions=(1,),
+    )
+    data = report.data
+    assert data["status"] == "RX3_RAW_FORMATTING_CHANGED"
+    assert data["gui_recalculation_verified"] is False
+    assert data["structure_changed"] is False
+    assert data["field_level_analysis_performed"] is True
+    assert data["raw_formatting_preserved"] is False
+    assert data["target_raw_formatting_change_indices"] == [3]
+    assert data["target_input_change_indices"] == []
+    changes = data["structural_diff"]["raw_layout"]["raw_only_token_changes"]
+    assert changes[0]["changes"][0]["before_token"] == "K1"
+    assert changes[0]["changes"][0]["after_token"] == '"K1"'
+    assert changes[0]["changes"][0]["decoded_equal"] is True
+
+
+def test_a_quote_only_change_inside_allowed_fields_is_reported_but_allowed(
+    tmp_path: Path,
+):
+    """Field 52 is an allowed calculated/service field; quoting it changes no value."""
+
+    generated, lines = _calculated_text_from(
+        tmp_path, target_changes={44: "500", 54: "20"}
+    )
+    calculated = tmp_path / "calculated.rx38"
+    target_index = _first_tconstr_index(lines)
+    lines[target_index] = _set_raw_fields(lines[target_index], {52: '"0,2"'})
+    _write_raw_lines(calculated, lines)
+
+    report = validate_rx3_result_files(
+        generated,
+        calculated,
+        expected_before_sha256=_pin(generated),
+        gui_execution_evidence=GuiExecutionEvidence.ENGINEER_CONFIRMED,
+        evidence_reference="STRUCTURE-CONTROL",
+        target_record_positions=(1,),
+    )
+    data = report.data
+    assert data["status"] == "RX3_RESULT_ANALYSED"
+    assert data["gui_recalculation_verified"] is True
+    assert data["target_raw_formatting_change_indices"] == []
+    assert data["allowed_raw_formatting_change_indices"] == [52]
+    assert data["raw_formatting_preserved"] is True
+
+
+def test_a_quote_only_change_on_a_non_target_record_blocks_the_gui_check(
+    tmp_path: Path,
+):
+    generated, calculated = _two_record_calculation(
+        tmp_path, target_changes={44: "500", 54: "20"}
+    )
+    lines = _raw_lines(calculated)
+    tconstr_lines = [
+        index for index, line in enumerate(lines, 1) if line.startswith("Tconstr")
+    ]
+    target_line = tconstr_lines[1]
+    lines[target_line - 1] = _set_raw_fields(lines[target_line - 1], {3: '"K2"'})
+    _write_raw_lines(calculated, lines)
+
+    report = validate_rx3_result_files(
+        generated,
+        calculated,
+        expected_before_sha256=_pin(generated),
+        gui_execution_evidence=GuiExecutionEvidence.ENGINEER_CONFIRMED,
+        evidence_reference="STRUCTURE-CONTROL",
+        target_record_positions=(1,),
+    )
+    data = report.data
+    assert data["status"] == "RX3_UNEXPECTED_NON_TARGET_CHANGE"
+    assert data["gui_recalculation_verified"] is False
+    assert data["non_target_records_text_unchanged"] is False
+    entry = data["unexpected_non_target_changes"][0]
+    assert entry["position"] == 2
+    assert entry["kinds"] == ["RAW_TOKEN_ONLY_CHANGE"]
+    assert entry["raw_only_token_changes"][0]["after_token"] == '"K2"'
+
+
+def test_structural_report_keeps_raw_tokens_and_the_alignment_status(
+    tmp_path: Path,
+):
+    generated, calculated = _two_record_calculation(
+        tmp_path, target_changes={44: "500", 54: "20"}
+    )
+    report = validate_rx3_result_files(
+        generated,
+        calculated,
+        expected_before_sha256=_pin(generated),
+        gui_execution_evidence=GuiExecutionEvidence.ENGINEER_CONFIRMED,
+        evidence_reference="STRUCTURE-CONTROL",
+        target_record_positions=(1,),
+    )
+    data = report.data
+    structural = data["structural_diff"]
+    assert data["status"] == "RX3_RESULT_ANALYSED"
+    assert structural["record_sequence"]["alignment"] == (
+        "RECORD_SEQUENCE_IDENTICAL"
+    )
+    assert structural["structure_changed"] is False
+    replaced = structural["record_sequence"]["replaced"]
+    assert len(replaced) == 1
+    assert replaced[0]["changed_indices"] == [44, 54]
+    assert replaced[0]["semantic_change_indices"] == [44, 54]
+    assert replaced[0]["raw_line_before"].startswith("Tconstr;K1;")
+    assert replaced[0]["raw_line_after"].startswith("Tconstr;K1;")
+    assert structural["record_sequence"]["added"] == []
+    assert structural["record_sequence"]["removed"] == []
+    assert structural["raw_layout"]["encoding"]["changed"] is False
+    assert structural["raw_layout"]["bom"]["changed"] is False
+    assert structural["raw_layout"]["blank_lines"]["changed"] is False
+
+
+def test_the_structural_diff_refuses_a_document_it_cannot_reconstruct(
+    tmp_path: Path,
+):
+    from fireprotect.rx3.structural_diff import (
+        Rx38StructuralDiffError,
+        diff_rx38_documents,
+    )
+
+    path = tmp_path / "document.rx38"
+    write_template(path)
+    document = read_rx38_document(path)
+    tampered = Rx38Document(
+        document.records,
+        document.encoding,
+        document.has_bom,
+        document.source,
+        ("not the line the reader saw\r\n",) + document.raw_lines[1:],
+    )
+    with pytest.raises(Rx38StructuralDiffError, match="cannot be reconstructed"):
+        diff_rx38_documents(document, tampered)
+
+
 def test_template_results_are_stale_and_excluded_from_rx3_input(tmp_path: Path):
     template = tmp_path / "template.rx38"
     output = tmp_path / "generated.rx38"
@@ -79,7 +424,7 @@ def test_template_results_are_stale_and_excluded_from_rx3_input(tmp_path: Path):
 def test_unchanged_numbers_cannot_separate_pressed_from_not_pressed(tmp_path: Path):
     generated, calculated = _two_record_calculation(tmp_path, target_changes={})
     report = validate_rx3_result_files(
-        generated, calculated, target_record_positions=(1,)
+        generated, calculated, expected_before_sha256=_pin(generated), target_record_positions=(1,)
     )
     assert report.data["status"] == "RX3_RECALCULATION_NOT_PROVEN"
     assert report.data["rx3_recalculation_proven"] is False
@@ -92,7 +437,7 @@ def test_target_input_change_is_reported_separately_from_result_fields(tmp_path:
         tmp_path, target_changes={50: "3,5"}
     )
     report = validate_rx3_result_files(
-        generated, calculated, target_record_positions=(1,)
+        generated, calculated, expected_before_sha256=_pin(generated), target_record_positions=(1,)
     )
     assert report.data["target_input_change_indices"] == [50]
     assert report.data["rx3_recalculation_proven"] is False
@@ -103,7 +448,7 @@ def test_material_result_change_states_that_recalculation_is_proven(tmp_path: Pa
         tmp_path, target_changes={44: "500", 54: "20"}
     )
     report = validate_rx3_result_files(
-        generated, calculated, target_record_positions=(1,)
+        generated, calculated, expected_before_sha256=_pin(generated), target_record_positions=(1,)
     )
     assert report.data["rx3_recalculation_proven"] is True
     assert report.data["prepared_inputs_preserved"] is True
@@ -122,6 +467,7 @@ def test_changed_target_input_never_confirms_the_prepared_calculation(tmp_path: 
     report = validate_rx3_result_files(
         generated,
         calculated,
+        expected_before_sha256=_pin(generated),
         target_record_positions=(1,),
         gui_execution_evidence=GuiExecutionEvidence.SCREENSHOT_REFERENCED,
         evidence_reference="LIRA-RX3-25K1-TECH-01",
@@ -144,9 +490,61 @@ def test_result_from_another_generated_file_is_refused(tmp_path: Path):
         validate_rx3_result_files(
             generated,
             calculated,
-            target_record_positions=(1,),
             expected_before_sha256="0" * 64,
+            target_record_positions=(1,),
         )
+    # The AFTER hash is never accepted in place of the pinned BEFORE hash.
+    with pytest.raises(Rx3GuiValidationError, match="not bound to the prepared input"):
+        validate_rx3_result_files(
+            generated,
+            calculated,
+            expected_before_sha256=_pin(calculated),
+            target_record_positions=(1,),
+        )
+
+
+def test_the_pinned_before_hash_is_mandatory_and_checked(tmp_path: Path):
+    generated, calculated = _two_record_calculation(
+        tmp_path, target_changes={44: "500", 54: "20"}
+    )
+    with pytest.raises(TypeError, match="expected_before_sha256"):
+        validate_rx3_result_files(  # type: ignore[call-arg]
+            generated, calculated, target_record_positions=(1,)
+        )
+    for token, reason in (
+        ("", "blank"),
+        ("   ", "blank"),
+        (_pin(generated).upper()[:63], "hexadecimal"),
+        (_pin(generated) + "0", "hexadecimal"),
+        ("z" * 64, "hexadecimal"),
+    ):
+        with pytest.raises(Rx3GuiValidationError, match=reason):
+            validate_rx3_result_files(
+                generated,
+                calculated,
+                expected_before_sha256=token,
+                target_record_positions=(1,),
+            )
+    with pytest.raises(TypeError, match="must be str"):
+        validate_rx3_result_files(
+            generated,
+            calculated,
+            expected_before_sha256=12345,  # type: ignore[arg-type]
+            target_record_positions=(1,),
+        )
+    # The pinned value is recorded verbatim next to the actual hash.
+    report = validate_rx3_result_files(
+        generated,
+        calculated,
+        expected_before_sha256=f"  {_pin(generated).upper()}  ",
+        target_record_positions=(1,),
+    )
+    assert report.data["expected_before_sha256"] == f"  {_pin(generated).upper()}  "
+    assert report.data["expected_before_sha256_normalized"] == _pin(generated)
+    assert report.data["actual_before_sha256"] == _pin(generated)
+    assert "not proof of the provenance of the AFTER file" in report.data[
+        "prepared_input_binding_note"
+    ]
 
 
 def test_scoped_calculated_and_service_changes_are_not_input_changes(tmp_path: Path):
@@ -159,6 +557,7 @@ def test_scoped_calculated_and_service_changes_are_not_input_changes(tmp_path: P
     report = validate_rx3_result_files(
         generated,
         calculated,
+        expected_before_sha256=_pin(generated),
         target_record_positions=(1,),
         gui_execution_evidence=GuiExecutionEvidence.SCREENSHOT_REFERENCED,
         evidence_reference="SCOPED-POST-CALC",
@@ -181,6 +580,7 @@ def test_field50_change_is_still_refused_and_field49_too(tmp_path: Path):
         report = validate_rx3_result_files(
             generated,
             calculated,
+            expected_before_sha256=_pin(generated),
             target_record_positions=(1,),
             gui_execution_evidence=GuiExecutionEvidence.SCREENSHOT_REFERENCED,
             evidence_reference="CONTROL-INPUT",
@@ -196,7 +596,7 @@ def test_byte_identical_calculated_file_does_not_prove_gui_run(tmp_path: Path):
     write_template(generated)
     calculated.write_bytes(generated.read_bytes())
     report = validate_rx3_result_files(
-        generated, calculated, target_record_positions=(1,)
+        generated, calculated, expected_before_sha256=_pin(generated), target_record_positions=(1,)
     )
     assert report.data["byte_identical"] is True
     assert report.data["status"] == "RX3_RECALCULATION_NOT_PROVEN"
@@ -216,7 +616,7 @@ def test_unrelated_file_change_does_not_refresh_stale_results(tmp_path: Path):
         writer.writerows(rows)
 
     report = validate_rx3_result_files(
-        generated, calculated, target_record_positions=(1,)
+        generated, calculated, expected_before_sha256=_pin(generated), target_record_positions=(1,)
     )
     assert report.data["byte_identical"] is False
     assert report.data["expected_result_fields_changed"] is False
@@ -240,12 +640,48 @@ def test_formatting_only_result_changes_do_not_refresh_stale_values(tmp_path: Pa
     report = validate_rx3_result_files(
         generated,
         calculated,
+        expected_before_sha256=_pin(generated),
         gui_execution_evidence=GuiExecutionEvidence.ENGINEER_CONFIRMED,
         evidence_reference="controlled evidence",
         target_record_positions=(1,),
     )
     assert report.data["rx3_recalculation_proven"] is False
     assert report.data["status"] == "RX3_RECALCULATION_NOT_PROVEN"
+
+
+def test_allowed_result_change_passes_the_program_check_without_approving_it(
+    tmp_path: Path,
+):
+    """The program check never approves the engineering result by itself."""
+
+    generated, calculated = _two_record_calculation(
+        tmp_path, target_changes={44: "675", 54: "18"}
+    )
+    without_evidence = validate_rx3_result_files(
+        generated,
+        calculated,
+        expected_before_sha256=_pin(generated),
+        overwrite=True,
+        target_record_positions=(1,),
+    )
+    assert without_evidence.data["rx3_recalculation_proven"] is True
+    assert without_evidence.data["gui_recalculation_verified"] is False
+    assert without_evidence.data["status"] == "RX3_GUI_RECALCULATION_UNVERIFIED"
+    assert without_evidence.data["gui_execution_evidence"] == (
+        GuiExecutionEvidence.NOT_PROVIDED.value
+    )
+    with_evidence = validate_rx3_result_files(
+        generated,
+        calculated,
+        expected_before_sha256=_pin(generated),
+        overwrite=True,
+        gui_execution_evidence=GuiExecutionEvidence.ENGINEER_CONFIRMED,
+        evidence_reference="engineer saw the screen",
+        target_record_positions=(1,),
+    )
+    assert with_evidence.data["gui_recalculation_verified"] is True
+    assert with_evidence.data["status"] == "RX3_RESULT_ANALYSED"
+    assert with_evidence.data["evidence_reference"] == "engineer saw the screen"
 
 
 def test_single_target_recalculation_accepts_unchanged_non_target(tmp_path: Path):
@@ -257,6 +693,7 @@ def test_single_target_recalculation_accepts_unchanged_non_target(tmp_path: Path
     report = validate_rx3_result_files(
         generated,
         calculated,
+        expected_before_sha256=_pin(generated),
         target_record_positions=(1,),
         gui_execution_evidence=GuiExecutionEvidence.ENGINEER_CONFIRMED,
         evidence_reference="controlled evidence",
@@ -280,6 +717,7 @@ def test_changed_non_target_record_fails_closed(tmp_path: Path):
     report = validate_rx3_result_files(
         generated,
         calculated,
+        expected_before_sha256=_pin(generated),
         target_record_positions=(1,),
         gui_execution_evidence=GuiExecutionEvidence.ENGINEER_CONFIRMED,
         evidence_reference="controlled evidence",
@@ -305,7 +743,7 @@ def test_confirmed_numeric_token_normalization_preserves_raw_diff(tmp_path: Path
         csv.writer(stream, delimiter=";", lineterminator="\r\n").writerows(rows)
 
     report = validate_rx3_result_files(
-        generated, calculated, target_record_positions=(1,)
+        generated, calculated, expected_before_sha256=_pin(generated), target_record_positions=(1,)
     )
     change = next(
         item
@@ -326,7 +764,7 @@ def test_confirmed_load_level_change_is_a_calculated_result_not_an_input(tmp_pat
     )
 
     report = validate_rx3_result_files(
-        generated, calculated, target_record_positions=(1,)
+        generated, calculated, expected_before_sha256=_pin(generated), target_record_positions=(1,)
     )
 
     assert report.data["allowed_calculated_result_fields"] == [44, 52, 53, 54, 76, 78]
@@ -348,7 +786,7 @@ def test_unknown_numeric_tokens_are_not_treated_as_semantically_equal(
         csv.writer(stream, delimiter=";", lineterminator="\r\n").writerows(rows)
 
     report = validate_rx3_result_files(
-        generated, calculated, target_record_positions=(1,)
+        generated, calculated, expected_before_sha256=_pin(generated), target_record_positions=(1,)
     )
     change = report.data["records"][0]["unknown_changes"][0]
     assert change["text_changed"] is True
@@ -371,7 +809,7 @@ def test_confirmed_numeric_field_with_ambiguous_units_is_conservative(
         csv.writer(stream, delimiter=";", lineterminator="\r\n").writerows(rows)
 
     report = validate_rx3_result_files(
-        generated, calculated, target_record_positions=(1,)
+        generated, calculated, expected_before_sha256=_pin(generated), target_record_positions=(1,)
     )
     change = next(
         item
@@ -391,7 +829,11 @@ def test_validation_requires_an_explicit_target(tmp_path: Path):
     calculated.write_bytes(generated.read_bytes())
 
     with pytest.raises(Rx3GuiValidationError, match="explicit target"):
-        validate_rx3_result_files(generated, calculated)
+        validate_rx3_result_files(
+            generated,
+            calculated,
+            expected_before_sha256=_pin(generated),
+        )
 
 
 def test_target_mark_must_resolve_uniquely(tmp_path: Path):
@@ -408,7 +850,12 @@ def test_target_mark_must_resolve_uniquely(tmp_path: Path):
         csv.writer(stream, delimiter=";", lineterminator="\r\n").writerows(rows)
 
     with pytest.raises(Rx3GuiValidationError, match="exactly one"):
-        validate_rx3_result_files(generated, calculated, target_marks=("K1",))
+        validate_rx3_result_files(
+        generated,
+        calculated,
+        expected_before_sha256=_pin(generated),
+        target_marks=("K1",),
+    )
 
 
 def test_exact_before_fingerprint_resolves_target(tmp_path: Path):
@@ -421,6 +868,7 @@ def test_exact_before_fingerprint_resolves_target(tmp_path: Path):
     report = validate_rx3_result_files(
         generated,
         calculated,
+        expected_before_sha256=_pin(generated),
         target_record_fingerprints=(rx38_record_fingerprint(target),),
     )
 
@@ -446,6 +894,7 @@ def test_production_rejects_any_non_result_rx38_change(tmp_path: Path):
     report = validate_rx3_result_files(
         generated,
         calculated,
+        expected_before_sha256=_pin(generated),
         gui_execution_evidence=GuiExecutionEvidence.ENGINEER_CONFIRMED,
         evidence_reference="controlled evidence",
         mode=ExecutionMode.PRODUCTION,
@@ -471,6 +920,7 @@ def test_gui_evidence_requires_a_reference(tmp_path: Path):
     report = validate_rx3_result_files(
         generated,
         calculated,
+        expected_before_sha256=_pin(generated),
         gui_execution_evidence=GuiExecutionEvidence.SCREENSHOT_REFERENCED,
         target_record_positions=(1,),
     )
@@ -488,6 +938,7 @@ def test_validation_reports_cannot_overwrite_rx38_inputs(tmp_path: Path):
         validate_rx3_result_files(
             generated,
             calculated,
+            expected_before_sha256=_pin(generated),
             json_report=generated,
             overwrite=True,
             target_record_positions=(1,),
@@ -562,17 +1013,22 @@ def test_validation_rejects_rx38_changed_while_reading(
     calculated = tmp_path / "calculated.rx38"
     write_template(generated)
     calculated.write_bytes(generated.read_bytes())
-    real_read = gui_validation.read_rx38
+    real_read = gui_validation.read_rx38_document
 
     def changing_read(path):
-        records = real_read(path)
+        document = real_read(path)
         if Path(path).resolve() == calculated.resolve():
             calculated.write_bytes(calculated.read_bytes() + b"\r\n")
-        return records
+        return document
 
-    monkeypatch.setattr(gui_validation, "read_rx38", changing_read)
+    monkeypatch.setattr(gui_validation, "read_rx38_document", changing_read)
     with pytest.raises(Rx3GuiValidationError, match="changed while"):
-        validate_rx3_result_files(generated, calculated)
+        validate_rx3_result_files(
+            generated,
+            calculated,
+            expected_before_sha256=_pin(generated),
+            target_record_positions=(1,),
+        )
 
 
 def test_safe_write_preserves_unknown_field_value():

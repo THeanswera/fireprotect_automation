@@ -81,6 +81,7 @@ from .rsu import (
     validate_rsu_reconstruction,
 )
 from .rsu_review import (
+    force_page_summary,
     prepare_rsu_review_bundle,
     rsu_evidence,
     rsu_residual_statistics,
@@ -228,6 +229,7 @@ __all__ = [
     "read_xls_workbook",
     "validate_rsu_reconstruction",
     "prepare_rsu_review_bundle",
+    "force_page_summary",
     "rsu_evidence",
     "rsu_row_detail",
     "rsu_residual_statistics",

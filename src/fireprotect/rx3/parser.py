@@ -189,6 +189,7 @@ class Rx38Document:
     encoding: str = "utf-8"
     has_bom: bool = False
     source: Path | None = None
+    raw_lines: tuple[str, ...] = ()
 
     def replace_record(self, record_index: int, record: Rx38Record) -> "Rx38Document":
         records = list(self.records)
@@ -268,7 +269,15 @@ class Rx38Construction:
         )
 
 
-def _decode(data: bytes) -> tuple[str, str, bool]:
+def decode_rx38_bytes(data: bytes) -> tuple[str, str, bool]:
+    """Decode RX38 bytes exactly as the reader does, including the BOM flag.
+
+    The decoded text is what the reader parses; keeping this step separate lets
+    a structural diff report raw layout facts (BOM, line endings, blank lines)
+    about the same bytes that produced the records, instead of re-reading the
+    file with a second, possibly different, rule.
+    """
+
     if data.startswith(b"\xef\xbb\xbf"):
         return data[3:].decode("utf-8"), "utf-8", True
     try:
@@ -279,9 +288,11 @@ def _decode(data: bytes) -> tuple[str, str, bool]:
 
 def read_rx38_document(path: str | Path) -> Rx38Document:
     path = Path(path).resolve(strict=True)
-    text, encoding, has_bom = _decode(path.read_bytes())
+    data = path.read_bytes()
+    text, encoding, has_bom = decode_rx38_bytes(data)
+    raw_lines = text.splitlines(keepends=True)
     records: list[Rx38Record] = []
-    for line_number, raw_line in enumerate(text.splitlines(keepends=True), 1):
+    for line_number, raw_line in enumerate(raw_lines, 1):
         if raw_line.endswith("\r\n"):
             content, newline = raw_line[:-2], "\r\n"
         elif raw_line.endswith(("\r", "\n")):
@@ -314,7 +325,7 @@ def read_rx38_document(path: str | Path) -> Rx38Document:
                 _source_path=path,
             )
         )
-    return Rx38Document(tuple(records), encoding, has_bom, path)
+    return Rx38Document(tuple(records), encoding, has_bom, path, tuple(raw_lines))
 
 
 def read_rx38(path: str | Path) -> list[Rx38Record]:

@@ -83,8 +83,8 @@ python -m fireprotect.cli validate-rx38 FILE.rx38
 python -m fireprotect.cli lookup-profile RX3_DB.rxdb "30К1" --standard "СТО АСЧМ 20-93"
 python -m fireprotect.cli rx38-create INPUT.json TEMPLATE.rx38 OUTPUT.rx38 --template-mark "К1" --mode VALIDATION --safety-context safety.json --report report.json
 python -m fireprotect.cli prepare-rx3-validation INPUT.json TEMPLATE.rx38 --output-dir validation/rx3_gui_test --template-mark "К1" --mode VALIDATION --safety-context safety.json
-python -m fireprotect.cli validate-rx3-result generated.rx38 calculated.rx38 --target-fingerprint BEFORE_TCONSTR_SHA256 --gui-evidence ENGINEER_CONFIRMED --evidence-reference RX3-EXP-01
-python -m fireprotect.cli rx38-experiment-diff BASE.rx38 CHANGED.rx38 --experiment-id RX3-EXP-01 --target-position 1
+python -m fireprotect.cli validate-rx3-result generated.rx38 calculated.rx38 --target-fingerprint BEFORE_TCONSTR_SHA256 --expected-generated-sha256 GENERATED_SHA256 --gui-evidence ENGINEER_CONFIRMED --evidence-reference RX3-EXP-01
+python -m fireprotect.cli rx38-experiment-diff BASE.rx38 CHANGED.rx38 --experiment-id RX3-EXP-01 --target-position 1 --expected-generated-sha256 BASE_SHA256
 python -m fireprotect.cli pipeline pipeline.json
 ```
 

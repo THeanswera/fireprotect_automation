@@ -9,7 +9,17 @@ Pre-experiment hardening in version 0.5.0:
   against formula and lookup-table fingerprints linked to technical-data
   versions;
 - RX38/XLSX no-overwrite finalization has an exclusive-create fallback for
-  filesystems without hard-link support.
+  filesystems without hard-link support;
+- the post-calculation RX3 check requires an independently pinned BEFORE
+  SHA-256 (CLI flag, recorded bundle hash, prepared manual command) instead of
+  hashing the file under validation again;
+- the post-calculation check compares the whole RX38 document, not only the
+  target `Tconstr`: added, removed and edited records, non-construction records,
+  encoding, BOM, blank lines, line endings and raw token spelling block the GUI
+  status (`RX3_DOCUMENT_STRUCTURE_CHANGED`, `RX3_RAW_FORMATTING_CHANGED`);
+- every paged LIRA force workbook pins its own summary in the evidence, and the
+  reader recomputes that summary from the re-read page and compares it exactly;
+  a page without a pinned summary is refused as `SUMMARY_NOT_VERIFIED`.
 
 ## 0.5.0 — 2026-08-25
 

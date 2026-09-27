@@ -1,6 +1,7 @@
 import csv
 from datetime import datetime, timezone
 from decimal import Decimal
+from hashlib import sha256
 import json
 from pathlib import Path
 import shutil
@@ -15,7 +16,11 @@ from fireprotect.model import (
     Unit,
     ValueProvenance,
 )
-from fireprotect.pipeline import PipelineError, run_pipeline
+from fireprotect.pipeline import (
+    PipelineError,
+    _pinned_generated_hash,
+    run_pipeline,
+)
 from fireprotect.project_io import write_project_element_json
 from fireprotect.rx3.parser import construction_records, read_rx38
 from fireprotect.rx3.safety import rx38_record_fingerprint
@@ -105,6 +110,31 @@ def _calculate(generated: Path, calculated: Path) -> None:
     with calculated.open("w", encoding="utf-8", newline="") as stream:
         writer = csv.writer(stream, delimiter=";", lineterminator="\r\n")
         writer.writerows(rows)
+
+
+def test_pipeline_binds_the_result_to_the_hash_recorded_at_generation(
+    tmp_path: Path,
+):
+    """The pin is the recorded expectation, never a fresh hash of the file."""
+
+    generated = tmp_path / "generated.rx38"
+    other = tmp_path / "other.rx38"
+    generated.write_bytes(b"prepared input\r\n")
+    other.write_bytes(b"another file\r\n")
+    recorded = sha256(generated.read_bytes()).hexdigest()
+
+    assert _pinned_generated_hash("E1", generated, recorded) == recorded
+    assert _pinned_generated_hash("E1", generated, recorded.upper()) == recorded
+
+    with pytest.raises(PipelineError, match="no longer matches the hash recorded"):
+        _pinned_generated_hash("E1", generated, sha256(other.read_bytes()).hexdigest())
+    with pytest.raises(PipelineError, match="no longer matches the hash recorded"):
+        _pinned_generated_hash("E1", other, recorded)
+    for bad in (None, "", "   ", 17):
+        with pytest.raises(PipelineError, match="no generated.rx38 SHA-256"):
+            _pinned_generated_hash("E1", generated, bad)
+    with pytest.raises(PipelineError, match="64-character hexadecimal"):
+        _pinned_generated_hash("E1", generated, "z" * 64)
 
 
 def test_pipeline_stops_for_rx3_and_resumes_after_calculated_file(tmp_path: Path):

@@ -41,6 +41,7 @@ from typing import Any, Mapping
 from .errors import LiraFormatError, LiraMappingError
 from .rsu import (
     RsuCoefficient,
+    RsuImportBundle,
     RsuLoadForceRecord,
     RsuLoadParameter,
     RsuPublishedRecord,
@@ -51,6 +52,7 @@ from .rsu import (
     import_rsu_xls_bundle,
     validate_rsu_reconstruction,
 )
+from .rsu_review import force_page_summary
 from .types import LIRA_NATIVE_FORCE_COMPONENTS
 
 EVIDENCE_KIND = "READ_ONLY_LIRA_RSU_EVIDENCE"
@@ -153,7 +155,28 @@ def verify_recorded_sha256(
             f"{context}: source {name!r} changed: recorded sha256 {recorded} "
             f"does not match the file on disk ({actual})"
         )
-    return {"path": str(path), "sha256": actual, "matches": True}
+    return {
+        "path": str(path),
+        "sha256": actual,
+        "recorded_sha256": recorded,
+        "matches": True,
+    }
+
+
+@dataclass(frozen=True, slots=True)
+class ForcePageExpectation:
+    """The pinned summary of one force page, as recorded in the evidence."""
+
+    index: int
+    path: str
+    recorded_sha256: str
+    sha256: str
+    values: Mapping[str, object]
+    missing: tuple[str, ...]
+
+    @property
+    def complete(self) -> bool:
+        return not self.missing
 
 
 @dataclass(frozen=True, slots=True)
@@ -162,8 +185,70 @@ class VerifiedForceSources:
 
     paths: tuple[str, ...]
     hashes: frozenset[str]
-    page_records: tuple[int | None, ...]
     paged: bool
+    page_expectations: tuple[ForcePageExpectation, ...]
+    flat_sheets: int | None
+    flat_recorded_sha256: str | None
+
+
+FORCE_PAGE_METADATA_KEYS: tuple[str, ...] = (
+    "sheets",
+    "sheets_with_records",
+    "records",
+    "elements_min",
+    "elements_max",
+    "load_cases",
+    "section_stations",
+)
+_TOKEN_LIST_KEYS = ("sheets", "sheets_with_records", "load_cases", "section_stations")
+
+
+def _page_expectation(
+    page: Mapping[str, Any], *, index: int, context: str
+) -> ForcePageExpectation:
+    """Parse and type-check the recorded summary of one force page."""
+
+    verified = verify_recorded_sha256(
+        page, name=f"forces page {index}", context=context
+    )
+    values: dict[str, object] = {}
+    missing: list[str] = []
+    for key in FORCE_PAGE_METADATA_KEYS:
+        if key not in page:
+            missing.append(key)
+            continue
+        value = page[key]
+        if key in _TOKEN_LIST_KEYS:
+            if not isinstance(value, list) or any(
+                not isinstance(item, str) for item in value
+            ):
+                raise LiraFormatError(
+                    f"{context}: forces page {index} {key} must be a list of "
+                    "strings"
+                )
+        elif key == "records":
+            if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+                raise LiraFormatError(
+                    f"{context}: forces page {index} records must be a positive "
+                    "integer"
+                )
+        elif key in ("elements_min", "elements_max"):
+            if value is not None and (
+                isinstance(value, bool) or not isinstance(value, int)
+            ):
+                raise LiraFormatError(
+                    f"{context}: forces page {index} {key} must be an integer or "
+                    "null"
+                )
+        values[key] = value
+    return ForcePageExpectation(
+        index=index,
+        path=str(verified["path"]),
+        recorded_sha256=str(page["sha256"]),
+        sha256=str(verified["sha256"]),
+        values=MappingProxyType(values),
+        missing=tuple(missing),
+    )
 
 
 def _verify_force_pages(
@@ -174,16 +259,32 @@ def _verify_force_pages(
     A paged entry keeps the flat ``path``/``sha256`` of the first page, so the
     old flat meaning stays stable, and lists every page under ``pages``.  The
     first page hash must equal the flat hash, every page file must still match
-    its recorded SHA-256, and no workbook may be recorded twice.
+    its recorded SHA-256, no workbook may be recorded twice, and each page must
+    pin the full summary (:data:`FORCE_PAGE_METADATA_KEYS`) that the reader will
+    recompute from the page itself.  A page without a pinned summary is reported
+    as ``SUMMARY_NOT_VERIFIED`` and stops the read: a summary computed from the
+    page at read time is not an independent check of anything.
     """
 
     pages = entry.get("pages")
     if pages is None:
+        flat_sheets = entry.get("sheets")
+        if flat_sheets is not None and (
+            isinstance(flat_sheets, bool) or not isinstance(flat_sheets, int)
+        ):
+            raise LiraFormatError(
+                f"{context}: sources.forces.sheets must be an integer worksheet "
+                "count or be absent"
+            )
         return VerifiedForceSources(
             paths=(str(first_page["path"]),),
             hashes=frozenset({str(first_page["sha256"])}),
-            page_records=(None,),
             paged=False,
+            page_expectations=(),
+            flat_sheets=flat_sheets,
+            flat_recorded_sha256=(
+                str(entry["sha256"]) if isinstance(entry.get("sha256"), str) else None
+            ),
         )
     if not isinstance(pages, list) or not pages:
         raise LiraFormatError(
@@ -199,39 +300,44 @@ def _verify_force_pages(
             f"{context}: sources.forces.page_count must equal the number of "
             f"recorded pages ({len(pages)})"
         )
-    paths: list[str] = []
-    hashes: list[str] = []
-    counts: list[int | None] = []
+    expectations: list[ForcePageExpectation] = []
     for index, raw in enumerate(pages, 1):
         page = require_mapping(raw, f"forces page {index}", context)
-        verified = verify_recorded_sha256(
-            page, name=f"forces page {index}", context=context
-        )
-        paths.append(str(verified["path"]))
-        hashes.append(str(verified["sha256"]))
-        recorded = page.get("records")
-        if recorded is None:
-            counts.append(None)
-        elif isinstance(recorded, bool) or not isinstance(recorded, int):
-            raise LiraFormatError(
-                f"{context}: forces page {index} records must be an integer"
-            )
-        else:
-            counts.append(recorded)
-    if hashes[0] != str(first_page["sha256"]):
+        expectations.append(_page_expectation(page, index=index, context=context))
+    if expectations[0].sha256 != str(first_page["sha256"]):
         raise LiraFormatError(
             f"{context}: the first force page sha256 does not match "
             "sources.forces.sha256"
         )
+    hashes = [expectation.sha256 for expectation in expectations]
     if len(set(hashes)) != len(hashes):
         raise LiraFormatError(
             f"{context}: the same force workbook is recorded on more than one page"
         )
+    incomplete = [item for item in expectations if not item.complete]
+    if incomplete:
+        details = "; ".join(
+            f"page {item.index} ({item.path}) is missing "
+            f"{', '.join(item.missing)}"
+            for item in incomplete
+        )
+        raise LiraFormatError(
+            f"{context}: forces page metadata status SUMMARY_NOT_VERIFIED: the "
+            f"recorded page summary is not pinned, so the page cannot be checked "
+            f"against it and no evidence may be built from it ({details})"
+        )
     return VerifiedForceSources(
-        paths=tuple(paths),
+        paths=tuple(expectation.path for expectation in expectations),
         hashes=frozenset(hashes),
-        page_records=tuple(counts),
         paged=True,
+        page_expectations=tuple(expectations),
+        flat_sheets=(
+            entry["sheets"]
+            if isinstance(entry.get("sheets"), int)
+            and not isinstance(entry.get("sheets"), bool)
+            else None
+        ),
+        flat_recorded_sha256=None,
     )
 
 
@@ -725,6 +831,135 @@ def _parameter_values_equal(
     return False
 
 
+def _verify_reimported_pages(
+    bundle: RsuImportBundle, force_sources: VerifiedForceSources, *, context: str
+) -> tuple[list[dict[str, object]], str]:
+    """Compare every re-read force page with the summary pinned in the evidence.
+
+    The recorded summary is not read back from the page: every key is recomputed
+    from the re-read workbook and its records and compared exactly (identical
+    tokens, same order, no tolerance).  A page whose summary differs stops the
+    read; a page whose summary was never pinned is refused earlier, in
+    :func:`_verify_force_pages`.
+    """
+
+    records_by_page: dict[str, list[RsuLoadForceRecord]] = {}
+    for record in bundle.force_records:
+        records_by_page.setdefault(record.source_sha256, []).append(record)
+    report: list[dict[str, object]] = []
+    if not force_sources.paged:
+        book = bundle.forces_workbooks[0]
+        actual_sheets = len(book.worksheets)
+        matches = (
+            force_sources.flat_sheets is None
+            or force_sources.flat_sheets == actual_sheets
+        )
+        if not matches:
+            raise LiraFormatError(
+                f"{context}: sources.forces.sheets records "
+                f"{force_sources.flat_sheets} worksheets but the re-read workbook "
+                f"contains {actual_sheets}"
+            )
+        summary = force_page_summary(
+            book, records_by_page.get(book.source_sha256, [])
+        )
+        report.append(
+            {
+                "page": 1,
+                "path": book.source_file,
+                "sha256": {
+                    "recorded": force_sources.flat_recorded_sha256,
+                    "actual": book.source_sha256,
+                    "matches": True,
+                },
+                "metadata_status": (
+                    "FLAT_SOURCES_SHAPE_WORKSHEET_COUNT_RE_VERIFIED"
+                    if force_sources.flat_sheets is not None
+                    else "SUMMARY_NOT_PINNED_LEGACY_FLAT_SHAPE"
+                ),
+                "summary": {
+                    key: {
+                        "recorded": (
+                            force_sources.flat_sheets if key == "sheets" else None
+                        ),
+                        "actual": (
+                            actual_sheets if key == "sheets" else summary[key]
+                        ),
+                        "matches": (
+                            force_sources.flat_sheets == actual_sheets
+                            if key == "sheets"
+                            and force_sources.flat_sheets is not None
+                            else None
+                        ),
+                    }
+                    for key in FORCE_PAGE_METADATA_KEYS
+                },
+                "sheet_names": summary["sheets"],
+                "summary_note": (
+                    "the legacy flat sources shape pins the single workbook by "
+                    "SHA-256 and records only its worksheet count; the remaining "
+                    "keys are computed from the page itself and are therefore not "
+                    "an independent check"
+                ),
+            }
+        )
+        return report, "SINGLE_WORKBOOK_FLAT_SOURCES_SHAPE"
+    for expectation in force_sources.page_expectations:
+        book = bundle.forces_workbooks[expectation.index - 1]
+        if (
+            expectation.index == 1
+            and force_sources.flat_sheets is not None
+            and force_sources.flat_sheets != len(book.worksheets)
+        ):
+            raise LiraFormatError(
+                f"{context}: sources.forces.sheets records "
+                f"{force_sources.flat_sheets} worksheets for the first page but "
+                f"the re-read page contains {len(book.worksheets)}"
+            )
+        summary = force_page_summary(
+            book, records_by_page.get(book.source_sha256, [])
+        )
+        keys = {
+            key: {
+                "recorded": expectation.values[key],
+                "actual": summary[key],
+                "matches": expectation.values[key] == summary[key],
+            }
+            for key in FORCE_PAGE_METADATA_KEYS
+        }
+        mismatched = [key for key, value in keys.items() if not value["matches"]]
+        if mismatched:
+            details = "; ".join(
+                f"{key}: recorded {keys[key]['recorded']!r} != re-read "
+                f"{keys[key]['actual']!r}"
+                for key in mismatched
+            )
+            raise LiraFormatError(
+                f"{context}: the pinned summary of force page "
+                f"{expectation.index} ({book.source_file}) does not match the "
+                f"re-read page for {mismatched} ({details}); the page or its "
+                "metadata was substituted"
+            )
+        report.append(
+            {
+                "page": expectation.index,
+                "path": book.source_file,
+                "sha256": {
+                    "recorded": expectation.recorded_sha256,
+                    "actual": expectation.sha256,
+                    "matches": True,
+                },
+                "metadata_status": "PAGE_SUMMARY_RE_VERIFIED",
+                "summary": keys,
+                "summary_note": (
+                    "every key was recomputed from the re-read page and compared "
+                    "exactly with the pinned expectation"
+                ),
+            }
+        )
+    return report, "PAGE_SUMMARY_RE_VERIFIED"
+
+
 def _recheck_against_sources(
     source: Path,
     root: Mapping[str, Any],
@@ -771,27 +1006,9 @@ def _recheck_against_sources(
             f"the records the re-read pages contain: recorded "
             f"{sorted(force_sources.hashes)}, re-read {sorted(reimported_hashes)}"
         )
-    if force_sources.paged:
-        reimported_counts = {
-            book.source_sha256: sum(
-                1
-                for record in bundle.force_records
-                if record.source_sha256 == book.source_sha256
-            )
-            for book in bundle.forces_workbooks
-        }
-        for index, (book, recorded_count) in enumerate(
-            zip(bundle.forces_workbooks, force_sources.page_records), 1
-        ):
-            if recorded_count is None:
-                continue
-            actual_count = reimported_counts[book.source_sha256]
-            if recorded_count != actual_count:
-                raise LiraFormatError(
-                    f"{source}: recorded {recorded_count} force records for page "
-                    f"{index} ({book.source_file}) but the re-read page contains "
-                    f"{actual_count}"
-                )
+    page_verification, force_metadata_status = _verify_reimported_pages(
+        bundle, force_sources, context=str(source)
+    )
     report = validate_rsu_reconstruction(bundle)
     if report.status is not RsuValidationStatus.VERIFIED:
         raise LiraFormatError(
@@ -1107,6 +1324,8 @@ def _recheck_against_sources(
         "reconstruction_status": report.status.value,
         "component_comparisons": report.component_comparisons,
         "matching_components": report.matching_components,
+        "force_metadata_status": force_metadata_status,
+        "page_verification": page_verification,
     }
 
 

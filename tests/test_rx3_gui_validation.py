@@ -196,12 +196,16 @@ def test_prepare_bundle_and_classify_manual_rx3_changes(tmp_path: Path):
     assert "calculated.rx38" in instructions
     assert "validate-rx3-result generated.rx38 calculated.rx38" in instructions
     assert bundle.creation.output_record_sha256 in instructions
+    prepared_hash = sha256(bundle.generated.read_bytes()).hexdigest()
+    assert f"--expected-generated-sha256 {prepared_hash}" in instructions
+    assert "GENERATED_SHA256" not in instructions
 
     calculated = bundle_dir / "calculated.rx38"
     _edit_rx38(bundle.generated, calculated)
     report = validate_rx3_result_files(
         bundle.generated,
         calculated,
+        expected_before_sha256=prepared_hash,
         target_record_positions=(1,),
     )
 

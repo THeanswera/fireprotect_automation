@@ -429,6 +429,135 @@ def test_paged_evidence_refuses_the_same_page_twice(tmp_path: Path) -> None:
         read_rsu_evidence(evidence_path)
 
 
+def test_paged_evidence_reverifies_every_recorded_page_summary(
+    tmp_path: Path,
+) -> None:
+    evidence_path, _ = _paged_evidence(tmp_path)
+    bundle = read_rsu_evidence(evidence_path)
+    recheck = bundle.source_recheck
+    assert recheck["force_metadata_status"] == "PAGE_SUMMARY_RE_VERIFIED"
+    pages = recheck["page_verification"]
+    assert [item["page"] for item in pages] == [1, 2]
+    for item in pages:
+        assert item["metadata_status"] == "PAGE_SUMMARY_RE_VERIFIED"
+        assert item["sha256"]["matches"] is True
+        assert set(item["summary"]) == {
+            "sheets",
+            "sheets_with_records",
+            "records",
+            "elements_min",
+            "elements_max",
+            "load_cases",
+            "section_stations",
+        }
+        assert all(entry["matches"] is True for entry in item["summary"].values())
+    assert pages[0]["summary"]["sheets"] == {
+        "recorded": ["1", "2"],
+        "actual": ["1", "2"],
+        "matches": True,
+    }
+    assert pages[1]["summary"]["load_cases"]["recorded"] == ["3", "4"]
+
+
+def test_paged_evidence_refuses_substituted_page_metadata(tmp_path: Path) -> None:
+    for key, value in (
+        ("load_cases", ["99"]),
+        ("sheets", ["9"]),
+        ("records", 5),
+        ("elements_min", 4),
+        ("elements_max", None),
+        ("section_stations", ["1"]),
+    ):
+        case = tmp_path / key
+        case.mkdir()
+        evidence_path, _ = _paged_evidence(case)
+
+        def tamper(payload: dict[str, object], key: str = key, value: object = value) -> None:
+            payload["sources"]["forces"]["pages"][1][key] = value  # type: ignore[index]
+
+        _rewrite_evidence(evidence_path, tamper)
+        with pytest.raises(LiraFormatError, match="metadata was substituted"):
+            read_rsu_evidence(evidence_path)
+
+
+def test_paged_evidence_refuses_a_substituted_flat_worksheet_count(
+    tmp_path: Path,
+) -> None:
+    evidence_path, _ = _paged_evidence(tmp_path)
+
+    def tamper(payload: dict[str, object]) -> None:
+        payload["sources"]["forces"]["sheets"] = 9  # type: ignore[index]
+
+    _rewrite_evidence(evidence_path, tamper)
+    with pytest.raises(LiraFormatError, match="worksheets for the first page"):
+        read_rsu_evidence(evidence_path)
+
+
+def test_paged_evidence_refuses_a_page_without_a_pinned_summary(
+    tmp_path: Path,
+) -> None:
+    evidence_path, _ = _paged_evidence(tmp_path)
+
+    def drop_key(payload: dict[str, object]) -> None:
+        del payload["sources"]["forces"]["pages"][0]["elements_min"]  # type: ignore[index]
+
+    _rewrite_evidence(evidence_path, drop_key)
+    with pytest.raises(LiraFormatError, match="SUMMARY_NOT_VERIFIED"):
+        read_rsu_evidence(evidence_path)
+
+
+def test_paged_evidence_refuses_a_swapped_page(tmp_path: Path) -> None:
+    evidence_path, pages = _paged_evidence(tmp_path)
+    pages[1].write_bytes(pages[0].read_bytes())
+    with pytest.raises(LiraMappingError, match="changed"):
+        read_rsu_evidence(evidence_path)
+
+
+def test_paged_evidence_refuses_swapped_page_entries(tmp_path: Path) -> None:
+    evidence_path, _ = _paged_evidence(tmp_path)
+
+    def swap_entries(payload: dict[str, object]) -> None:
+        pages = payload["sources"]["forces"]["pages"]  # type: ignore[index]
+        pages[0], pages[1] = pages[1], pages[0]
+
+    _rewrite_evidence(evidence_path, swap_entries)
+    with pytest.raises(LiraFormatError, match="first force page sha256"):
+        read_rsu_evidence(evidence_path)
+
+
+def test_flat_sources_shape_rechecks_the_recorded_worksheet_count(
+    tmp_path: Path,
+) -> None:
+    bundle = _import(_write_bundle(tmp_path))
+    prepared = prepare_rsu_review_bundle(
+        bundle, validate_rsu_reconstruction(bundle), tmp_path / "review"
+    )
+    evidence_path = Path(str(prepared["evidence"]))
+    page = read_rsu_evidence(evidence_path).source_recheck["page_verification"][0]
+    assert page["metadata_status"] == "FLAT_SOURCES_SHAPE_WORKSHEET_COUNT_RE_VERIFIED"
+    assert page["summary"]["sheets"]["matches"] is True
+    assert page["summary"]["load_cases"]["matches"] is None
+    assert "not an independent check" in page["summary_note"]
+
+    def break_sheets(payload: dict[str, object]) -> None:
+        payload["sources"]["forces"]["sheets"] = 7  # type: ignore[index]
+
+    _rewrite_evidence(evidence_path, break_sheets)
+    with pytest.raises(LiraFormatError, match="worksheets"):
+        read_rsu_evidence(evidence_path)
+
+
+def test_paged_evidence_refuses_a_non_integer_record_count(tmp_path: Path) -> None:
+    evidence_path, _ = _paged_evidence(tmp_path)
+
+    def break_records(payload: dict[str, object]) -> None:
+        payload["sources"]["forces"]["pages"][0]["records"] = "2"  # type: ignore[index]
+
+    _rewrite_evidence(evidence_path, break_records)
+    with pytest.raises(LiraFormatError, match="records must be a positive integer"):
+        read_rsu_evidence(evidence_path)
+
+
 def test_residual_statistics_state_the_envelope_and_install_no_policy(tmp_path: Path) -> None:
     report = validate_rsu_reconstruction(_import(_write_bundle(
         tmp_path, published_rows=[_published_row("A1", 2, "1 2", 4.36, 1.45)]

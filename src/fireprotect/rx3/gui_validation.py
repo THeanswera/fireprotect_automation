@@ -16,12 +16,13 @@ from typing import Any
 from ..execution import ExecutionMode
 from ..project_io import read_project_element_json
 from .diff import diff_records
-from .parser import construction_records, read_rx38
+from .parser import Rx38Document, construction_records, read_rx38_document
 from .project_adapter import create_rx38_from_project_element
 from .project_adapter import Rx38CreationReport
 from .result import rx38_record_to_rx3_result
 from .safety import GuiExecutionEvidence, Rx3SafetyContext, rx38_record_fingerprint
 from .schema import field_spec
+from .structural_diff import diff_rx38_documents
 
 
 class Rx3GuiValidationError(ValueError):
@@ -75,14 +76,21 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
-def _read_stable_construction_records(path: Path):
+def _read_stable_document(path: Path) -> tuple[Rx38Document, str]:
+    """Read one RX38 document and its SHA-256, refusing a file that changed.
+
+    The whole document is kept, not only the ``Tconstr`` records, because the
+    post-calculation check must also see additions, removals, non-construction
+    records and the raw layout.
+    """
+
     checksum = _sha256(path)
-    records = construction_records(read_rx38(path))
+    document = read_rx38_document(path)
     if _sha256(path) != checksum:
         raise Rx3GuiValidationError(
             f"RX38 changed while it was being validated: {path}"
         )
-    return records, checksum
+    return document, checksum
 
 
 def _write_new(path: Path, content: str) -> None:
@@ -320,9 +328,10 @@ def prepare_rx3_validation(
         }
         for item in creation.changed_fields
     ]
+    generated_sha256 = _sha256(generated)
     payload: dict[str, Any] = {
         "template": {"file": template.name, "sha256": _sha256(template)},
-        "generated": {"file": generated.name, "sha256": _sha256(generated)},
+        "generated": {"file": generated.name, "sha256": generated_sha256},
         "project_element": {
             "file": project_copy.name,
             "sha256": _sha256(project_copy),
@@ -380,7 +389,15 @@ def prepare_rx3_validation(
     `heating_sides`, and is bound to the SHA-256 of the exact template Tconstr.
     `heated_perimeter` alone is not RX3 heating-side evidence; RX38 heating-side
     indices remain unmapped.
-""".replace("BEFORE_RECORD_SHA256", creation.output_record_sha256),
+
+`--expected-generated-sha256` уже содержит SHA-256 подготовленного
+`generated.rx38`; не заменяйте его хешем другого файла и не подставляйте хеш
+`calculated.rx38`. Закреплённый хеш подтверждает только то, что проверяется
+результат от точно зафиксированного подготовленного файла; он не доказывает
+происхождение AFTER-файла.
+""".replace("BEFORE_RECORD_SHA256", creation.output_record_sha256).replace(
+            "GENERATED_SHA256", generated_sha256
+        ),
     )
     return Rx3ValidationBundle(
         directory,
@@ -425,41 +442,63 @@ def validate_rx3_result_files(
     before_rx38: str | Path,
     after_rx38: str | Path,
     *,
+    expected_before_sha256: str,
     json_report: str | Path | None = None,
     markdown_report: str | Path | None = None,
     overwrite: bool = False,
     gui_execution_evidence: GuiExecutionEvidence = GuiExecutionEvidence.NOT_PROVIDED,
     evidence_reference: str | None = None,
-    expected_before_sha256: str | None = None,
     mode: ExecutionMode = ExecutionMode.VALIDATION,
     target_record_fingerprints: Sequence[str] = (),
     target_record_positions: Sequence[int] = (),
     target_marks: Sequence[str] = (),
 ) -> Rx3ValidationReport:
+    """Compare a calculated RX38 with the exactly pinned prepared input.
+
+    ``expected_before_sha256`` is a required, independently pinned value: the
+    check exists to prove that the file under validation is the file that was
+    prepared and handed to the engineer.  Passing a hash computed from
+    ``before_rx38`` inside the same call would make the comparison a tautology
+    and is therefore not offered.  A caller that has no recorded expectation
+    must obtain one first (the CLI requires the flag, the pipeline uses the
+    hash recorded when the bundle was generated, and the prepared manual
+    instructions carry the value).  The recorded report keeps both the pinned
+    and the actual hash; the pin is a check of the AFTER result against the
+    fixed BEFORE file and is not proof of the provenance of the AFTER file.
+    """
+
     before_path = Path(before_rx38).resolve(strict=True)
     after_path = Path(after_rx38).resolve(strict=True)
+    if not isinstance(expected_before_sha256, str):
+        raise TypeError("expected_before_sha256 must be str")
+    expected = expected_before_sha256.strip().casefold()
+    if not expected:
+        raise Rx3GuiValidationError("expected_before_sha256 must not be blank")
+    if len(expected) != 64 or any(
+        character not in "0123456789abcdef" for character in expected
+    ):
+        raise Rx3GuiValidationError(
+            "expected_before_sha256 must be a 64-character hexadecimal SHA-256, "
+            f"got {expected_before_sha256!r}"
+        )
     if not isinstance(overwrite, bool):
         raise TypeError("overwrite must be bool")
     if not isinstance(gui_execution_evidence, GuiExecutionEvidence):
         gui_execution_evidence = GuiExecutionEvidence(gui_execution_evidence)
     if not isinstance(mode, ExecutionMode):
         raise TypeError("mode must be ExecutionMode")
-    before, before_hash = _read_stable_construction_records(before_path)
-    after, after_hash = _read_stable_construction_records(after_path)
-    if expected_before_sha256 is not None:
-        expected = expected_before_sha256.strip().casefold()
-        if not expected:
-            raise Rx3GuiValidationError("expected_before_sha256 must not be blank")
-        if before_hash.casefold() != expected:
-            raise Rx3GuiValidationError(
-                "the calculated result is not bound to the prepared input: "
-                f"generated.rx38 sha256 {before_hash} does not match the pinned "
-                f"{expected_before_sha256}"
-            )
-    if len(before) != len(after):
+    before_document, before_hash = _read_stable_document(before_path)
+    after_document, after_hash = _read_stable_document(after_path)
+    before = construction_records(before_document.records)
+    after = construction_records(after_document.records)
+    if before_hash.casefold() != expected:
         raise Rx3GuiValidationError(
-            f"Tconstr count changed: before={len(before)}, after={len(after)}"
+            "the calculated result is not bound to the prepared input: "
+            f"generated.rx38 sha256 {before_hash} does not match the pinned "
+            f"{expected_before_sha256}"
         )
+    structural = diff_rx38_documents(before_document, after_document)
+    structure_changed = bool(structural["structure_changed"])
     target_positions, target_resolution = _resolve_target_positions(
         before,
         target_record_fingerprints=target_record_fingerprints,
@@ -483,7 +522,19 @@ def validate_rx3_result_files(
     expected_output_fields = frozenset({44, 54})
     calculated_service_fields = frozenset({52, 53, 76, 78})
     allowed_calculated_result_fields = expected_output_fields | calculated_service_fields
-    for position, (old, new) in enumerate(zip(before, after), 1):
+    structural_pairs = {
+        item["before_position"]: item
+        for item in structural["record_sequence"]["replaced"]
+    }
+    tconstr_record_positions = [
+        record_position
+        for record_position, record in enumerate(before_document.records, 1)
+        if record.record_type == "Tconstr"
+    ]
+    target_raw_formatting_change_indices: set[int] = set()
+    allowed_raw_formatting_change_indices: set[int] = set()
+    analysis_pairs = [] if structure_changed else list(zip(before, after))
+    for position, (old, new) in enumerate(analysis_pairs, 1):
         changes = [_change_dict(item) for item in diff_records(old, new)]
         changed_indices = {item["index"] for item in changes}
         change_sets.append(changed_indices)
@@ -513,13 +564,62 @@ def validate_rx3_result_files(
             semantic_changes - allowed_calculated_result_fields
         )
         is_target = position in target_positions
-        if not is_target and changes:
+        structural_pair = structural_pairs.get(tconstr_record_positions[position - 1])
+        raw_only_changes = (
+            list(structural_pair["raw_token_changes"])
+            if structural_pair is not None
+            else []
+        )
+        raw_only_changes = [
+            item for item in raw_only_changes if item["decoded_equal"]
+        ]
+        raw_only_indices = {item["index"] for item in raw_only_changes}
+        newline_changed = bool(
+            structural_pair is not None and structural_pair["newline_changed"]
+        )
+        if is_target:
+            target_raw_formatting_change_indices |= (
+                raw_only_indices - allowed_calculated_result_fields
+            )
+            allowed_raw_formatting_change_indices |= (
+                raw_only_indices & allowed_calculated_result_fields
+            )
+        if not is_target and (changes or raw_only_changes or newline_changed):
+            kinds = []
+            if changes:
+                kinds.append("FIELD_CHANGE")
+            if raw_only_changes:
+                kinds.append("RAW_TOKEN_ONLY_CHANGE")
+            if newline_changed:
+                kinds.append("LINE_ENDING_CHANGE")
             unexpected_non_target_changes.append(
                 {
                     "position": position,
                     "before_mark": old.mark,
                     "after_mark": new.mark,
                     "changes": changes,
+                    "kinds": kinds,
+                    "raw_only_token_changes": raw_only_changes,
+                    "newline_before": (
+                        structural_pair["newline_before"]
+                        if structural_pair is not None
+                        else old.newline
+                    ),
+                    "newline_after": (
+                        structural_pair["newline_after"]
+                        if structural_pair is not None
+                        else new.newline
+                    ),
+                    "raw_line_before": (
+                        structural_pair["raw_line_before"]
+                        if structural_pair is not None
+                        else None
+                    ),
+                    "raw_line_after": (
+                        structural_pair["raw_line_after"]
+                        if structural_pair is not None
+                        else None
+                    ),
                 }
             )
         records.append(
@@ -559,34 +659,57 @@ def validate_rx3_result_files(
         )
 
     byte_identical = before_hash == after_hash
-    target_result_fields_changed = {
-        position: expected_output_fields.issubset(
-            material_result_change_sets[position - 1]
+    field_level_analysis_performed = not structure_changed
+    target_result_fields_changed: dict[int, bool] = {}
+    result_fields_changed: bool | None = None
+    non_target_records_semantically_unchanged: bool | None = None
+    prepared_inputs_preserved: bool | None = None
+
+    def target_union(change_sets: list[set[int]]) -> list[int]:
+        if not field_level_analysis_performed:
+            return []
+        return sorted(
+            {
+                index
+                for position in sorted(target_positions)
+                for index in change_sets[position - 1]
+            }
         )
-        for position in sorted(target_positions)
-    }
-    result_fields_changed = all(target_result_fields_changed.values())
-    non_target_records_text_unchanged = not unexpected_non_target_changes
-    non_target_records_semantically_unchanged = all(
-        records[position - 1]["semantic_changed"] is False
-        for position in range(1, len(records) + 1)
-        if position not in target_positions
-    )
-    prepared_inputs_preserved = not any(
-        input_change_sets[position - 1] for position in sorted(target_positions)
-    )
-    target_unexpected_change_indices = sorted(
-        {
-            index
+
+    if field_level_analysis_performed:
+        target_result_fields_changed = {
+            position: expected_output_fields.issubset(
+                material_result_change_sets[position - 1]
+            )
             for position in sorted(target_positions)
-            for index in unexpected_change_sets[position - 1]
         }
+        result_fields_changed = all(target_result_fields_changed.values())
+        non_target_records_semantically_unchanged = all(
+            records[position - 1]["semantic_changed"] is False
+            for position in range(1, len(records) + 1)
+            if position not in target_positions
+        )
+        prepared_inputs_preserved = not any(
+            input_change_sets[position - 1] for position in sorted(target_positions)
+        )
+    non_target_records_text_unchanged: bool | None = (
+        not unexpected_non_target_changes if field_level_analysis_performed else None
     )
+    target_unexpected_change_indices = target_union(unexpected_change_sets)
+    unsafe_production_change_indices = (
+        sorted(set().union(*unsafe_change_sets) if unsafe_change_sets else set())
+        if field_level_analysis_performed
+        else []
+    )
+    target_input_change_indices = target_union(unsafe_change_sets)
+    input_field_change_indices = target_union(input_change_sets)
+    calculated_service_change_indices = target_union(calculated_service_change_sets)
     recalculation_proven = (
-        not byte_identical
-        and result_fields_changed
-        and non_target_records_text_unchanged
-        and prepared_inputs_preserved
+        field_level_analysis_performed
+        and not byte_identical
+        and result_fields_changed is True
+        and non_target_records_text_unchanged is True
+        and prepared_inputs_preserved is True
         and not target_unexpected_change_indices
     )
     evidence_reference_valid = (
@@ -596,11 +719,14 @@ def validate_rx3_result_files(
         mode is ExecutionMode.PRODUCTION
         and any(indices for indices in unsafe_change_sets)
     )
+    raw_formatting_preserved = not target_raw_formatting_change_indices
     gui_verified = (
         recalculation_proven
-        and prepared_inputs_preserved
+        and not structure_changed
+        and raw_formatting_preserved
+        and prepared_inputs_preserved is True
         and evidence_reference_valid
-        and non_target_records_text_unchanged
+        and non_target_records_text_unchanged is True
         and not unsafe_production_changes
         and gui_execution_evidence
         in {
@@ -609,14 +735,18 @@ def validate_rx3_result_files(
         }
     )
     status = (
-        "RX3_UNEXPECTED_NON_TARGET_CHANGE"
+        "RX3_DOCUMENT_STRUCTURE_CHANGED"
+        if structure_changed
+        else "RX3_UNEXPECTED_NON_TARGET_CHANGE"
         if not non_target_records_text_unchanged
         else "RX3_PRODUCTION_INPUTS_CHANGED"
         if unsafe_production_changes
         else "RX3_TARGET_INPUTS_CHANGED"
-        if not prepared_inputs_preserved
+        if prepared_inputs_preserved is not True
         else "RX3_UNEXPECTED_FIELD_CHANGE"
         if target_unexpected_change_indices
+        else "RX3_RAW_FORMATTING_CHANGED"
+        if not raw_formatting_preserved
         else "RX3_RECALCULATION_NOT_PROVEN"
         if not recalculation_proven
         else "RX3_PRODUCTION_INPUTS_CHANGED"
@@ -643,54 +773,74 @@ def validate_rx3_result_files(
         ),
         "unexpected_non_target_changes": unexpected_non_target_changes,
         "rx3_recalculation_proven": recalculation_proven,
+        "field_level_analysis_performed": field_level_analysis_performed,
         "execution_mode": mode.value,
         "gui_execution_evidence": gui_execution_evidence.value,
         "evidence_reference": evidence_reference,
         "evidence_reference_valid": evidence_reference_valid,
         "gui_recalculation_verified": gui_verified,
-        "unsafe_production_change_indices": sorted(
-            set().union(*unsafe_change_sets) if unsafe_change_sets else set()
+        "structure_changed": structure_changed,
+        "raw_formatting_preserved": raw_formatting_preserved,
+        "structural_blocking_note": (
+            "The whole document is compared, not only the target Tconstr: record "
+            "types, their count and order, added and removed records, non-"
+            "construction records, encoding, BOM, line count, blank lines and line "
+            "endings. A difference there sets structure_changed and stops the "
+            "field-level analysis of the target. Raw token spelling is reported "
+            "separately: a spelling change outside the allowed calculated/result "
+            "fields is not accepted as a successful GUI check either."
         ),
-        "target_input_change_indices": sorted(
-            {
-                index
-                for position in sorted(target_positions)
-                for index in unsafe_change_sets[position - 1]
-            }
-        ),
+        "structural_diff": structural,
+        "unsafe_production_change_indices": unsafe_production_change_indices,
+        "target_input_change_indices": target_input_change_indices,
         "expected_before_sha256": expected_before_sha256,
+        "expected_before_sha256_normalized": expected,
         "actual_before_sha256": before_hash,
         "prepared_input_binding_note": (
             "The pinned SHA-256 is a check of the result against the exactly fixed "
             "BEFORE file; it is not proof of the provenance of the AFTER file."
         ),
-        "input_field_change_indices": sorted(
-            {
-                index
-                for position in sorted(target_positions)
-                for index in input_change_sets[position - 1]
-            }
-        ),
-        "calculated_service_change_indices": sorted(
-            {
-                index
-                for position in sorted(target_positions)
-                for index in calculated_service_change_sets[position - 1]
-            }
-        ),
+        "input_field_change_indices": input_field_change_indices,
+        "calculated_service_change_indices": calculated_service_change_indices,
         "target_unexpected_change_indices": target_unexpected_change_indices,
+        "target_raw_formatting_change_indices": sorted(
+            target_raw_formatting_change_indices
+        ),
+        "allowed_raw_formatting_change_indices": sorted(
+            allowed_raw_formatting_change_indices
+        ),
+        "raw_formatting_note": (
+            "Raw token spelling outside the allowed calculated/result fields "
+            "(added or removed quotes, surrounding whitespace) is compared as raw "
+            "text too, together with line endings, BOM and blank lines. A change "
+            "there is not an input change by itself, but it is not accepted as a "
+            "successful GUI check. A CONFIRMED numeric field rewritten to an equal "
+            "Decimal (for example 30,00 -> 30) is reported as "
+            "RX3_TOKEN_NORMALIZATION and is not this kind of change."
+        ),
         "prepared_inputs_preserved": prepared_inputs_preserved,
         "recalculation_note": (
-            "The recorded result fields 44/54 changed, so the file content changed. This "
+            "The record structure or the raw layout of the document changed: records "
+            "were added, removed or edited outside the target construction, or the "
+            "encoding, BOM, line endings or blank lines differ. The field-level "
+            "comparison of the target is not performed, and no result is accepted. "
+            "The machine-readable structural diff below names every difference."
+            if structure_changed
+            else "Raw token spelling changed outside the allowed calculated/result "
+            f"fields ({sorted(target_raw_formatting_change_indices)}) while the decoded "
+            "values stayed equal: the file was rewritten in a place the prepared "
+            "calculation does not authorize, so the GUI check does not succeed."
+            if not raw_formatting_preserved
+            else "The recorded result fields 44/54 changed, so the file content changed. This "
             "proves neither that the Calculate button was pressed nor that the computation "
             "is correct: the GUI actions and the meaning of the result are recorded "
             "separately by the engineer."
             if recalculation_proven
             else "Target input fields changed after the input was prepared "
-            f"({sorted({index for position in sorted(target_positions) for index in unsafe_change_sets[position - 1]})}): "
+            f"({target_input_change_indices}): "
             "the file may have been recalculated, but not for the prepared input, so the "
             "result does not confirm the prepared calculation. The full diff is kept below."
-            if not prepared_inputs_preserved
+            if prepared_inputs_preserved is not True
             else "Unchanged or partially changed result fields 44/54 prove neither that "
             "the Calculate button was pressed with unchanged numbers nor that it was not "
             "pressed at all: the file content alone cannot separate those two cases. Only "
@@ -759,8 +909,67 @@ def validate_rx3_result_files(
         f"- Evidence reference valid: `{evidence_reference_valid}`",
         f"- GUI recalculation verified: `{gui_verified}`",
         f"- Unsafe production changes: `{payload['unsafe_production_change_indices']}`",
+        f"- Document structure changed: `{structure_changed}`",
+        f"- Raw formatting preserved: `{raw_formatting_preserved}`",
+        f"- Field-level target analysis performed: `{field_level_analysis_performed}`",
+        f"- Pinned BEFORE SHA-256 (expected): `{payload['expected_before_sha256']}`",
+        f"- Pinned BEFORE SHA-256 (normalized): `{payload['expected_before_sha256_normalized']}`",
+        f"- Actual BEFORE SHA-256: `{payload['actual_before_sha256']}`",
+        "",
+        "## Структурная и сырая сверка документа",
+        "",
+        "Сравниваются все записи целиком: типы, число, порядок, нетиповые записи,",
+        "кодировка, BOM, число строк, пустые строки, окончания строк и сырое",
+        "написание токенов. Любое различие вне разрешённых расчётных полей целевой",
+        "записи не даёт успешного статуса проверки GUI.",
+        "",
+        f"- Alignment: `{structural['record_sequence']['alignment']}`",
+        f"- Records: `{structural['record_sequence']['count']}`",
+        f"- Types changed: `{structural['record_sequence']['types']['changed']}`",
+        f"- Added records: `{len(structural['record_sequence']['added'])}`",
+        f"- Removed records: `{len(structural['record_sequence']['removed'])}`",
+        f"- Replaced records: `{len(structural['record_sequence']['replaced'])}`",
+        f"- Non-Tconstr changed records: `{len(structural['record_sequence']['non_tconstr_replacements'])}`",
+        f"- Encoding: `{structural['raw_layout']['encoding']}`",
+        f"- BOM: `{structural['raw_layout']['bom']}`",
+        f"- Line count: `{structural['raw_layout']['line_count']}`",
+        f"- Blank lines: `{structural['raw_layout']['blank_lines']}`",
+        f"- Trailing newline: `{structural['raw_layout']['trailing_newline']}`",
+        f"- Line-ending changes: `{len(structural['raw_layout']['newline_changes'])}`",
+        f"- Raw-only token changes (decoded values equal): `{len(structural['raw_layout']['raw_only_token_changes'])}`",
+        f"- Target raw formatting changes outside allowed fields: `{sorted(target_raw_formatting_change_indices)}`",
+        f"- Allowed raw formatting changes: `{sorted(allowed_raw_formatting_change_indices)}`",
         "",
     ]
+    for item in structural["record_sequence"]["added"]:
+        lines.append(
+            f"- Добавлена запись: позиция {item['position']}, тип `{item['record_type']}`, "
+            f"строка {item['line_number']}: `{item['raw_line']}`"
+        )
+    for item in structural["record_sequence"]["removed"]:
+        lines.append(
+            f"- Удалена запись: позиция {item['position']}, тип `{item['record_type']}`, "
+            f"строка {item['line_number']}: `{item['raw_line']}`"
+        )
+    for item in structural["record_sequence"]["non_tconstr_replacements"]:
+        lines.append(
+            f"- Изменена нетиповая запись: позиции {item['before_position']} → "
+            f"{item['after_position']}, тип `{item['record_type_before']}` → "
+            f"`{item['record_type_after']}`"
+        )
+    for item in structural["raw_layout"]["newline_changes"]:
+        lines.append(
+            f"- Окончание строки: запись {item['before_position']} → "
+            f"{item['after_position']}, `{item['before']!r}` → `{item['after']!r}`"
+        )
+    for item in structural["raw_layout"]["raw_only_token_changes"]:
+        for change in item["changes"]:
+            lines.append(
+                f"- Сырое написание: запись {item['before_position']} → "
+                f"{item['after_position']}, поле {change['index']}: "
+                f"`{change['before_token']}` → `{change['after_token']}`"
+            )
+    lines.append("")
     for record in records:
         lines.extend(
             [
