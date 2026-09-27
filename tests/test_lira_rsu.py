@@ -493,6 +493,55 @@ def test_paged_evidence_refuses_a_substituted_flat_worksheet_count(
         read_rsu_evidence(evidence_path)
 
 
+def test_paged_evidence_requires_an_integer_worksheet_count(tmp_path: Path) -> None:
+    """The paged shape is produced with an integer count; a wrong type is refused."""
+
+    for value in ("2", True, None, [2], 2.0):
+        case = tmp_path / f"sheets-{type(value).__name__}-{value!r}".replace(
+            "[", ""
+        ).replace("]", "")
+        case.mkdir()
+        evidence_path, _ = _paged_evidence(case)
+
+        def tamper(payload: dict[str, object], value: object = value) -> None:
+            payload["sources"]["forces"]["sheets"] = value  # type: ignore[index]
+
+        _rewrite_evidence(evidence_path, tamper)
+        with pytest.raises(LiraFormatError, match="worksheet count"):
+            read_rsu_evidence(evidence_path)
+
+
+def test_paged_evidence_requires_a_recorded_worksheet_count(tmp_path: Path) -> None:
+    evidence_path, _ = _paged_evidence(tmp_path)
+
+    def drop_sheets(payload: dict[str, object]) -> None:
+        del payload["sources"]["forces"]["sheets"]  # type: ignore[index]
+
+    _rewrite_evidence(evidence_path, drop_sheets)
+    with pytest.raises(LiraFormatError, match="must record the worksheet count"):
+        read_rsu_evidence(evidence_path)
+
+
+def test_flat_evidence_without_a_worksheet_count_still_reads(tmp_path: Path) -> None:
+    """The legacy flat shape keeps working when the old optional field is absent."""
+
+    bundle = _import(_write_bundle(tmp_path))
+    prepared = prepare_rsu_review_bundle(
+        bundle, validate_rsu_reconstruction(bundle), tmp_path / "review"
+    )
+    evidence_path = Path(str(prepared["evidence"]))
+
+    def drop_sheets(payload: dict[str, object]) -> None:
+        del payload["sources"]["forces"]["sheets"]  # type: ignore[index]
+
+    _rewrite_evidence(evidence_path, drop_sheets)
+    rechecked = read_rsu_evidence(evidence_path).source_recheck
+    assert rechecked["force_metadata_status"] == "SINGLE_WORKBOOK_FLAT_SOURCES_SHAPE"
+    assert rechecked["page_verification"][0]["metadata_status"] == (
+        "SUMMARY_NOT_PINNED_LEGACY_FLAT_SHAPE"
+    )
+
+
 def test_paged_evidence_refuses_a_page_without_a_pinned_summary(
     tmp_path: Path,
 ) -> None:

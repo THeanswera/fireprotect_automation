@@ -37,6 +37,126 @@ def _write_text(path: Path, lines: list[str], encoding: str = "utf-8") -> None:
     path.write_bytes("".join(lines).encode(encoding))
 
 
+def _lines(path: Path) -> list[str]:
+    return path.read_bytes().decode("utf-8").splitlines(keepends=True)
+
+
+def _set_field(line: str, index: int, value: str) -> str:
+    newline = "\r\n" if line.endswith("\r\n") else line[-1:] if line.endswith(("\r", "\n")) else ""
+    content = line[: len(line) - len(newline)] if newline else line
+    tokens = content.split(";")
+    tokens[index] = value
+    return ";".join(tokens) + newline
+
+
+def _identical_outside_results(tmp_path: Path) -> tuple[Path, list[str]]:
+    """One document with two Tconstr records that differ only in fields 44/54."""
+
+    path = _document_with_two_records(tmp_path)
+    lines = _lines(path)
+    target = next(i for i, line in enumerate(lines) if line.startswith("Tconstr"))
+    lines[target + 1] = _set_field(lines[target], 44, "700")
+    lines[target + 1] = _set_field(lines[target + 1], 54, "20")
+    _write_text(path, lines)
+    return path, lines
+
+
+def test_a_pure_tconstr_exchange_is_detected(tmp_path: Path):
+    """Two records identical outside 44/54 can be swapped without any field diff."""
+
+    masked = frozenset({44, 54})
+    path, lines = _identical_outside_results(tmp_path)
+    before = read_rx38_document(path)
+    source = _lines(path)
+    target = next(i for i, line in enumerate(source) if line.startswith("Tconstr"))
+    source[target], source[target + 1] = source[target + 1], source[target]
+    _write_text(path, source)
+    after = read_rx38_document(path)
+
+    report = diff_rx38_documents(
+        before, after, identity_masked_fields=masked
+    )
+    identity = report["tconstr_identity"]
+    assert identity["masked_fields"] == [44, 54]
+    assert [item["key"] for item in identity["before"]] == [
+        item["key"] for item in identity["after"]
+    ]
+    groups = identity["duplicate_groups"]
+    assert len(groups) == 1
+    assert groups[0]["before_tconstr_positions"] == [1, 2]
+    assert groups[0]["after_tconstr_positions"] == [1, 2]
+    exchanges = identity["exchanges"]
+    assert len(exchanges) == 1
+    assert exchanges[0]["record_type"] == "Tconstr"
+    assert exchanges[0]["record_positions"] == sorted(
+        [item["record_position"] for item in identity["before"]]
+    )
+    assert exchanges[0]["before_raw_lines"][0].startswith("Tconstr;")
+    # The line swap is not a field difference: only the exchange exposes it.
+    assert report["raw_layout"]["line_endings"]["changed"] is False
+    assert all(
+        item["changed_indices"] in ([44, 54], [54, 44])
+        for item in report["record_sequence"]["replaced"]
+    )
+
+
+def test_the_identity_mask_separates_record_identity_from_result_fields(
+    tmp_path: Path,
+):
+    path, _ = _identical_outside_results(tmp_path)
+    document = read_rx38_document(path)
+
+    unmasked = diff_rx38_documents(document, document)
+    assert unmasked["tconstr_identity"]["duplicate_groups"] == []
+    masked = diff_rx38_documents(
+        document, document, identity_masked_fields=frozenset({44, 54})
+    )
+    groups = masked["tconstr_identity"]["duplicate_groups"]
+    assert len(groups) == 1
+    assert groups[0]["before_tconstr_positions"] == [1, 2]
+    assert masked["tconstr_identity"]["exchanges"] == []
+
+
+def test_a_blank_line_ending_change_is_reported_with_its_line_number(
+    tmp_path: Path,
+):
+    path = _document_with_two_records(tmp_path)
+    lines = _lines(path)
+    lines.insert(1, "\r\n")
+    _write_text(path, lines)
+    before = read_rx38_document(path)
+    assert blank_line_numbers(before) == (2,)
+    assert len(before.records) == 3
+
+    lines[1] = "\n"
+    _write_text(path, lines)
+    after = read_rx38_document(path)
+
+    report = diff_rx38_documents(before, after)
+    endings = report["raw_layout"]["line_endings"]
+    assert endings["changed"] is True
+    assert endings["before_kinds"] == ["CRLF"]
+    assert endings["after_kinds"] == ["CRLF", "LF"]
+    assert endings["changed_lines"] == [
+        {
+            "line": 2,
+            "before": "CRLF",
+            "after": "LF",
+            "raw_before": "\r\n",
+            "raw_after": "\n",
+            "blank_line": True,
+        }
+    ]
+    assert report["raw_layout_changed"] is True
+    assert report["structure_changed"] is True
+    # The record numbers, blank-line numbers and record content stay identical:
+    # only the physical line ending exposes the rewrite.
+    assert report["raw_layout"]["blank_lines"]["changed"] is False
+    assert report["raw_layout"]["line_count"]["changed"] is False
+    assert report["raw_layout"]["trailing_newline"]["changed"] is False
+    assert report["record_sequence"]["replaced"] == []
+
+
 def test_identical_documents_report_no_difference(tmp_path: Path):
     path = _document_with_two_records(tmp_path)
     document = read_rx38_document(path)

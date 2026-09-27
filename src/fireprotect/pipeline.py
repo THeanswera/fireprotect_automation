@@ -101,22 +101,17 @@ def _hash(path: Path) -> str:
     return digest.hexdigest()
 
 
-def _pinned_generated_hash(
-    element_id: str, generated: Path, recorded: object
-) -> str:
-    """Return the hash recorded when this bundle was generated.
+GENERATION_PIN_SOURCE = "diff_before_after.json:generated.sha256"
 
-    The pin must be an independent expectation, not a fresh hash of the file
-    under validation: a fresh hash would make the comparison a tautology and a
-    file replaced between generation and validation would still be accepted.
-    The recorded value is used as the pin and the file on disk must still match
-    it, otherwise the run stops.
-    """
+
+def _validated_recorded_pin(element_id: str, recorded: object) -> str:
+    """Check the shape of a recorded SHA-256 before it is used as a pin."""
 
     if not isinstance(recorded, str) or not recorded.strip():
         raise PipelineError(
-            f"Element {element_id}: the audit records no generated.rx38 SHA-256, "
-            "so the calculated result cannot be bound to the prepared input"
+            f"Element {element_id}: no generated.rx38 SHA-256 is recorded by the "
+            "generation manifest, so the calculated result cannot be bound to the "
+            "prepared input"
         )
     pin = recorded.strip().casefold()
     if len(pin) != 64 or any(character not in "0123456789abcdef" for character in pin):
@@ -124,14 +119,62 @@ def _pinned_generated_hash(
             f"Element {element_id}: the recorded generated.rx38 SHA-256 is not a "
             f"64-character hexadecimal digest: {recorded!r}"
         )
+    return pin
+
+
+def _pin_facts(
+    element_id: str, generated: Path, recorded: object
+) -> dict[str, str]:
+    """Verify the file against the saved pin and report both hashes.
+
+    ``recorded`` must be the expectation saved by the generation artifact: the
+    observed hash is compared with it and is never substituted for it.
+    """
+
+    pin = _validated_recorded_pin(element_id, recorded)
     actual = _hash(generated)
     if actual != pin:
         raise PipelineError(
-            f"Element {element_id}: generated.rx38 no longer matches the hash "
-            "recorded at generation time; the calculated result cannot be bound "
-            "to the prepared input"
+            f"Element {element_id}: generated.rx38 does not match the hash "
+            "recorded by the generation manifest; the calculated result cannot "
+            "be bound to the prepared input"
         )
-    return pin
+    return {"expected_sha256": pin, "actual_sha256": actual}
+
+
+def _pinned_generated_hash(
+    element_id: str, generated: Path, recorded: object
+) -> str:
+    """Return the pin recorded when this bundle was generated.
+
+    The pin must be an independent expectation, not a fresh hash of the file
+    under validation: a fresh hash would make the comparison a tautology and a
+    file replaced between generation and validation would still be accepted.
+    """
+
+    return _pin_facts(element_id, generated, recorded)["expected_sha256"]
+
+
+def _recorded_generation_pin(
+    element_id: str, manifest: Mapping[str, Any]
+) -> str:
+    """Read the SHA-256 of generated.rx38 from the generation manifest.
+
+    ``diff_before_after.json`` is written by the same step that renders
+    ``generated.rx38``, so its ``generated.sha256`` is the expectation recorded
+    by the artifact that produced the file.  Hashing the file here instead would
+    turn the binding check into a comparison that can never fail; the freshly
+    read hash is kept only as an observed value.
+    """
+
+    entry = manifest.get("generated")
+    if not isinstance(entry, Mapping):
+        raise PipelineError(
+            f"Element {element_id}: the generation manifest records no generated "
+            "RX38 file, so the calculated result cannot be bound to the prepared "
+            "input"
+        )
+    return _validated_recorded_pin(element_id, entry.get("sha256"))
 
 
 def _resolve(base: Path, value: object, *, field: str, must_exist: bool = True) -> Path:
@@ -845,6 +888,14 @@ def run_pipeline(config_path: str | Path) -> PipelineRunResult:
             bundle_diff_audit = json.loads(
                 (bundle_dir / "diff_before_after.json").read_text(encoding="utf-8")
             )
+            # The pin comes from the generation manifest, never from a fresh hash
+            # of the file under validation; the rebuild check above is additional
+            # and does not replace this pin.
+            generation_pin = _pin_facts(
+                element.element_id,
+                generated,
+                _recorded_generation_pin(element.element_id, bundle_diff_audit),
+            )
             if element.area is None or element.heated_perimeter is None:
                 raise PipelineError(
                     f"Element {element.element_id}: geometry audit requires area and heated perimeter"
@@ -927,7 +978,13 @@ def run_pipeline(config_path: str | Path) -> PipelineRunResult:
                 },
                 "rx3_generated": {
                     "path": str(generated),
-                    "sha256": _hash(generated),
+                    # Expected: the SHA-256 saved by the step that generated the
+                    # file. It is never replaced by a fresh hash of the file.
+                    "sha256": generation_pin["expected_sha256"],
+                    "expected_sha256": generation_pin["expected_sha256"],
+                    # Observed now and compared with the saved pin; informational.
+                    "actual_sha256": generation_pin["actual_sha256"],
+                    "pin_source": GENERATION_PIN_SOURCE,
                     "target_record_position": creation_evidence.target_record_position,
                     "target_record_fingerprint": creation_evidence.output_record_sha256,
                     "rx3_input": rx3_input_audit,
@@ -1064,13 +1121,15 @@ def run_pipeline(config_path: str | Path) -> PipelineRunResult:
                 raise PipelineError(
                     f"Element {element.element_id}: invalid gui_execution_evidence"
                 ) from exc
-            # The pin comes from the hash recorded when this bundle was generated
-            # (element_audit["rx3_generated"]), never from a fresh hash of the file
-            # under validation; _pinned_generated_hash refuses a replaced file.
+            # The pin was read from the generation manifest while the audit was
+            # built; _pinned_generated_hash re-checks the file against it here, so
+            # the window between the two checks stays as small as this
+            # architecture allows, and the validator compares the pinned value
+            # with the file it reads a third time.
             recorded_generated_pin = _pinned_generated_hash(
                 element.element_id,
                 generated,
-                element_audit["rx3_generated"]["sha256"],
+                element_audit["rx3_generated"]["expected_sha256"],
             )
             validation = validate_rx3_result_files(
                 generated,

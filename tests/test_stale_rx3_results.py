@@ -95,6 +95,147 @@ def _first_tconstr_index(lines: list[str]) -> int:
     raise AssertionError("the fixture has no Tconstr record")
 
 
+def _identical_targets(
+    tmp_path: Path, *, second_results: dict[int, str]
+) -> tuple[Path, list[str]]:
+    """Two target records that differ only in the allowed result fields."""
+
+    generated = tmp_path / "generated.rx38"
+    write_template(generated)
+    lines = _raw_lines(generated)
+    target = _first_tconstr_index(lines)
+    lines.insert(target + 1, _set_raw_fields(lines[target], second_results))
+    _write_raw_lines(generated, lines)
+    return generated, lines
+
+
+def test_an_exchanged_pair_of_targets_is_not_two_valid_result_changes(
+    tmp_path: Path,
+):
+    """Two targets identical outside 44/54 cannot be swapped into an accepted result."""
+
+    generated, lines = _identical_targets(tmp_path, second_results={44: "700", 54: "20"})
+    calculated = tmp_path / "calculated.rx38"
+    target = _first_tconstr_index(lines)
+    swapped = list(lines)
+    swapped[target], swapped[target + 1] = swapped[target + 1], swapped[target]
+    _write_raw_lines(calculated, swapped)
+
+    report = validate_rx3_result_files(
+        generated,
+        calculated,
+        expected_before_sha256=_pin(generated),
+        gui_execution_evidence=GuiExecutionEvidence.ENGINEER_CONFIRMED,
+        evidence_reference="EXCHANGE-CONTROL",
+        target_record_positions=(1, 2),
+    )
+    data = report.data
+    assert data["status"] == "RX3_TCONSTR_IDENTITY_AMBIGUOUS"
+    assert data["gui_recalculation_verified"] is False
+    assert data["tconstr_identity_ambiguous_target_positions"] == [1, 2]
+    assert data["tconstr_identity"]["exchanges"]
+    assert "cannot be proven" in data["recalculation_note"]
+
+
+def test_recalculated_exchange_of_indistinguishable_targets_is_still_refused(
+    tmp_path: Path,
+):
+    """Even with fresh numbers the identity of each target position is unprovable."""
+
+    generated, lines = _identical_targets(tmp_path, second_results={44: "700", 54: "20"})
+    calculated = tmp_path / "calculated.rx38"
+    target = _first_tconstr_index(lines)
+    swapped = list(lines)
+    swapped[target] = _set_raw_fields(lines[target + 1], {44: "705", 54: "21"})
+    swapped[target + 1] = _set_raw_fields(lines[target], {44: "655", 54: "16"})
+    _write_raw_lines(calculated, swapped)
+
+    report = validate_rx3_result_files(
+        generated,
+        calculated,
+        expected_before_sha256=_pin(generated),
+        gui_execution_evidence=GuiExecutionEvidence.ENGINEER_CONFIRMED,
+        evidence_reference="EXCHANGE-CONTROL",
+        target_record_positions=(1, 2),
+    )
+    data = report.data
+    assert data["status"] == "RX3_TCONSTR_IDENTITY_AMBIGUOUS"
+    assert data["gui_recalculation_verified"] is False
+    assert data["rx3_recalculation_proven"] is False
+    assert data["tconstr_identity_ambiguous_target_positions"] == [1, 2]
+    assert data["tconstr_identity"]["exchanges"] == []
+
+
+def test_two_distinguishable_targets_recalculated_in_place_are_accepted(
+    tmp_path: Path,
+):
+    """The allowed scenario must keep working: the records stay in place."""
+
+    generated = tmp_path / "generated.rx38"
+    write_template(generated)
+    lines = _raw_lines(generated)
+    target = _first_tconstr_index(lines)
+    lines.insert(target + 1, _set_raw_fields(lines[target], {1: "K2", 3: "K2"}))
+    _write_raw_lines(generated, lines)
+    calculated = tmp_path / "calculated.rx38"
+    after = list(lines)
+    after[target] = _set_raw_fields(after[target], {44: "675", 54: "18"})
+    after[target + 1] = _set_raw_fields(after[target + 1], {44: "680", 54: "19"})
+    _write_raw_lines(calculated, after)
+
+    report = validate_rx3_result_files(
+        generated,
+        calculated,
+        expected_before_sha256=_pin(generated),
+        gui_execution_evidence=GuiExecutionEvidence.ENGINEER_CONFIRMED,
+        evidence_reference="IN-PLACE-CONTROL",
+        target_record_positions=(1, 2),
+    )
+    data = report.data
+    assert data["status"] == "RX3_RESULT_ANALYSED"
+    assert data["gui_recalculation_verified"] is True
+    assert data["tconstr_identity_ambiguous_target_positions"] == []
+    assert data["tconstr_identity"]["duplicate_groups"] == []
+
+
+def test_a_blank_line_ending_change_blocks_the_gui_check(tmp_path: Path):
+    """A CRLF->LF rewrite of an empty line keeps its number and must still block."""
+
+    generated, recalculated = _calculated_text_from(
+        tmp_path, target_changes={44: "500", 54: "20"}
+    )
+    prepared = _raw_lines(generated)
+    _write_raw_lines(generated, [prepared[0], "\r\n", *prepared[1:]])
+    calculated = tmp_path / "calculated.rx38"
+    _write_raw_lines(calculated, [recalculated[0], "\n", *recalculated[1:]])
+
+    report = validate_rx3_result_files(
+        generated,
+        calculated,
+        expected_before_sha256=_pin(generated),
+        gui_execution_evidence=GuiExecutionEvidence.ENGINEER_CONFIRMED,
+        evidence_reference="LINE-ENDING-CONTROL",
+        target_record_positions=(1,),
+    )
+    data = report.data
+    assert data["status"] == "RX3_DOCUMENT_STRUCTURE_CHANGED"
+    assert data["gui_recalculation_verified"] is False
+    assert data["structure_changed"] is True
+    endings = data["structural_diff"]["raw_layout"]["line_endings"]
+    assert endings["changed"] is True
+    assert endings["changed_lines"] == [
+        {
+            "line": 2,
+            "before": "CRLF",
+            "after": "LF",
+            "raw_before": "\r\n",
+            "raw_after": "\n",
+            "blank_line": True,
+        }
+    ]
+    assert data["structural_diff"]["raw_layout"]["blank_lines"]["changed"] is False
+
+
 def _calculated_text_from(
     tmp_path: Path, *, target_changes: dict[int, str]
 ) -> tuple[Path, list[str]]:

@@ -187,6 +187,50 @@ def test_prepares_only_the_two_validated_fields(tmp_path: Path) -> None:
     assert records[0].raw_tokens[1] == "Б2"
 
 
+def test_validation_command_carries_the_exact_generated_sha256(
+    tmp_path: Path,
+) -> None:
+    """The prepared command must pin the exact SHA-256 of the written file."""
+
+    run_dir = _prepared_run(tmp_path)
+    manifest = _prepare(tmp_path, run_dir)
+    command = str(manifest["validation_command"])
+    generated = Path(str(manifest["generated"]["path"]))
+    recorded = str(manifest["generated"]["sha256"])
+
+    assert recorded == _sha256(generated)
+    assert len(recorded) == 64
+    assert set(recorded) <= set("0123456789abcdef")
+    assert command.count("--expected-generated-sha256") == 1
+    assert f"--expected-generated-sha256 {recorded}" in command
+    tokens = command.split()
+    flag = tokens.index("--expected-generated-sha256")
+    assert tokens[flag + 1] == recorded
+    # No placeholder may survive, and the calculated file stays a placeholder.
+    assert "GENERATED_SHA256" not in command
+    assert "<calculated.rx38>" in command
+    assert "--target-fingerprint" in command
+    assert manifest["generated"]["sha256"] == _sha256(generated)
+
+
+def test_a_substituted_generated_sha256_does_not_match_the_command(
+    tmp_path: Path,
+) -> None:
+    """The check above is sensitive: another file's hash is not accepted."""
+
+    run_dir = _prepared_run(tmp_path)
+    manifest = _prepare(tmp_path, run_dir)
+    command = str(manifest["validation_command"])
+    generated = Path(str(manifest["generated"]["path"]))
+    substituted = hashlib.sha256(generated.read_bytes() + b"\r\n").hexdigest()
+
+    assert f"--expected-generated-sha256 {substituted}" not in command
+    assert substituted != str(manifest["generated"]["sha256"])
+    assert command.count("--expected-generated-sha256") == 1
+    with pytest.raises(AssertionError):
+        assert f"--expected-generated-sha256 {substituted}" in command
+
+
 def test_checkpoint_uses_prepared_values_and_no_invented_signature(
     tmp_path: Path,
 ) -> None:

@@ -326,17 +326,30 @@ def _verify_force_pages(
             f"recorded page summary is not pinned, so the page cannot be checked "
             f"against it and no evidence may be built from it ({details})"
         )
+    # The paged shape is always written with the first page's worksheet count, so
+    # it is required here: silently dropping a wrong or missing value would turn
+    # a pinned expectation into no expectation at all.
+    flat_sheets = entry.get("sheets")
+    if flat_sheets is None:
+        raise LiraFormatError(
+            f"{context}: a paged sources.forces entry must record the worksheet "
+            "count of the first page in sources.forces.sheets"
+        )
+    if (
+        isinstance(flat_sheets, bool)
+        or not isinstance(flat_sheets, int)
+        or flat_sheets < 1
+    ):
+        raise LiraFormatError(
+            f"{context}: sources.forces.sheets must be the positive integer "
+            f"worksheet count of the first page, got {flat_sheets!r}"
+        )
     return VerifiedForceSources(
         paths=tuple(expectation.path for expectation in expectations),
         hashes=frozenset(hashes),
         paged=True,
         page_expectations=tuple(expectations),
-        flat_sheets=(
-            entry["sheets"]
-            if isinstance(entry.get("sheets"), int)
-            and not isinstance(entry.get("sheets"), bool)
-            else None
-        ),
+        flat_sheets=flat_sheets,
         flat_recorded_sha256=None,
     )
 

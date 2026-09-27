@@ -497,13 +497,43 @@ def validate_rx3_result_files(
             f"generated.rx38 sha256 {before_hash} does not match the pinned "
             f"{expected_before_sha256}"
         )
-    structural = diff_rx38_documents(before_document, after_document)
+    from .schema import FIELD_SPECS
+
+    input_fields = frozenset(
+        index for index, spec in FIELD_SPECS.items() if spec.direction == "input"
+    )
+    expected_output_fields = frozenset({44, 54})
+    calculated_service_fields = frozenset({52, 53, 76, 78})
+    allowed_calculated_result_fields = expected_output_fields | calculated_service_fields
+    # The identity of a record is everything a calculation is not allowed to
+    # rewrite; the allowed result/service fields are masked out of the key.
+    structural = diff_rx38_documents(
+        before_document,
+        after_document,
+        identity_masked_fields=allowed_calculated_result_fields,
+    )
     structure_changed = bool(structural["structure_changed"])
     target_positions, target_resolution = _resolve_target_positions(
         before,
         target_record_fingerprints=target_record_fingerprints,
         target_record_positions=target_record_positions,
         target_marks=target_marks,
+    )
+    tconstr_identity = structural["tconstr_identity"]
+    identity_ambiguous_target_positions = sorted(
+        {
+            position
+            for group in tconstr_identity["duplicate_groups"]
+            for position in (
+                list(group["before_tconstr_positions"])
+                + list(group["after_tconstr_positions"])
+            )
+            if position in target_positions
+        }
+    )
+    tconstr_exchanges = list(tconstr_identity["exchanges"])
+    tconstr_order_proven = (
+        len(identity_ambiguous_target_positions) < 2 and not tconstr_exchanges
     )
 
     records: list[dict[str, Any]] = []
@@ -514,14 +544,6 @@ def validate_rx3_result_files(
     calculated_service_change_sets: list[set[int]] = []
     unexpected_change_sets: list[set[int]] = []
     unexpected_non_target_changes: list[dict[str, Any]] = []
-    from .schema import FIELD_SPECS
-
-    input_fields = frozenset(
-        index for index, spec in FIELD_SPECS.items() if spec.direction == "input"
-    )
-    expected_output_fields = frozenset({44, 54})
-    calculated_service_fields = frozenset({52, 53, 76, 78})
-    allowed_calculated_result_fields = expected_output_fields | calculated_service_fields
     structural_pairs = {
         item["before_position"]: item
         for item in structural["record_sequence"]["replaced"]
@@ -626,6 +648,7 @@ def validate_rx3_result_files(
             {
                 "position": position,
                 "is_target": is_target,
+                "identity_ambiguous": position in identity_ambiguous_target_positions,
                 "before_mark": old.mark,
                 "after_mark": new.mark,
                 "before_record_fingerprint": rx38_record_fingerprint(old),
@@ -711,6 +734,7 @@ def validate_rx3_result_files(
         and non_target_records_text_unchanged is True
         and prepared_inputs_preserved is True
         and not target_unexpected_change_indices
+        and tconstr_order_proven
     )
     evidence_reference_valid = (
         isinstance(evidence_reference, str) and bool(evidence_reference.strip())
@@ -724,6 +748,7 @@ def validate_rx3_result_files(
         recalculation_proven
         and not structure_changed
         and raw_formatting_preserved
+        and tconstr_order_proven
         and prepared_inputs_preserved is True
         and evidence_reference_valid
         and non_target_records_text_unchanged is True
@@ -737,6 +762,10 @@ def validate_rx3_result_files(
     status = (
         "RX3_DOCUMENT_STRUCTURE_CHANGED"
         if structure_changed
+        else "RX3_TCONSTR_IDENTITY_AMBIGUOUS"
+        if len(identity_ambiguous_target_positions) > 1
+        else "RX3_TCONSTR_ORDER_CHANGED"
+        if tconstr_exchanges
         else "RX3_UNEXPECTED_NON_TARGET_CHANGE"
         if not non_target_records_text_unchanged
         else "RX3_PRODUCTION_INPUTS_CHANGED"
@@ -791,6 +820,20 @@ def validate_rx3_result_files(
             "fields is not accepted as a successful GUI check either."
         ),
         "structural_diff": structural,
+        "tconstr_identity": tconstr_identity,
+        "tconstr_identity_ambiguous_target_positions": (
+            identity_ambiguous_target_positions
+        ),
+        "tconstr_exchanges": tconstr_exchanges,
+        "tconstr_order_proven": tconstr_order_proven,
+        "tconstr_identity_note": (
+            "Tconstr identity masks the fields a calculation is allowed to rewrite "
+            f"({sorted(allowed_calculated_result_fields)}). Two selected targets "
+            "that share an identity key cannot be told apart, so which of them "
+            "produced which result is unprovable and the file is not accepted; an "
+            "exchanged pair of records is reported as an order change. The remedy "
+            "is to validate one unambiguous position per run."
+        ),
         "unsafe_production_change_indices": unsafe_production_change_indices,
         "target_input_change_indices": target_input_change_indices,
         "expected_before_sha256": expected_before_sha256,
@@ -826,6 +869,14 @@ def validate_rx3_result_files(
             "comparison of the target is not performed, and no result is accepted. "
             "The machine-readable structural diff below names every difference."
             if structure_changed
+            else "The identity or the order of the target records cannot be proven: "
+            f"indistinguishable target positions {identity_ambiguous_target_positions} "
+            "share their whole content outside the allowed calculated/result fields, "
+            "and/or records were exchanged "
+            f"({[item['record_positions'] for item in tconstr_exchanges]}). A swap "
+            "between such records is indistinguishable from two legitimate result "
+            "changes, so the file is not accepted as a result for those positions."
+            if not tconstr_order_proven
             else "Raw token spelling changed outside the allowed calculated/result "
             f"fields ({sorted(target_raw_formatting_change_indices)}) while the decoded "
             "values stayed equal: the file was rewritten in a place the prepared "
@@ -935,12 +986,41 @@ def validate_rx3_result_files(
         f"- Line count: `{structural['raw_layout']['line_count']}`",
         f"- Blank lines: `{structural['raw_layout']['blank_lines']}`",
         f"- Trailing newline: `{structural['raw_layout']['trailing_newline']}`",
-        f"- Line-ending changes: `{len(structural['raw_layout']['newline_changes'])}`",
+        f"- Line-ending changes (records): `{len(structural['raw_layout']['newline_changes'])}`",
+        f"- Physical line-ending changes (all lines): `{len(structural['raw_layout']['line_endings']['changed_lines'])}`",
         f"- Raw-only token changes (decoded values equal): `{len(structural['raw_layout']['raw_only_token_changes'])}`",
         f"- Target raw formatting changes outside allowed fields: `{sorted(target_raw_formatting_change_indices)}`",
         f"- Allowed raw formatting changes: `{sorted(allowed_raw_formatting_change_indices)}`",
         "",
+        "## Идентичность и порядок записей Tconstr",
+        "",
+        "Ключ идентичности записи — её сырые токены, в которых замаскированы поля,",
+        "разрешённые к перезаписи расчётом. Если два выбранных целевых положения имеют",
+        "одинаковый ключ, порядок и принадлежность результата доказать нельзя, и файл не",
+        "принимается. Обмен двух записей местами сообщается отдельно.",
+        "",
+        f"- Masked fields: `{tconstr_identity['masked_fields']}`",
+        f"- Duplicate identity groups: `{len(tconstr_identity['duplicate_groups'])}`",
+        f"- Ambiguous target positions: `{identity_ambiguous_target_positions}`",
+        f"- Exchanged record pairs: `{len(tconstr_exchanges)}`",
+        f"- Tconstr order proven: `{tconstr_order_proven}`",
+        "",
     ]
+    for group in tconstr_identity["duplicate_groups"]:
+        lines.append(
+            f"- Одинаковый ключ `{group['key'][:16]}…`: целевые положения "
+            f"{group['before_tconstr_positions']} → {group['after_tconstr_positions']}"
+        )
+    for item in tconstr_exchanges:
+        lines.append(
+            f"- Обмен записей: позиции {item['record_positions']}, "
+            f"тип `{item['record_type']}`"
+        )
+    for item in structural["raw_layout"]["line_endings"]["changed_lines"]:
+        lines.append(
+            f"- Окончание строки {item['line']}: `{item['before']}` → "
+            f"`{item['after']}` (пустая строка: `{item['blank_line']}`)"
+        )
     for item in structural["record_sequence"]["added"]:
         lines.append(
             f"- Добавлена запись: позиция {item['position']}, тип `{item['record_type']}`, "

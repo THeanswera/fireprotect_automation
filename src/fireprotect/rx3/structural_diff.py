@@ -2,23 +2,32 @@
 
 The post-calculation RX3 check must not look only at the 200 fields of the
 target ``Tconstr``: a file can gain a record, lose a record, change a record
-that is not a construction (for example a ``Trazdel`` line), switch its line
-endings, gain a BOM or re-quote a field without any of those facts appearing in
-a field-by-field comparison of one construction.
+that is not a construction (for example a ``Trazdel`` line), swap two records,
+switch its line endings, gain a BOM or re-quote a field without any of those
+facts appearing in a field-by-field comparison of one construction.
 
 This module compares the decoded documents as a whole:
 
 * every record of both files, with its type, its 1-based position and its exact
   raw line (tokens are stored verbatim by the reader, so the reconstruction is
   the original line and is verified against the raw line the reader saw);
-* the record sequence: additions, removals and replacements, aligned with
-  :class:`difflib.SequenceMatcher` on the raw token tuples (``autojunk`` is
-  disabled so that a file with many identical records cannot silently degrade
-  the alignment);
-* the raw layout: encoding, BOM, line count, blank lines, trailing newline and
-  per-record line endings;
-* raw-only token changes: the token text changed while the decoded field value
-  stayed the same (quoting, whitespace, trailing zeros).
+* the record sequence: the sequence of record *types* is aligned with
+  :class:`difflib.SequenceMatcher` (``autojunk`` disabled, so a file with many
+  identical records cannot silently degrade the alignment) and the records of
+  each aligned block are then paired by position and compared as raw lines.
+  Aligning on types first keeps an added or deleted record from silently
+  consuming the pairing of the records around it;
+* record identity and order: every ``Tconstr`` gets an identity key computed
+  from its raw tokens with a caller-supplied set of fields masked out (the
+  fields a calculation is allowed to rewrite).  Records that share a key are
+  indistinguishable outside those fields, so no code can prove which of them
+  produced which result; a pairwise byte exchange of two records is reported
+  explicitly.  Both facts let the validator stop instead of reading a
+  permutation as a set of legitimate result changes;
+* the raw layout: encoding, BOM, line count, blank lines, trailing newline, the
+  line ending of *every* physical line (including empty lines, which carry no
+  record) and raw-only token changes (token text changed while the decoded
+  field value stayed the same: quoting, whitespace).
 
 Nothing in this module decides acceptance: it reports facts, and
 :mod:`fireprotect.rx3.gui_validation` decides which of them block the GUI
@@ -30,7 +39,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from difflib import SequenceMatcher
-from typing import Any, Sequence
+from hashlib import sha256
+from typing import Any, Iterable, Sequence
 
 from .parser import Rx38Document, Rx38Record
 
@@ -96,6 +106,189 @@ def blank_line_numbers(document: Rx38Document) -> tuple[int, ...]:
         if not _line_content(line)[0]:
             numbers.append(number)
     return tuple(numbers)
+
+
+def line_ending_kind(line: str) -> str:
+    """Name the terminator of one physical line, ``NONE`` for the last line."""
+
+    if line.endswith("\r\n"):
+        return "CRLF"
+    if line.endswith("\n"):
+        return "LF"
+    if line.endswith("\r"):
+        return "CR"
+    return "NONE"
+
+
+def line_ending_kinds(document: Rx38Document) -> tuple[str, ...]:
+    """The terminator of every physical line, in file order."""
+
+    return tuple(line_ending_kind(line) for line in document.raw_lines)
+
+
+def _line_ending_changes(
+    before: Rx38Document, after: Rx38Document
+) -> list[dict[str, Any]]:
+    """Every physical line whose terminator changed, empty lines included.
+
+    Comparing record terminators only is not enough: an empty line carries no
+    record, keeps its number and its surrounding records, and a CRLF -> LF
+    rewrite of that line would otherwise stay invisible.
+    """
+
+    before_lines = list(before.raw_lines)
+    after_lines = list(after.raw_lines)
+    changes: list[dict[str, Any]] = []
+    for index in range(min(len(before_lines), len(after_lines))):
+        left, right = before_lines[index], after_lines[index]
+        before_kind, after_kind = line_ending_kind(left), line_ending_kind(right)
+        if before_kind == after_kind:
+            continue
+        before_content, before_terminator = _line_content(left)
+        after_content, after_terminator = _line_content(right)
+        changes.append(
+            {
+                "line": index + 1,
+                "before": before_kind,
+                "after": after_kind,
+                "raw_before": before_terminator,
+                "raw_after": after_terminator,
+                "blank_line": not before_content and not after_content,
+            }
+        )
+    return changes
+
+
+def tconstr_identity_key(
+    record: Rx38Record, masked_fields: frozenset[int]
+) -> str:
+    """Identity of one record with the allowed-to-change fields masked out.
+
+    The masked tokens are replaced by an empty token, so the position and the
+    number of fields stay part of the identity: two records only share a key
+    when they are token-identical everywhere outside ``masked_fields``.
+    """
+
+    tokens = tuple(
+        "" if index in masked_fields else token
+        for index, token in enumerate(record.raw_tokens)
+    )
+    digest = sha256()
+    digest.update(record.record_type.encode("utf-8"))
+    digest.update(b"\x00")
+    digest.update("\x1f".join(tokens).encode("utf-8"))
+    return digest.hexdigest()
+
+
+def _identity_facts(
+    before_refs: Sequence[_RecordRef],
+    after_refs: Sequence[_RecordRef],
+    *,
+    masked_fields: frozenset[int],
+    comparable_by_position: bool,
+) -> dict[str, Any]:
+    """Identity keys, duplicates and byte exchanges of the ``Tconstr`` records."""
+
+    def entries(refs: Sequence[_RecordRef]) -> list[dict[str, Any]]:
+        result: list[dict[str, Any]] = []
+        tconstr_position = 0
+        for ref in refs:
+            if ref.record.record_type != "Tconstr":
+                continue
+            tconstr_position += 1
+            result.append(
+                {
+                    "tconstr_position": tconstr_position,
+                    "record_position": ref.position,
+                    "line_number": ref.record.line_number,
+                    "key": tconstr_identity_key(ref.record, masked_fields),
+                }
+            )
+        return result
+
+    before_entries = entries(before_refs)
+    after_entries = entries(after_refs)
+    grouped: dict[str, list[int]] = {}
+    for item in before_entries:
+        grouped.setdefault(str(item["key"]), []).append(int(item["tconstr_position"]))
+    after_grouped: dict[str, list[int]] = {}
+    for item in after_entries:
+        after_grouped.setdefault(str(item["key"]), []).append(
+            int(item["tconstr_position"])
+        )
+    duplicate_groups = [
+        {
+            "key": key,
+            "before_tconstr_positions": positions,
+            "after_tconstr_positions": after_grouped.get(key, []),
+            "note": (
+                "these records are indistinguishable outside the masked fields, "
+                "so which of them produced which result cannot be proven"
+            ),
+        }
+        for key, positions in sorted(grouped.items())
+        if len(positions) > 1
+    ]
+
+    exchanges: list[dict[str, Any]] = []
+    if comparable_by_position:
+        # Hash lookup instead of a quadratic scan: a record that received the
+        # tokens of another record is found through the map of the records that
+        # already changed.  Only ``Tconstr`` records are considered, because they
+        # are the records a calculation result is bound to.
+        changed_tokens: dict[tuple[str, ...], list[int]] = {}
+        for index, (left, right) in enumerate(zip(before_refs, after_refs)):
+            if left.record.record_type != "Tconstr":
+                continue
+            if right.record.record_type != "Tconstr":
+                continue
+            if left.raw_line == right.raw_line:
+                continue
+            changed_tokens.setdefault(left.record.raw_tokens, []).append(index)
+        seen: set[tuple[int, int]] = set()
+        for index, (left, right) in enumerate(zip(before_refs, after_refs)):
+            if left.record.record_type != "Tconstr":
+                continue
+            if right.record.record_type != "Tconstr":
+                continue
+            if left.raw_line == right.raw_line:
+                continue
+            for partner in changed_tokens.get(right.record.raw_tokens, []):
+                if partner == index or after_refs[partner].raw_line != left.raw_line:
+                    continue
+                pair = (min(index, partner), max(index, partner))
+                if pair in seen:
+                    continue
+                seen.add(pair)
+                exchanges.append(
+                    {
+                        "record_positions": [pair[0] + 1, pair[1] + 1],
+                        "record_type": left.record.record_type,
+                        "before_raw_lines": [
+                            before_refs[pair[0]].raw_line,
+                            before_refs[pair[1]].raw_line,
+                        ],
+                        "after_raw_lines": [
+                            after_refs[pair[0]].raw_line,
+                            after_refs[pair[1]].raw_line,
+                        ],
+                        "note": "the two records were exchanged byte for byte",
+                    }
+                )
+        exchanges.sort(key=lambda item: item["record_positions"])
+    return {
+        "masked_fields": sorted(masked_fields),
+        "before": before_entries,
+        "after": after_entries,
+        "duplicate_groups": duplicate_groups,
+        "exchanges": exchanges,
+        "note": (
+            "identity keys mask the fields a calculation is allowed to rewrite; "
+            "a duplicate key means the order and identity of those records cannot "
+            "be proven from the file, and an exchange means two records changed "
+            "places instead of being recalculated in place"
+        ),
+    }
 
 
 def _document_facts(document: Rx38Document) -> dict[str, Any]:
@@ -187,7 +380,10 @@ def _removed(before: _RecordRef) -> dict[str, Any]:
 
 
 def diff_rx38_documents(
-    before: Rx38Document, after: Rx38Document
+    before: Rx38Document,
+    after: Rx38Document,
+    *,
+    identity_masked_fields: Iterable[int] = (),
 ) -> dict[str, Any]:
     """Compare two RX38 documents in full and return a machine-readable report.
 
@@ -196,7 +392,22 @@ def diff_rx38_documents(
     compared as raw lines.  Aligning on types first keeps a deleted or added
     record from silently consuming the pairing of the records around it, which
     is what a plain content alignment does when one file has one record more.
+
+    ``identity_masked_fields`` are the field indices a calculation is allowed to
+    rewrite.  They are masked out of the ``Tconstr`` identity keys, so a caller
+    can detect that two records are indistinguishable outside the fields they
+    are allowed to change.  With the default empty mask the identity is the full
+    record content.
     """
+
+    masked_fields = frozenset(identity_masked_fields)
+    if any(
+        isinstance(index, bool) or not isinstance(index, int) or index < 0
+        for index in masked_fields
+    ):
+        raise Rx38StructuralDiffError(
+            "identity_masked_fields must be non-negative field indices"
+        )
 
     before_refs = _record_refs(before)
     after_refs = _record_refs(after)
@@ -281,6 +492,14 @@ def diff_rx38_documents(
     )
     bom_changed = before_facts["has_bom"] != after_facts["has_bom"]
     encoding_changed = before_facts["encoding"] != after_facts["encoding"]
+    line_ending_changes = _line_ending_changes(before, after)
+    line_endings_changed = bool(line_ending_changes)
+    identity = _identity_facts(
+        before_refs,
+        after_refs,
+        masked_fields=masked_fields,
+        comparable_by_position=not (count_changed or types_changed),
+    )
 
     structure_changed = bool(
         count_changed
@@ -294,6 +513,7 @@ def diff_rx38_documents(
         or line_count_changed
         or trailing_newline_changed
         or newline_changes
+        or line_endings_changed
     )
     raw_layout_changed = bool(
         bom_changed
@@ -302,6 +522,7 @@ def diff_rx38_documents(
         or line_count_changed
         or trailing_newline_changed
         or newline_changes
+        or line_endings_changed
         or raw_only_token_changes
     )
     unchanged_records = len(before_refs) - len(removed) - len(replaced)
@@ -357,9 +578,23 @@ def diff_rx38_documents(
                 "after": after_facts["trailing_newline"],
                 "changed": trailing_newline_changed,
             },
+            "line_endings": {
+                "before_kinds": sorted(set(line_ending_kinds(before))),
+                "after_kinds": sorted(set(line_ending_kinds(after))),
+                "compared_lines": min(
+                    len(before.raw_lines), len(after.raw_lines)
+                ),
+                "changed_lines": line_ending_changes,
+                "changed": line_endings_changed,
+                "note": (
+                    "the terminator of every physical line is compared, including "
+                    "empty lines that carry no record"
+                ),
+            },
             "newline_changes": newline_changes,
             "raw_only_token_changes": raw_only_token_changes,
         },
+        "tconstr_identity": identity,
         "structure_changed": structure_changed,
         "raw_layout_changed": raw_layout_changed,
         "identical": (
@@ -375,5 +610,8 @@ __all__ = [
     "Rx38StructuralDiffError",
     "blank_line_numbers",
     "diff_rx38_documents",
+    "line_ending_kind",
+    "line_ending_kinds",
     "record_raw_line",
+    "tconstr_identity_key",
 ]

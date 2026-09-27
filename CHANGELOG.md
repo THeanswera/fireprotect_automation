@@ -19,7 +19,20 @@ Pre-experiment hardening in version 0.5.0:
   status (`RX3_DOCUMENT_STRUCTURE_CHANGED`, `RX3_RAW_FORMATTING_CHANGED`);
 - every paged LIRA force workbook pins its own summary in the evidence, and the
   reader recomputes that summary from the re-read page and compares it exactly;
-  a page without a pinned summary is refused as `SUMMARY_NOT_VERIFIED`.
+  a page without a pinned summary is refused as `SUMMARY_NOT_VERIFIED`, and a
+  paged entry must record the first page's integer worksheet count;
+- the post-calculation check also proves record identity and order: `Tconstr`
+  identity keys mask the fields a calculation may rewrite, so two selected
+  targets that are indistinguishable outside those fields are refused as
+  `RX3_TCONSTR_IDENTITY_AMBIGUOUS` instead of being read as two valid result
+  changes, and a byte exchange of two records is refused as
+  `RX3_TCONSTR_ORDER_CHANGED`;
+- the terminator of every physical line is compared, empty lines included, so an
+  internal CRLF -> LF rewrite can no longer hide behind unchanged record
+  numbers, blank-line numbers and trailing newline;
+- the pipeline takes the expected `generated.rx38` SHA-256 from the generation
+  manifest (`diff_before_after.json:generated.sha256`) instead of hashing the
+  file under validation again; the fresh hash is kept only as `actual_sha256`.
 
 ## 0.5.0 — 2026-08-25
 

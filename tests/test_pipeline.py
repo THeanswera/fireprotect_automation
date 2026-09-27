@@ -16,6 +16,7 @@ from fireprotect.model import (
     Unit,
     ValueProvenance,
 )
+from fireprotect import pipeline
 from fireprotect.pipeline import (
     PipelineError,
     _pinned_generated_hash,
@@ -126,9 +127,9 @@ def test_pipeline_binds_the_result_to_the_hash_recorded_at_generation(
     assert _pinned_generated_hash("E1", generated, recorded) == recorded
     assert _pinned_generated_hash("E1", generated, recorded.upper()) == recorded
 
-    with pytest.raises(PipelineError, match="no longer matches the hash recorded"):
+    with pytest.raises(PipelineError, match="does not match the hash recorded"):
         _pinned_generated_hash("E1", generated, sha256(other.read_bytes()).hexdigest())
-    with pytest.raises(PipelineError, match="no longer matches the hash recorded"):
+    with pytest.raises(PipelineError, match="does not match the hash recorded"):
         _pinned_generated_hash("E1", other, recorded)
     for bad in (None, "", "   ", 17):
         with pytest.raises(PipelineError, match="no generated.rx38 SHA-256"):
@@ -137,7 +138,94 @@ def test_pipeline_binds_the_result_to_the_hash_recorded_at_generation(
         _pinned_generated_hash("E1", generated, "z" * 64)
 
 
-def test_pipeline_stops_for_rx3_and_resumes_after_calculated_file(tmp_path: Path):
+def test_the_generation_manifest_pin_is_read_not_recomputed(tmp_path: Path):
+    """The manifest value is the expectation; a wrong one stops the run."""
+
+    manifest = {"generated": {"sha256": "A" * 64}}
+    assert pipeline._recorded_generation_pin("E1", manifest) == "a" * 64
+    for bad_manifest, reason in (
+        ({}, "records no generated RX38 file"),
+        ({"generated": {}}, "no generated.rx38 SHA-256"),
+        ({"generated": {"sha256": "not-a-hash"}}, "64-character hexadecimal"),
+        ({"generated": {"sha256": None}}, "no generated.rx38 SHA-256"),
+    ):
+        with pytest.raises(PipelineError, match=reason):
+            pipeline._recorded_generation_pin("E1", bad_manifest)
+
+
+def test_pipeline_takes_the_pin_from_the_generation_manifest(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """The expected value passed to the validator is the recorded manifest hash."""
+
+    config, _ = _pipeline_config(tmp_path)
+    first = run_pipeline(config)
+    assert first.status == "WAITING_FOR_RX3"
+    generated = first.workspace / "rx3" / "001_17" / "generated.rx38"
+    manifest = json.loads(
+        (generated.parent / "diff_before_after.json").read_text(encoding="utf-8")
+    )
+    recorded_pin = manifest["generated"]["sha256"]
+    assert recorded_pin == sha256(generated.read_bytes()).hexdigest()
+    _calculate(generated, first.waiting_for[0])
+
+    captured: dict[str, object] = {}
+    real_validate = pipeline.validate_rx3_result_files
+
+    def spy(*args: object, **kwargs: object):
+        captured["expected"] = kwargs["expected_before_sha256"]
+        captured["file_hash_at_call"] = sha256(generated.read_bytes()).hexdigest()
+        return real_validate(*args, **kwargs)
+
+    monkeypatch.setattr(pipeline, "validate_rx3_result_files", spy)
+    second = run_pipeline(config)
+
+    assert second.status == "RX3_RESULT_ANALYSED"
+    assert captured["expected"] == recorded_pin
+    assert captured["file_hash_at_call"] == recorded_pin
+    audit = json.loads(second.audit_json.read_text(encoding="utf-8"))
+    entry = audit["element_audits"][0]["rx3_generated"]
+    assert entry["sha256"] == recorded_pin
+    assert entry["expected_sha256"] == recorded_pin
+    assert entry["actual_sha256"] == recorded_pin
+    assert entry["pin_source"] == "diff_before_after.json:generated.sha256"
+
+
+def test_pipeline_refuses_a_manifest_pin_that_no_longer_matches_the_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """The saved pin is authoritative: a mismatch stops the run.
+
+    The additional ``_verify_existing_rx3_bundle`` rebuild is bypassed on purpose
+    here (it validates the manifest as a whole); the point of this test is that
+    the pin path itself is fail-closed and does not silently fall back to a fresh
+    hash of the file under validation.
+    """
+
+    config, _ = _pipeline_config(tmp_path)
+    first = run_pipeline(config)
+    generated = first.workspace / "rx3" / "001_17" / "generated.rx38"
+    _calculate(generated, first.waiting_for[0])
+    real_verify = pipeline._verify_existing_rx3_bundle
+
+    def verify_then_tamper(**kwargs: object):
+        creation = real_verify(**kwargs)  # type: ignore[arg-type]
+        manifest_path = generated.parent / "diff_before_after.json"
+        payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+        payload["generated"]["sha256"] = "0" * 64
+        manifest_path.write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        return creation
+
+    monkeypatch.setattr(pipeline, "_verify_existing_rx3_bundle", verify_then_tamper)
+    with pytest.raises(PipelineError, match="generation manifest"):
+        run_pipeline(config)
+
+
+def _pipeline_config(tmp_path: Path) -> tuple[Path, dict[str, object]]:
+    """Write the base element, template, LIRA export and config for a run."""
     project = tmp_path / "base.json"
     template = tmp_path / "template.rx38"
     lira = tmp_path / "forces.csv"
@@ -251,6 +339,12 @@ def test_pipeline_stops_for_rx3_and_resumes_after_calculated_file(tmp_path: Path
         ],
     }
     config.write_text(json.dumps(payload), encoding="utf-8")
+
+    return config, payload
+
+
+def test_pipeline_stops_for_rx3_and_resumes_after_calculated_file(tmp_path: Path):
+    config, payload = _pipeline_config(tmp_path)
 
     first = run_pipeline(config)
     assert first.status == "WAITING_FOR_RX3"
