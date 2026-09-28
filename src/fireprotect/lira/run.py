@@ -1019,7 +1019,10 @@ def _build_derived(
         parameters_path=package.rsu["parameters"].path,
     )
     report = validate_rsu_reconstruction(bundle)
-    if report.status.value != "VERIFIED":
+    if report.status.value not in {
+        "VERIFIED",
+        "VERIFIED_WITHIN_EXPORT_PRECISION",
+    }:
         raise LiraMappingError(
             f"RSU reconstruction status is {report.status.value!r}; the run is "
             f"refused: {'; '.join(report.blockers)}"

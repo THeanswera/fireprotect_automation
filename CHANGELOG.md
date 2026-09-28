@@ -36,8 +36,17 @@ Pre-experiment hardening in version 0.5.0:
 - the RSU residual statistics now count the print window of each compared value
   (half a unit of its own last printed digit) and the excess in units in the last
   place of a single-precision result of the published magnitude, instead of a
-  uniform six-decimal envelope; exact equality stays the only acceptance rule and
-  no tolerance is installed.
+  uniform six-decimal envelope; exact equality stays the only acceptance rule for
+  `VERIFIED`;
+- the LIRA export precision cannot be changed, so the RSU reconstruction has an
+  explicit second acceptance status: `VERIFIED_WITHIN_EXPORT_PRECISION` accepts a
+  row whose every component stays inside the print window plus one
+  single-precision ulp of the largest magnitude, keeps every printed value, cell,
+  coefficient, hash and residual exact, is written into the evidence bundle,
+  re-verified on read and visible on row selection; a residual beyond that bound
+  still blocks the row with `RSU_RESULT_MISMATCH`. Measured on two real projects:
+  43 337 residuals, none beyond the bound (largest 0.865 ulp32), while a wrong
+  coefficient column starts at 4 127 ulp32.
 
 ## 0.5.0 — 2026-08-25
 

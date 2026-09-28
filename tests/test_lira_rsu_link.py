@@ -1134,7 +1134,9 @@ def test_reconstruction_mismatch_raises(tmp_path: Path) -> None:
         row["reconstruction"]["N"]["published"] = "999"
 
     _edit_evidence(evidence, mutate)
-    with pytest.raises(LiraFormatError, match="not reproduced from the source terms"):
+    with pytest.raises(
+        LiraFormatError, match="beyond the export-precision bound from the source terms"
+    ):
         _link(tmp_path, package, evidence)
 
 

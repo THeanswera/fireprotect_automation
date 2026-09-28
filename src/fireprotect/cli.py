@@ -594,9 +594,15 @@ def cmd_validate_lira_rsu(args: argparse.Namespace) -> None:
         "verified_rows": sum(
             1 for result in report.results if result.status.value == "VERIFIED"
         ),
-        "blocked_rows": sum(
-            1 for result in report.results if result.status.value != "VERIFIED"
+        "within_export_precision_rows": sum(
+            1
+            for result in report.results
+            if result.status.value == "VERIFIED_WITHIN_EXPORT_PRECISION"
         ),
+        "blocked_rows": sum(
+            1 for result in report.results if result.status.value == "BLOCKED"
+        ),
+        "bounded_components": report.bounded_components,
         "blocker_row_counts": _blocker_row_counts(report),
         "blockers": list(report.blockers),
         "rx38_force_generation_allowed": False,

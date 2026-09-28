@@ -6,12 +6,12 @@ import csv
 from decimal import Decimal, InvalidOperation
 from hashlib import sha256
 import json
-import math
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 from .errors import LiraFormatError, LiraMappingError
 from .rsu import (
+    EXPORT_PRECISION_BOUND_STATEMENT,
     RSU_FORCE_COMPONENTS,
     RsuCoefficient,
     RsuImportBundle,
@@ -26,55 +26,17 @@ DECLARATION_KIND = "RSU_ENGINEER_GOVERNING_ROW_DECLARATION"
 ROW_DETAIL_KIND = "READ_ONLY_LIRA_RSU_ROW_DETAIL"
 RESIDUAL_STATISTICS_KIND = "READ_ONLY_LIRA_RSU_RESIDUAL_STATISTICS"
 
-# Stated, not assumed.  Every exported number is a printed decimal with a
-# recorded number of fractional digits, and the measurement on the real export
-# shows that the printed decimals sit on the single-precision grid: the stored
-# results are single precision.  The residual of an exact decimal reconstruction
-# is therefore bounded by the print rounding of the compared values plus at most
-# one unit in the last place of a single-precision result of that magnitude.
-SINGLE_PRECISION_HALF_ULP = Decimal(2) ** -24
-PRINTED_DECIMAL_ROUNDING = Decimal("0.0000005")
-
-
-def _printed_half_unit(value: Decimal) -> Decimal:
-    """Half a unit of the last printed decimal digit of one value."""
-
-    return Decimal(5).scaleb(-_decimal_places(value) - 1)
-
-
-def _float32_ulp(value: Decimal) -> Decimal:
-    """One unit in the last place of a single-precision value of this magnitude.
-
-    Only the scale of the diagnostic bound is computed in binary floating point;
-    the comparison of the reconstruction with the published value stays exact
-    ``Decimal`` equality.
-    """
-
-    try:
-        magnitude = abs(float(value))
-    except (OverflowError, ValueError):
-        return Decimal(0)
-    if magnitude == 0 or not math.isfinite(magnitude):
-        return Decimal(0)
-    return Decimal(math.ldexp(1.0, math.floor(math.log2(magnitude)) - 23))
-
 
 def rsu_residual_statistics(report: RsuValidationReport) -> dict[str, Any]:
-    """Describe the reconstruction residuals without installing any tolerance.
+    """Describe the reconstruction residuals under the stated export-precision rule.
 
-    Two stated bounds are counted, never applied as an acceptance rule:
-
-    * the *print window*: each compared value is a printed decimal, so the value
-      behind it can differ by half a unit of its own last printed digit; the
-      window is the sum of those half units over the terms and the published
-      value;
-    * the *single-precision excess*: the stored results are single precision, so
-      a residual may exceed the print window by up to about one unit in the last
-      place of a single-precision result of the published magnitude.
-
-    The report counts how many residuals stay inside the print window and how
-    many need that excess; exact equality remains the only acceptance rule and no
-    numeric policy is enabled.
+    The bound counted here is the acceptance rule of
+    ``RsuValidationStatus.VERIFIED_WITHIN_EXPORT_PRECISION`` (see
+    :data:`fireprotect.lira.rsu.EXPORT_PRECISION_BOUND_STATEMENT`): half a unit of
+    the last printed digit of each compared value plus one single-precision ulp of
+    the largest magnitude involved.  ``VERIFIED`` keeps the stricter meaning of
+    exact equality; a residual beyond the bound blocks the row.  No value, sign,
+    cell or coefficient is changed anywhere.
     """
 
     components: dict[str, dict[str, Any]] = {}
@@ -82,77 +44,83 @@ def rsu_residual_statistics(report: RsuValidationReport) -> dict[str, Any]:
         for item in result.components:
             if item.difference == 0:
                 continue
+            comparison = item.export_precision
+            if comparison is None:  # pragma: no cover - components always carry it
+                continue
             entry = components.setdefault(
                 item.component,
                 {
                     "mismatches": 0,
-                    "within_print_window": 0,
-                    "beyond_print_window": 0,
-                    "beyond_one_ulp32": 0,
+                    "within_export_precision": 0,
+                    "beyond_export_precision": 0,
                     "max_abs_difference": Decimal(0),
                     "max_excess_in_ulp32": Decimal(0),
                     "worst_observed": None,
                 },
             )
             entry["mismatches"] += 1
-            print_window = _printed_half_unit(item.published)
-            for _, value, _coefficient in item.source_terms:
-                print_window += _printed_half_unit(value)
             difference = abs(item.difference)
             entry["max_abs_difference"] = max(
                 entry["max_abs_difference"], difference
             )
-            if difference <= print_window:
-                entry["within_print_window"] += 1
+            if comparison.within:
+                entry["within_export_precision"] += 1
                 continue
-            entry["beyond_print_window"] += 1
-            excess = difference - print_window
-            ulp = _float32_ulp(item.published)
-            ratio = excess / ulp if ulp else Decimal(0)
-            if ratio > 1:
-                entry["beyond_one_ulp32"] += 1
-            if ratio > entry["max_excess_in_ulp32"]:
+            entry["beyond_export_precision"] += 1
+            ratio = comparison.excess_in_ulp32
+            if ratio is not None and ratio > entry["max_excess_in_ulp32"]:
                 entry["max_excess_in_ulp32"] = ratio
                 entry["worst_observed"] = (
                     f"element {result.published_record.element_id} "
                     f"station {result.published_record.section_station} "
                     f"residual {item.difference} "
-                    f"excess {excess} = {ratio:.3f} ulp32 beyond the print window"
+                    f"excess {comparison.excess} = {ratio:.3f} ulp32 "
+                    "beyond the export-precision bound"
                 )
-    beyond_one_ulp = {
-        name: entry["beyond_one_ulp32"] for name, entry in components.items()
-    }
     return {
         "kind": RESIDUAL_STATISTICS_KIND,
-        "exact_equality_required": True,
-        "numeric_policy_installed": False,
-        "hypothesis": {
-            "statement": (
-                "every compared value is a printed decimal of a single-precision "
-                "stored result, so a reconstruction residual is bounded by the sum "
-                "of half a unit of the last printed digit of each compared value "
-                "plus about one single-precision ulp of the published magnitude"
+        "acceptance": {
+            "exact_status": RsuValidationStatus.VERIFIED.value,
+            "bounded_status": (
+                RsuValidationStatus.VERIFIED_WITHIN_EXPORT_PRECISION.value
             ),
-            "print_window": (
-                "sum over the terms and the published value of half a unit of their "
-                "own last printed decimal digit"
+            "bound": EXPORT_PRECISION_BOUND_STATEMENT,
+            "exact_equality_required_for_verified": True,
+            "numeric_policy_installed": True,
+            "policy_scope": (
+                "only the row status of the RSU reconstruction; every comparison "
+                "value, sign, cell, coefficient and hash is kept exact, and no "
+                "tolerance is applied to forces written anywhere else"
             ),
-            "single_precision_half_ulp_term": f"2^-24 = {SINGLE_PRECISION_HALF_ULP}",
-            "six_decimal_rounding": str(PRINTED_DECIMAL_ROUNDING),
-            "status": (
-                "NOT PROVEN for the exact summation order inside LIRA. The measured "
-                "residuals are bounded as stated and the exported values lie on the "
-                "single-precision grid, but the accumulation LIRA actually used "
-                "cannot be recovered from the printed tables; the cause is a "
-                "property of the export precision, not of this reconstruction"
+            "approved_by": "engineer decision (option A) recorded in docs/OPEN_QUESTIONS.md",
+            "note": (
+                "a residual inside the bound is usable as printed export data; a "
+                "residual beyond it blocks the row, which is what a wrong mapping, "
+                "coefficient or row produces by orders of magnitude"
             ),
+        },
+        "counts": {
+            "rows": len(report.results),
+            "exact_rows": sum(
+                1
+                for result in report.results
+                if result.status is RsuValidationStatus.VERIFIED
+            ),
+            "within_export_precision_rows": report.bounded_rows,
+            "blocked_rows": sum(
+                1
+                for result in report.results
+                if result.status is RsuValidationStatus.BLOCKED
+            ),
+            "exact_components": report.matching_components,
+            "within_export_precision_components": report.bounded_components,
+            "compared_components": report.component_comparisons,
         },
         "components": {
             name: {
                 "mismatches": entry["mismatches"],
-                "within_print_window": entry["within_print_window"],
-                "beyond_print_window": entry["beyond_print_window"],
-                "beyond_one_ulp32": entry["beyond_one_ulp32"],
+                "within_export_precision": entry["within_export_precision"],
+                "beyond_export_precision": entry["beyond_export_precision"],
                 "max_abs_difference": str(entry["max_abs_difference"]),
                 "max_excess_in_ulp32": f"{entry['max_excess_in_ulp32']:.3f}",
                 "worst_observed": entry["worst_observed"],
@@ -160,12 +128,13 @@ def rsu_residual_statistics(report: RsuValidationReport) -> dict[str, Any]:
             for name, entry in sorted(components.items())
         },
         "overall": {
-            "components_beyond_one_ulp32": sum(beyond_one_ulp.values()),
+            "components_beyond_bound": sum(
+                entry["beyond_export_precision"] for entry in components.values()
+            ),
             "reading": (
-                "residuals inside the print window need no further explanation; "
-                "residuals beyond it but inside one ulp32 are consistent with "
-                "single-precision stored results; a residual beyond one ulp32 of "
-                "the print window would need a different cause and is counted"
+                "residuals inside the bound are explained by the printed precision "
+                "of the export; a residual beyond the bound cannot be explained that "
+                "way and blocks the row"
             ),
         },
     }
@@ -303,6 +272,11 @@ def rsu_row_detail(
                         "reconstructed": str(item.reconstructed),
                         "difference": str(item.difference),
                         "difference_decimal_places": _decimal_places(item.difference),
+                        "export_precision": (
+                            None
+                            if item.export_precision is None
+                            else item.export_precision.as_dict()
+                        ),
                     }
                     for item in result.components
                 },
@@ -509,6 +483,11 @@ def rsu_evidence(bundle: RsuImportBundle, report: RsuValidationReport) -> dict[s
                     "published": str(item.published),
                     "reconstructed": str(item.reconstructed),
                     "difference": str(item.difference),
+                    "export_precision": (
+                        None
+                        if item.export_precision is None
+                        else item.export_precision.as_dict()
+                    ),
                 }
                 for item in result.components
             },
@@ -523,6 +502,21 @@ def rsu_evidence(bundle: RsuImportBundle, report: RsuValidationReport) -> dict[s
         "published_records": len(bundle.published_records),
         "component_comparisons": report.component_comparisons,
         "matching_components": report.matching_components,
+        "bounded_components": report.bounded_components,
+        "bounded_rows": report.bounded_rows,
+        "export_precision": {
+            "bound": EXPORT_PRECISION_BOUND_STATEMENT,
+            "status_verified": RsuValidationStatus.VERIFIED.value,
+            "status_within_export_precision": (
+                RsuValidationStatus.VERIFIED_WITHIN_EXPORT_PRECISION.value
+            ),
+            "note": (
+                "VERIFIED means every component equals the published value exactly. "
+                "VERIFIED_WITHIN_EXPORT_PRECISION means every component stays inside "
+                "the stated bound of the printed export; the exact published values, "
+                "cells, coefficients, hashes and residuals are kept unchanged."
+            ),
+        },
         "blockers": list(report.blockers),
         "load_parameters": [
             {
@@ -628,8 +622,16 @@ def validate_rsu_selection(
         raise LiraFormatError(f"cannot read RSU evidence or selection: {exc}") from exc
     if not isinstance(evidence, Mapping) or not isinstance(selected, Mapping):
         raise LiraMappingError("RSU evidence and selection must be JSON objects")
-    if evidence.get("kind") != "READ_ONLY_LIRA_RSU_EVIDENCE" or evidence.get("status") != "VERIFIED":
-        raise LiraMappingError("RSU evidence must be a fully verified read-only bundle")
+    if evidence.get("kind") != "READ_ONLY_LIRA_RSU_EVIDENCE" or evidence.get(
+        "status"
+    ) not in {
+        RsuValidationStatus.VERIFIED.value,
+        RsuValidationStatus.VERIFIED_WITHIN_EXPORT_PRECISION.value,
+    }:
+        raise LiraMappingError(
+            "RSU evidence must be a re-verified read-only bundle (VERIFIED or "
+            "VERIFIED_WITHIN_EXPORT_PRECISION)"
+        )
     if selected.get("declaration_kind") != DECLARATION_KIND:
         raise LiraMappingError("invalid RSU declaration_kind")
     expected_fields = {
@@ -665,26 +667,50 @@ def validate_rsu_selection(
     if len(matches) != 1:
         raise LiraMappingError("selected RSU row ID does not resolve uniquely")
     row = matches[0]
-    if row.get("status") != RsuValidationStatus.VERIFIED.value:
+    if row.get("status") not in {
+        RsuValidationStatus.VERIFIED.value,
+        RsuValidationStatus.VERIFIED_WITHIN_EXPORT_PRECISION.value,
+    }:
         raise LiraMappingError("selected RSU row has reconstruction blockers")
+    row_exact = row.get("status") == RsuValidationStatus.VERIFIED.value
     published_vector = row.get("published_vector")
     if not isinstance(published_vector, Mapping) or set(published_vector) != set(RSU_FORCE_COMPONENTS):
         raise LiraFormatError("selected RSU row has an incomplete native force vector")
     reconstruction = row.get("reconstruction")
     if not isinstance(reconstruction, Mapping) or set(reconstruction) != set(RSU_FORCE_COMPONENTS):
         raise LiraFormatError("selected RSU row is not fully reconstructed")
-    for item in reconstruction.values():
-        token = item.get("difference") if isinstance(item, Mapping) else None
+    for component, item in reconstruction.items():
+        if not isinstance(item, Mapping):
+            raise LiraFormatError("selected RSU row is not fully reconstructed")
+        token = item.get("difference")
         try:
             difference = Decimal(token) if isinstance(token, str) else None
         except InvalidOperation:
             difference = None
-        if difference is None or not difference.is_finite() or difference != 0:
+        if difference is None or not difference.is_finite():
             raise LiraFormatError("selected RSU row is not fully reconstructed")
+        if difference == 0:
+            continue
+        if row_exact:
+            raise LiraFormatError(
+                "a row recorded as exactly reconstructed carries a non-zero "
+                f"difference in {component}"
+            )
+        precision = item.get("export_precision")
+        if not isinstance(precision, Mapping) or (
+            precision.get("within_export_precision") is not True
+        ):
+            raise LiraFormatError(
+                f"selected RSU row difference in {component} is not recorded as "
+                "inside the export-precision bound"
+            )
     if row.get("identity", {}).get("element_id") != selected["element_id"].strip():
         raise LiraMappingError("selected RSU row belongs to another element")
     return {
         "status": "ENGINEER_DECLARED_UNVALIDATED",
+        "evidence_status": evidence.get("status"),
+        "row_status": row.get("status"),
+        "exact_reconstruction": row_exact,
         "evidence_sha256": _hash(source),
         "selection_sha256": _hash(declaration),
         "declared_by": selected["declared_by"].strip(),

@@ -379,7 +379,89 @@ def test_single_page_evidence_keeps_the_flat_sources_shape(tmp_path: Path) -> No
     evidence_path = Path(str(prepared["evidence"]))
     evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
     assert set(evidence["sources"]["forces"]) == {"path", "sha256", "sheets"}
-    assert read_rsu_evidence(evidence_path).status == "VERIFIED"
+    assert evidence["status"] == "VERIFIED"
+    assert evidence["bounded_components"] == 0
+    rechecked = read_rsu_evidence(evidence_path)
+    assert rechecked.status == "VERIFIED"
+    assert rechecked.exact_reconstruction is True
+    assert rechecked.bounded_components == 0
+
+
+def test_evidence_bundle_keeps_the_bounded_status_and_reads_back(
+    tmp_path: Path,
+) -> None:
+    """A row verified within the export precision is usable, but never called exact."""
+
+    bundle = _import(_three_term_n_bundle(tmp_path, -144.754105))
+    report = validate_rsu_reconstruction(bundle)
+    assert report.status is RsuValidationStatus.VERIFIED_WITHIN_EXPORT_PRECISION
+    prepared = prepare_rsu_review_bundle(bundle, report, tmp_path / "review")
+    evidence_path = Path(str(prepared["evidence"]))
+    evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+    assert evidence["status"] == "VERIFIED_WITHIN_EXPORT_PRECISION"
+    assert evidence["blockers"] == []
+    assert evidence["bounded_components"] == 1
+    assert evidence["bounded_rows"] == 1
+    assert evidence["matching_components"] == 5
+    component = evidence["rows"][0]["reconstruction"]["N"]
+    assert component["published"] == "-144.754105"
+    assert component["reconstructed"] == "-144.7541130"
+    assert component["difference"] == "0.0000080"
+    assert component["export_precision"]["within_export_precision"] is True
+    assert component["export_precision"]["budget"]["bound"] == "0.0000172587890625"
+
+    rechecked = read_rsu_evidence(evidence_path)
+    assert rechecked.status == "VERIFIED_WITHIN_EXPORT_PRECISION"
+    assert rechecked.exact_reconstruction is False
+    assert rechecked.bounded_components == 1
+    assert rechecked.source_recheck["force_records"] == 3
+
+
+def test_a_bundle_claiming_the_bound_for_a_gross_error_is_refused(
+    tmp_path: Path,
+) -> None:
+    """The recorded classification is recomputed from the sources, never trusted."""
+
+    bundle = _import(_three_term_n_bundle(tmp_path, -144.754105))
+    prepared = prepare_rsu_review_bundle(
+        bundle,
+        validate_rsu_reconstruction(bundle),
+        tmp_path / "review",
+    )
+    evidence_path = Path(str(prepared["evidence"]))
+
+    def widen(payload: dict[str, object]) -> None:
+        row = payload["rows"][0]  # type: ignore[index]
+        row["published_vector"]["N"]["value"] = "-140.0"
+        row["reconstruction"]["N"]["published"] = "-140.0"
+        row["reconstruction"]["N"]["difference"] = "-4.7541130"
+        row["reconstruction"]["N"]["export_precision"] = {
+            "budget": {
+                "print_window": "2.0",
+                "single_precision_ulp": "15.0",
+                "scale": "140",
+                "bound": "17.0",
+            },
+            "within_export_precision": True,
+            "excess": "0",
+            "excess_in_ulp32": "0",
+        }
+
+    _rewrite_evidence(evidence_path, widen)
+    with pytest.raises(LiraFormatError, match="beyond the export-precision bound"):
+        read_rsu_evidence(evidence_path)
+
+
+def test_a_blocked_bundle_is_still_refused(tmp_path: Path) -> None:
+    bundle = _import(_three_term_n_bundle(tmp_path, -140.0))
+    report = validate_rsu_reconstruction(bundle)
+    assert report.status is RsuValidationStatus.BLOCKED
+    prepared = prepare_rsu_review_bundle(bundle, report, tmp_path / "review")
+    evidence_path = Path(str(prepared["evidence"]))
+    evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+    assert evidence["status"] == "BLOCKED"
+    with pytest.raises(LiraFormatError, match="globally BLOCKED bundle is rejected"):
+        read_rsu_evidence(evidence_path)
 
 
 def test_paged_evidence_refuses_a_page_changed_after_writing(tmp_path: Path) -> None:
@@ -607,25 +689,34 @@ def test_paged_evidence_refuses_a_non_integer_record_count(tmp_path: Path) -> No
         read_rsu_evidence(evidence_path)
 
 
-def test_residual_statistics_state_the_window_and_install_no_policy(tmp_path: Path) -> None:
+def test_residual_statistics_state_the_acceptance_rule(tmp_path: Path) -> None:
     report = validate_rsu_reconstruction(_import(_write_bundle(
         tmp_path, published_rows=[_published_row("A1", 2, "1 2", 4.36, 1.45)]
     )))
     statistics = rsu_residual_statistics(report)
     assert statistics["kind"] == "READ_ONLY_LIRA_RSU_RESIDUAL_STATISTICS"
-    assert statistics["exact_equality_required"] is True
-    assert statistics["numeric_policy_installed"] is False
-    assert statistics["hypothesis"]["status"].startswith("NOT PROVEN")
+    acceptance = statistics["acceptance"]
+    assert acceptance["exact_status"] == "VERIFIED"
+    assert acceptance["bounded_status"] == "VERIFIED_WITHIN_EXPORT_PRECISION"
+    assert acceptance["exact_equality_required_for_verified"] is True
+    assert acceptance["numeric_policy_installed"] is True
+    assert "only the row status" in acceptance["policy_scope"]
+    assert "half a unit of the last printed digit" in acceptance["bound"]
     assert statistics["components"]["My"]["mismatches"] == 1
     assert statistics["components"]["My"]["max_abs_difference"] == "0.010"
-    # The fixture prints its values with one decimal, so a 0.01 residual is well
-    # inside the print window of the compared values and needs no other cause.
-    assert statistics["components"]["My"]["within_print_window"] == 1
-    assert statistics["components"]["My"]["beyond_print_window"] == 0
+    # The fixture prints its terms with one decimal and 4.36 with two, so the
+    # 0.01 residual is inside the print window of the compared values.
+    assert statistics["components"]["My"]["within_export_precision"] == 1
+    assert statistics["components"]["My"]["beyond_export_precision"] == 0
     assert set(statistics["components"]) == {"My"}
+    assert statistics["counts"]["exact_rows"] == 0
+    assert statistics["counts"]["within_export_precision_rows"] == 1
+    assert statistics["counts"]["blocked_rows"] == 0
+    assert statistics["overall"]["components_beyond_bound"] == 0
 
     matching = validate_rsu_reconstruction(_import(_write_bundle(tmp_path / "clean")))
     assert rsu_residual_statistics(matching)["components"] == {}
+    assert rsu_residual_statistics(matching)["counts"]["exact_rows"] == 4
 
 
 def _three_term_n_bundle(tmp_path: Path, published_n: float) -> tuple[Path, Path, Path, Path]:
@@ -644,8 +735,10 @@ def _three_term_n_bundle(tmp_path: Path, published_n: float) -> tuple[Path, Path
     )
 
 
-def test_residual_statistics_bound_a_single_precision_residual(tmp_path: Path) -> None:
-    """A six-decimal print hides up to half an ulp32 per value: 8e-6 on N."""
+def test_the_real_like_six_decimal_residual_is_usable_but_not_exact(
+    tmp_path: Path,
+) -> None:
+    """The residual measured on the real export (8e-6 on N) is inside the bound."""
 
     report = validate_rsu_reconstruction(
         _import(_three_term_n_bundle(tmp_path, -144.754105))
@@ -653,32 +746,39 @@ def test_residual_statistics_bound_a_single_precision_residual(tmp_path: Path) -
     entry = rsu_residual_statistics(report)["components"]["N"]
     assert entry["mismatches"] == 1
     assert entry["max_abs_difference"] == "0.0000080"
-    assert entry["within_print_window"] == 0
-    assert entry["beyond_print_window"] == 1
-    # 8e-6 minus the 2e-6 print window is 0.393 of one ulp32 at 144.75.
-    assert entry["max_excess_in_ulp32"] == "0.393"
-    assert entry["beyond_one_ulp32"] == 0
-    assert "0.0000080" in str(entry["worst_observed"])
-    assert rsu_residual_statistics(report)["overall"][
-        "components_beyond_one_ulp32"
-    ] == 0
+    assert entry["within_export_precision"] == 1
+    assert entry["beyond_export_precision"] == 0
+    assert report.status is RsuValidationStatus.VERIFIED_WITHIN_EXPORT_PRECISION
+    assert report.results[0].status is (
+        RsuValidationStatus.VERIFIED_WITHIN_EXPORT_PRECISION
+    )
+    difference = next(
+        item for item in report.results[0].components if item.component == "N"
+    )
+    assert difference.published == Decimal("-144.754105")
+    assert difference.reconstructed == Decimal("-144.7541130")
+    assert difference.difference == Decimal("0.0000080")
+    assert difference.export_precision is not None
+    # 2e-6 print window + 1 ulp32 of 144.75 (1.526e-5) = 1.726e-5.
+    assert difference.export_precision.budget.print_window == Decimal("0.000002")
+    assert difference.export_precision.budget.bound == Decimal("0.0000172587890625")
 
 
-def test_residual_statistics_still_flag_a_gross_residual(tmp_path: Path) -> None:
-    """A real error (wrong value, coefficient or row) is far beyond one ulp32."""
+def test_a_gross_residual_is_far_beyond_the_bound_and_blocks_the_row(
+    tmp_path: Path,
+) -> None:
+    """A wrong value, coefficient or row is orders of magnitude beyond the bound."""
 
     report = validate_rsu_reconstruction(
         _import(_three_term_n_bundle(tmp_path, -140.0))
     )
     entry = rsu_residual_statistics(report)["components"]["N"]
-    assert entry["beyond_print_window"] == 1
-    assert entry["beyond_one_ulp32"] == 1
+    assert entry["beyond_export_precision"] == 1
+    assert entry["within_export_precision"] == 0
     assert float(entry["max_excess_in_ulp32"]) > 1000
-    assert rsu_residual_statistics(report)["overall"][
-        "components_beyond_one_ulp32"
-    ] == 1
-    # The acceptance rule is untouched: the row stays blocked.
+    assert rsu_residual_statistics(report)["overall"]["components_beyond_bound"] == 1
     assert report.status is RsuValidationStatus.BLOCKED
+    assert "RSU_RESULT_MISMATCH:N" in report.blockers
 
 
 def test_row_detail_reports_terms_coefficients_and_exact_differences(tmp_path: Path) -> None:
@@ -744,16 +844,75 @@ def test_cli_reports_every_force_page(
     assert json.loads(report_path.read_text(encoding="utf-8"))["status"] == "VERIFIED"
 
 
-def test_result_mismatch_keeps_joint_vector(tmp_path: Path) -> None:
+def test_result_within_export_precision_keeps_joint_vector(tmp_path: Path) -> None:
+    """A residual inside the print window is usable, but it is not exact."""
+
     report = validate_rsu_reconstruction(_import(_write_bundle(
         tmp_path, published_rows=[_published_row("A1", 2, "1 2", 4.36, 1.45)]
     )))
     result = report.results[0]
-    assert "RSU_RESULT_MISMATCH:My" in result.blockers
+    assert result.status is RsuValidationStatus.VERIFIED_WITHIN_EXPORT_PRECISION
+    assert result.blockers == ()
     assert len(result.components) == 6
     difference = next(item for item in result.components if item.component == "My")
     assert difference.difference == Decimal("0.010")
     assert [term[0] for term in difference.source_terms] == ["1", "2"]
+    assert difference.export_precision is not None
+    assert difference.export_precision.within is True
+    # The fixture prints the terms with one decimal and 4.36 with two:
+    # 0.05 + 0.05 + 0.005 = 0.105.
+    assert difference.export_precision.budget.print_window == Decimal("0.105")
+    assert difference.export_precision.budget.bound == Decimal("0.105") + (
+        difference.export_precision.budget.single_precision_ulp
+    )
+    assert report.status is RsuValidationStatus.VERIFIED_WITHIN_EXPORT_PRECISION
+    assert report.bounded_components == 1
+    assert report.bounded_rows == 1
+
+
+def test_result_beyond_export_precision_still_blocks_the_row(tmp_path: Path) -> None:
+    report = validate_rsu_reconstruction(_import(_write_bundle(
+        tmp_path, published_rows=[_published_row("A1", 2, "1 2", 5.0, 1.45)]
+    )))
+    result = report.results[0]
+    assert result.status is RsuValidationStatus.BLOCKED
+    assert "RSU_RESULT_MISMATCH:My" in result.blockers
+    difference = next(item for item in result.components if item.component == "My")
+    assert difference.difference == Decimal("0.65")
+    assert difference.export_precision is not None
+    assert difference.export_precision.within is False
+    assert difference.export_precision.excess > 0
+    assert difference.export_precision.excess_in_ulp32 is not None
+    assert difference.export_precision.excess_in_ulp32 > 1
+    assert report.status is RsuValidationStatus.BLOCKED
+    assert report.bounded_components == 0
+
+
+def test_exact_rows_stay_verified(tmp_path: Path) -> None:
+    report = validate_rsu_reconstruction(_import(_write_bundle(tmp_path)))
+    assert report.status is RsuValidationStatus.VERIFIED
+    assert report.matching_components == report.component_comparisons
+    assert report.bounded_components == 0
+    assert report.bounded_rows == 0
+    assert all(item.status is RsuValidationStatus.VERIFIED for item in report.results)
+
+
+def test_bundle_status_is_the_weakest_row_status(tmp_path: Path) -> None:
+    rows = [
+        _published_row("A1", 1, "1", 1.5, 0.5),
+        _published_row("A1", 2, "1 2", 4.36, 1.45),
+    ]
+    report = validate_rsu_reconstruction(_import(_write_bundle(tmp_path, published_rows=rows)))
+    assert report.results[0].status is RsuValidationStatus.VERIFIED
+    assert report.results[1].status is RsuValidationStatus.VERIFIED_WITHIN_EXPORT_PRECISION
+    assert report.status is RsuValidationStatus.VERIFIED_WITHIN_EXPORT_PRECISION
+
+    blocked = validate_rsu_reconstruction(_import(_write_bundle(
+        tmp_path / "blocked",
+        published_rows=[*rows, _published_row("B1", 2, "1 2 3", 8.4, 99.0)],
+    )))
+    assert blocked.status is RsuValidationStatus.BLOCKED
+    assert any(blocker.startswith("RSU_RESULT_MISMATCH") for blocker in blocked.blockers)
 
 
 def test_incomplete_vector_and_sha_mismatch_fail_closed(tmp_path: Path) -> None:
@@ -904,5 +1063,5 @@ def test_rsu_selection_rejects_blocked_reconstruction(tmp_path: Path) -> None:
     })
     selection_path = tmp_path / "selection.json"
     selection_path.write_text(json.dumps(template), encoding="utf-8")
-    with pytest.raises(LiraMappingError, match="fully verified"):
+    with pytest.raises(LiraMappingError, match="re-verified read-only bundle"):
         validate_rsu_selection(prepared["evidence"], selection_path)

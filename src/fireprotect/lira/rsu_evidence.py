@@ -49,6 +49,7 @@ from .rsu import (
     RsuSourceValue,
     RsuValidationStatus,
     RsuXlsMapping,
+    compare_with_export_precision,
     import_rsu_xls_bundle,
     validate_rsu_reconstruction,
 )
@@ -436,7 +437,7 @@ class RsuEvidenceRow:
     source_sha256: str
     mapping_fingerprint: str
     published_vector: Mapping[str, RsuEvidenceValue]
-    reconstruction: Mapping[str, Mapping[str, str]]
+    reconstruction: Mapping[str, Mapping[str, object]]
     source_terms: tuple[RsuEvidenceTerm, ...]
 
     def as_dict(self) -> dict[str, object]:
@@ -481,6 +482,8 @@ class RsuEvidenceBundle:
     load_parameters: tuple[Mapping[str, object], ...]
     rows: tuple[RsuEvidenceRow, ...]
     source_recheck: Mapping[str, object]
+    exact_reconstruction: bool = True
+    bounded_components: int = 0
 
     @property
     def components_preserved(self) -> int:
@@ -585,7 +588,7 @@ def _parse_row(
     status_token = entry.get("status")
     if status_token not in (
         RsuValidationStatus.VERIFIED.value,
-        RsuValidationStatus.BLOCKED.value,
+        RsuValidationStatus.VERIFIED_WITHIN_EXPORT_PRECISION.value,
     ):
         raise LiraFormatError(f"{row_context}: unknown status {status_token!r}")
     blockers = entry.get("blockers")
@@ -603,7 +606,7 @@ def _parse_row(
         )
     if blockers:
         raise LiraFormatError(
-            f"{row_context}: a VERIFIED row must record no blockers, "
+            f"{row_context}: a {status_token} row must record no blockers, "
             f"got {blockers!r}"
         )
     identity = require_mapping(entry.get("identity"), "identity", row_context)
@@ -638,7 +641,7 @@ def _parse_row(
     reconstruction = require_mapping(
         entry.get("reconstruction"), "reconstruction", row_context
     )
-    recorded: dict[str, Mapping[str, str]] = {}
+    recorded: dict[str, Mapping[str, object]] = {}
     for component in RSU_COMPONENTS:
         part = reconstruction.get(component)
         if not isinstance(part, Mapping):
@@ -659,9 +662,10 @@ def _parse_row(
         difference = parse_finite_decimal(
             difference_token, field="difference", context=f"{row_context} {component}"
         )
-        if difference != 0:
+        if difference != 0 and status_token == RsuValidationStatus.VERIFIED.value:
             raise LiraFormatError(
-                f"{row_context}: recorded residual for {component} is not zero"
+                f"{row_context}: a row recorded as exactly reconstructed carries a "
+                f"non-zero residual for {component}"
             )
         if parse_finite_decimal(
             published_token, field="published", context=f"{row_context} {component}"
@@ -674,6 +678,11 @@ def _parse_row(
             "published": str(published_token),
             "reconstructed": str(reconstructed_token),
             "difference": str(difference_token),
+            "export_precision": (
+                part.get("export_precision")
+                if isinstance(part.get("export_precision"), Mapping)
+                else None
+            ),
         }
     terms_payload = entry.get("source_terms")
     if not isinstance(terms_payload, list) or not terms_payload:
@@ -703,16 +712,24 @@ def _parse_row(
                 "to a different coefficients XLS"
             )
     for component in RSU_COMPONENTS:
+        component_terms = tuple(
+            (term.load_case_id, term.forces[component].value, term.coefficient)
+            for term in terms
+        )
         reconstructed_value = sum(
-            (term.coefficient * term.forces[component].value for term in terms),
+            (value * coefficient for _, value, coefficient in component_terms),
             Decimal("0"),
         )
         published_value = published_vector[component].value
-        if reconstructed_value != published_value:
+        comparison = compare_with_export_precision(
+            published_value - reconstructed_value, published_value, component_terms
+        )
+        if not comparison.within:
             raise LiraFormatError(
                 f"{row_context}: component {component} published {published_value} "
-                f"is not reproduced from the source terms ({reconstructed_value}); "
-                "the recorded VERIFIED status is not trusted on its own"
+                f"is beyond the export-precision bound from the source terms "
+                f"({reconstructed_value}, excess {comparison.excess}); the recorded "
+                "status is not trusted on its own"
             )
         if (
             parse_finite_decimal(
@@ -726,6 +743,20 @@ def _parse_row(
                 f"{row_context}: recorded reconstructed value for {component} "
                 "does not match the source terms"
             )
+        recorded_precision = recorded[component].get("export_precision")
+        if recorded_precision is not None:
+            if not isinstance(recorded_precision, Mapping):
+                raise LiraFormatError(
+                    f"{row_context}: recorded export_precision for {component} "
+                    "must be an object or null"
+                )
+            if recorded_precision.get("within_export_precision") is not (
+                comparison.within
+            ):
+                raise LiraFormatError(
+                    f"{row_context}: recorded export_precision for {component} "
+                    "disagrees with the bound recomputed from the source terms"
+                )
     return RsuEvidenceRow(
         row_id=row_id,
         status=str(status_token),
@@ -812,8 +843,19 @@ def _compare_value(
         )
 
 
-def _count(root: Mapping[str, Any], field: str, context: str) -> int:
+def _count(
+    root: Mapping[str, Any], field: str, context: str, *, default: int | None = None
+) -> int:
+    """Read one recorded counter, optionally tolerating its absence.
+
+    A default is only used for counters that older bundles did not record; the
+    value is still compared with the re-read sources, so a legacy bundle cannot
+    hide a difference behind the default.
+    """
+
     value = root.get(field)
+    if value is None and default is not None:
+        return default
     if isinstance(value, bool) or not isinstance(value, int) or value < 0:
         raise LiraFormatError(f"{context}: {field} must be a non-negative integer")
     return value
@@ -1023,22 +1065,40 @@ def _recheck_against_sources(
         bundle, force_sources, context=str(source)
     )
     report = validate_rsu_reconstruction(bundle)
-    if report.status is not RsuValidationStatus.VERIFIED:
+    recorded_status = root.get("status")
+    acceptable = {
+        RsuValidationStatus.VERIFIED.value,
+        RsuValidationStatus.VERIFIED_WITHIN_EXPORT_PRECISION.value,
+    }
+    if report.status.value not in acceptable:
         raise LiraFormatError(
             f"{source}: re-reading the source XLS does not reproduce every "
             f"published row: {'; '.join(report.blockers)}"
+        )
+    if recorded_status == RsuValidationStatus.VERIFIED.value and (
+        report.status is not RsuValidationStatus.VERIFIED
+    ):
+        raise LiraFormatError(
+            f"{source}: the bundle claims an exact reconstruction, but re-reading "
+            f"the sources gives {report.status.value}"
         )
     recorded_counts = {
         "force_records": _count(root, "force_records", str(source)),
         "published_records": _count(root, "published_records", str(source)),
         "component_comparisons": _count(root, "component_comparisons", str(source)),
         "matching_components": _count(root, "matching_components", str(source)),
+        "bounded_components": _count(
+            root, "bounded_components", str(source), default=0
+        ),
+        "bounded_rows": _count(root, "bounded_rows", str(source), default=0),
     }
     actual_counts = {
         "force_records": len(bundle.force_records),
         "published_records": len(bundle.published_records),
         "component_comparisons": report.component_comparisons,
         "matching_components": report.matching_components,
+        "bounded_components": report.bounded_components,
+        "bounded_rows": report.bounded_rows,
     }
     for name in recorded_counts:
         if recorded_counts[name] != actual_counts[name]:
@@ -1352,16 +1412,23 @@ def read_rsu_evidence(path: str | Path) -> RsuEvidenceBundle:
             f"{source}: kind must be {EVIDENCE_KIND!r}, got {root.get('kind')!r}"
         )
     status_token = root.get("status")
-    if status_token != RsuValidationStatus.VERIFIED.value:
+    if status_token not in (
+        RsuValidationStatus.VERIFIED.value,
+        RsuValidationStatus.VERIFIED_WITHIN_EXPORT_PRECISION.value,
+    ):
         raise LiraFormatError(
-            f"{source}: RSU evidence status must be VERIFIED for a read-only "
-            f"link, got {status_token!r}; a globally BLOCKED bundle is rejected"
+            f"{source}: RSU evidence status must be "
+            f"{RsuValidationStatus.VERIFIED.value!r} or "
+            f"{RsuValidationStatus.VERIFIED_WITHIN_EXPORT_PRECISION.value!r} for a "
+            f"read-only link, got {status_token!r}; a globally BLOCKED bundle is "
+            "rejected"
         )
+    exact_bundle = status_token == RsuValidationStatus.VERIFIED.value
     recorded_blockers = root.get("blockers")
     if not isinstance(recorded_blockers, list) or recorded_blockers:
         raise LiraFormatError(
-            f"{source}: a VERIFIED RSU evidence bundle must record no blockers, "
-            f"got {recorded_blockers!r}"
+            f"{source}: a {status_token} RSU evidence bundle must record no "
+            f"blockers, got {recorded_blockers!r}"
         )
     mapping_fingerprint = require_text(root, "mapping_fingerprint", str(source))
     sources_block = require_mapping(root.get("sources"), "sources", str(source))
@@ -1410,15 +1477,36 @@ def read_rsu_evidence(path: str | Path) -> RsuEvidenceBundle:
             f"{source}: component_comparisons does not match rows x components"
         )
     matching = root.get("matching_components")
-    if (
-        isinstance(matching, bool)
-        or not isinstance(matching, int)
-        or matching != comparisons
-    ):
-        raise LiraFormatError(
-            f"{source}: matching_components must equal component_comparisons "
-            "for a VERIFIED bundle"
-        )
+    bounded = root.get("bounded_components")
+    if exact_bundle:
+        if (
+            isinstance(matching, bool)
+            or not isinstance(matching, int)
+            or matching != comparisons
+        ):
+            raise LiraFormatError(
+                f"{source}: matching_components must equal component_comparisons "
+                "for a VERIFIED bundle"
+            )
+    else:
+        if (
+            isinstance(matching, bool)
+            or not isinstance(matching, int)
+            or matching >= comparisons
+        ):
+            raise LiraFormatError(
+                f"{source}: a bundle verified within the export precision must "
+                "record fewer exact components than comparisons"
+            )
+        if (
+            isinstance(bounded, bool)
+            or not isinstance(bounded, int)
+            or bounded != comparisons - matching
+        ):
+            raise LiraFormatError(
+                f"{source}: bounded_components must be the components that are not "
+                "exact; the recorded value does not match the counters"
+            )
     expected_hashes = {
         name: str(rechecked[name]["sha256"]) for name in EVIDENCE_SOURCE_NAMES
     }
@@ -1446,6 +1534,8 @@ def read_rsu_evidence(path: str | Path) -> RsuEvidenceBundle:
         path=source,
         sha256=sha256_file(source),
         status=str(status_token),
+        exact_reconstruction=exact_bundle,
+        bounded_components=int(bounded) if isinstance(bounded, int) else 0,
         mapping_fingerprint=mapping_fingerprint,
         sources=MappingProxyType(
             {name: dict(sources_block[name]) for name in EVIDENCE_SOURCE_NAMES}
